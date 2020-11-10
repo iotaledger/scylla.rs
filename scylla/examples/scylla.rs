@@ -1,5 +1,4 @@
 use scylla::application::*;
-
 // launcher
 launcher!(builder: AppsBuilder {[] -> Scylla: ScyllaBuilder}, state: Apps {});
 
@@ -11,7 +10,7 @@ impl Builder for AppsBuilder {
     fn build(self) -> Self::State {
         // create Scylla app
         let scylla_builder = ScyllaBuilder::new(); // TODO add args
-        // add it to launcher
+                                                   // add it to launcher
         self.Scylla(scylla_builder).to_apps()
     }
 }

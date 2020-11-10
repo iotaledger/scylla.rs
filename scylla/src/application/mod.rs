@@ -1,11 +1,10 @@
 pub use chronicle::*;
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 
-mod starter;
-mod init;
 mod event_loop;
+mod init;
+mod starter;
 mod terminating;
 
 /// Define the application scope trait
@@ -27,9 +26,7 @@ builder!(
 });
 
 #[derive(Deserialize, Serialize)]
-pub enum ScyllaThrough {
-
-}
+pub enum ScyllaThrough {}
 
 /// ScyllaHandle to be passed to the children (Listener and Cluster)
 pub struct ScyllaHandle<T> {
@@ -40,11 +37,11 @@ pub struct ScyllaHandle<T> {
 /// Application state
 pub struct Scylla {
     service: Service,
-//    tcp_listener:
-//    listener: None,
-//    sockets: HashMap::new(),
-//    tx: Sender(tx),
-//    rx,
+    /*    tcp_listener:
+     *    listener: None,
+     *    sockets: HashMap::new(),
+     *    tx: Sender(tx),
+     *    rx, */
 }
 
 /// SubEvent type, indicated the children
@@ -94,7 +91,9 @@ impl<T: Appsthrough<ScyllaThrough>> Passthrough<ScyllaThrough> for ScyllaHandle<
 /// implementation of shutdown functionality
 impl<T: Appsthrough<ScyllaThrough>> Shutdown for ScyllaHandle<T> {
     fn shutdown(self) -> Option<Self>
-    where Self: Sized {
+    where
+        Self: Sized,
+    {
         todo!()
     }
 }

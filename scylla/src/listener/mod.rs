@@ -1,15 +1,12 @@
 use crate::application::*;
-use tokio::net::{TcpListener, TcpStream};
 use futures::future::AbortHandle;
-mod init;
+use tokio::net::{TcpListener, TcpStream};
 mod event_loop;
+mod init;
 mod terminating;
 
 // Listener builder
-builder!(
-    ListenerBuilder {
-        tcp_listener: TcpListener
-});
+builder!(ListenerBuilder { tcp_listener: TcpListener });
 
 /// ListenerHandle to be passed to the application/Scylla in order to shutdown/abort the listener
 pub struct ListenerHandle {

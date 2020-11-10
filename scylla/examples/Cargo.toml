@@ -15,5 +15,7 @@ env_logger = "0.7.1"
 log = "*"
 
 [[example]]
-name = "Scylla"
+name = "scylla"
 path = "scylla.rs"
+
+[workspace]
