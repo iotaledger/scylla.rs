@@ -1,0 +1,26 @@
+[package]
+name = "scylla"
+version = "0.1.0"
+authors = ["IOTA Stiftung"]
+edition = "2018"
+license = "APACHE 2.0"
+homepage = "https://docs.iota.org/docs/chronicle/1.1/overview"
+repository = "https://github.com/iotaledger/scylla.rs"
+
+[dependencies]
+chronicle = { git = "https://github.com/iotaledger/chronicle.rs.git", branch = "framework" }
+async-trait = "*"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "0.3",default-features = false, features = ["io-std","fs", "macros", "stream", "sync", "net", "io-util", "time", "rt-multi-thread","signal"] }
+tokio-tungstenite = { git = "https://github.com/snapview/tokio-tungstenite.git" }
+log = "*"
+env_logger = "0.7.1"
+futures = "0.3"
+
+[dev-dependencies]
+serde = { version = "1.0.114", features = ["derive"] }
+tokio = { version = "0.3", features = ["full", "time", "signal"] }
+log = "*"
+env_logger = "0.7.1"
+futures = "0.3"

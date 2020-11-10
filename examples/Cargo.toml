@@ -1,0 +1,19 @@
+[package]
+name = "examples"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+# required deps to run the example
+[dev-dependencies]
+serde = { version = "1.0.114", features = ["derive"] }
+async-trait = "0.1.40"
+scylla = {path = "../"}
+chronicle = { git = "https://github.com/iotaledger/chronicle.rs.git", branch = "framework" }
+tokio = { version = "0.3", features = ["full", "time", "rt-multi-thread", "signal"] }
+env_logger = "0.7.1"
+log = "*"
+
+[[example]]
+name = "Scylla"
+path = "scylla.rs"
