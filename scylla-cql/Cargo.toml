@@ -1,9 +1,10 @@
 [package]
 name = "scylla-cql"
 version = "0.1.0"
-authors = ["LK <lk@overdb.com>"]
+authors = ["IOTA Stiftung"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "APACHE 2.0"
+homepage = "https://docs.iota.org/docs/chronicle/1.1/overview"
+repository = "https://github.com/iotaledger/scylla.rs"
 
 [dependencies]
