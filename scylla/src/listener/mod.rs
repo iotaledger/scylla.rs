@@ -1,4 +1,5 @@
 use crate::application::*;
+
 use futures::future::AbortHandle;
 use tokio::net::{TcpListener, TcpStream};
 mod event_loop;
@@ -54,7 +55,9 @@ impl Shutdown for ListenerHandle {
 
 #[async_trait::async_trait]
 impl<T: Appsthrough<ScyllaThrough>> AknShutdown<Listener> for ScyllaHandle<T> {
-    async fn aknowledge_shutdown(self, _state: Listener, _status: Result<(), Need>) {
-        todo!()
+    async fn aknowledge_shutdown(self, mut _state: Listener, _status: Result<(), Need>) {
+        _state.service.update_status(ServiceStatus::Stopped);
+        let event = ScyllaEvent::Children(ScyllaChild::Listener(_state.service.clone(), Some(_status)));
+        let _ = self.send(event);
     }
 }

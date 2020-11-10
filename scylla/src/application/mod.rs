@@ -27,16 +27,27 @@ builder!(
 
 #[derive(Deserialize, Serialize)]
 pub enum ScyllaThrough {}
-
 /// ScyllaHandle to be passed to the children (Listener and Cluster)
 pub struct ScyllaHandle<T> {
     phantom: std::marker::PhantomData<T>,
     tx: tokio::sync::mpsc::UnboundedSender<ScyllaEvent>,
 }
 
+impl<T> Clone for ScyllaHandle<T> {
+    fn clone(&self) -> Self {
+        ScyllaHandle::<T> {
+            phantom: self.phantom.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+}
+
 /// Application state
 pub struct Scylla {
     service: Service,
+    listener_handle: u8,
+    cluster_handle: u8,
+    websockets: usize,
     /*    tcp_listener:
      *    listener: None,
      *    sockets: HashMap::new(),
@@ -48,6 +59,7 @@ pub struct Scylla {
 pub enum ScyllaChild {
     Listener(Service, Option<Result<(), Need>>),
     Cluster(Service, Option<Result<(), Need>>),
+    Websocket(Service, Option<Result<(), Need>>),
 }
 
 /// Event type of the Scylla Application

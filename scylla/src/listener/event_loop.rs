@@ -1,18 +1,23 @@
 use super::*;
+use crate::websocket::WebsocketdBuilder;
 use tokio_tungstenite::accept_async;
 
 #[async_trait::async_trait]
 impl<T: Appsthrough<ScyllaThrough>> EventLoop<ScyllaHandle<T>> for Listener {
-    async fn event_loop(&mut self, status: Result<(), Need>, supervisor: &mut Option<ScyllaHandle<T>>) -> Result<(), Need> {
-        todo!()
+    async fn event_loop(&mut self, _status: Result<(), Need>, supervisor: &mut Option<ScyllaHandle<T>>) -> Result<(), Need> {
+        self.service.update_status(ServiceStatus::Running);
+        let event = ScyllaEvent::Children(ScyllaChild::Listener(self.service.clone(), None));
+        let _ = supervisor.as_mut().unwrap().send(event);
+        loop {
+            if let Ok((socket, peer)) = self.tcp_listener.accept().await {
+                let peer = socket.peer_addr().unwrap_or(peer);
+                if let Ok(ws_stream) = accept_async(socket).await {
+                    // build websocket
+                    let websocket = WebsocketdBuilder::new().peer(peer).stream(ws_stream).build();
+                    // spawn websocket
+                    tokio::spawn(websocket.start(supervisor.clone()));
+                }
+            }
+        }
     }
-}
-
-async fn accept_connection(stream: TcpStream) {
-    let addr = stream.peer_addr().expect("connected streams should have a peer address");
-    // info!("Peer address: {}", addr);
-
-    let ws_stream = accept_async(stream).await.expect("Error during the websocket handshake occurred");
-
-    // info!("New WebSocket connection: {}", addr);
 }
