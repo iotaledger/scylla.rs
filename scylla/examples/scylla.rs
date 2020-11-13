@@ -1,9 +1,6 @@
 use scylla::application::*;
 // launcher
-launcher!(builder: AppsBuilder {[] -> Scylla: ScyllaBuilder}, state: Apps {});
-
-// implementation of the scope
-impl ScyllaScope for Sender {}
+launcher!(builder: AppsBuilder {[] -> Scylla: ScyllaBuilder<Sender>}, state: Apps {});
 
 impl Builder for AppsBuilder {
     type State = Apps;

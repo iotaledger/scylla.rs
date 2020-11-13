@@ -1,8 +1,8 @@
 use super::*;
 
 #[async_trait::async_trait]
-impl<T: Appsthrough<ScyllaThrough>> Init<ScyllaHandle<T>> for Websocket {
-    async fn init(&mut self, status: Result<(), Need>, supervisor: &mut Option<ScyllaHandle<T>>) -> Result<(), Need> {
+impl<H: ScyllaScope> Init<ScyllaHandle<H>> for Websocket {
+    async fn init(&mut self, status: Result<(), Need>, supervisor: &mut Option<ScyllaHandle<H>>) -> Result<(), Need> {
         // todo authenticator using static secert key and noise protocol
         if true {
             self.service.update_status(ServiceStatus::Initializing);

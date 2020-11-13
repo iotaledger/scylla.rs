@@ -19,8 +19,7 @@ pub struct Listener {
     service: Service,
     tcp_listener: TcpListener,
 }
-
-impl<T: Appsthrough<ScyllaThrough>> ActorBuilder<ScyllaHandle<T>> for ListenerBuilder {}
+impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for ListenerBuilder {}
 
 /// implementation of builder
 impl Builder for ListenerBuilder {
@@ -30,7 +29,7 @@ impl Builder for ListenerBuilder {
     }
 }
 
-impl<T: Appsthrough<ScyllaThrough>> Actor<ScyllaHandle<T>> for Listener {}
+impl<H: ScyllaScope> Actor<ScyllaHandle<H>> for Listener {}
 
 /// impl name of the Listener
 impl Name for Listener {
@@ -54,7 +53,7 @@ impl Shutdown for ListenerHandle {
 }
 
 #[async_trait::async_trait]
-impl<T: Appsthrough<ScyllaThrough>> AknShutdown<Listener> for ScyllaHandle<T> {
+impl<H: ScyllaScope> AknShutdown<Listener> for ScyllaHandle<H> {
     async fn aknowledge_shutdown(self, mut _state: Listener, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
         let event = ScyllaEvent::Children(ScyllaChild::Listener(_state.service.clone(), Some(_status)));

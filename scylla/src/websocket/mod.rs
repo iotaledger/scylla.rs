@@ -24,8 +24,8 @@ pub struct Websocket {
     ws_tx: Option<SplitSink<WebSocketStream<TcpStream>, Message>>,
 }
 
-impl<T: Appsthrough<ScyllaThrough>> ActorBuilder<ScyllaHandle<T>> for WebsocketdBuilder {}
-impl<T: Appsthrough<ScyllaThrough>> Actor<ScyllaHandle<T>> for Websocket {}
+impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for WebsocketdBuilder {}
+impl<H: ScyllaScope> Actor<ScyllaHandle<H>> for Websocket {}
 
 impl Builder for WebsocketdBuilder {
     type State = Websocket;
@@ -55,7 +55,7 @@ impl Name for Websocket {
 }
 
 #[async_trait::async_trait]
-impl<T: Appsthrough<ScyllaThrough>> AknShutdown<Websocket> for ScyllaHandle<T> {
+impl<H: ScyllaScope> AknShutdown<Websocket> for ScyllaHandle<H> {
     async fn aknowledge_shutdown(mut self, mut _state: Websocket, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
         let event = ScyllaEvent::Children(ScyllaChild::Websocket(_state.service.clone(), Some(_status)));

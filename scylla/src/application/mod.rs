@@ -8,12 +8,13 @@ mod starter;
 mod terminating;
 
 /// Define the application scope trait
-pub trait ScyllaScope: LauncherSender<ScyllaThrough> + AknShutdown<Scylla> {}
+pub trait ScyllaScope: LauncherSender<ScyllaBuilder<Self>> {}
+impl<H: LauncherSender<ScyllaBuilder<H>>> ScyllaScope for H {}
 
 // Scylla builder
 builder!(
     #[derive(Clone)]
-    ScyllaBuilder {
+    ScyllaBuilder<H> {
         listen_address: String,
         reporter_count: u8,
         thread_count: u16,
@@ -26,28 +27,35 @@ builder!(
 });
 
 #[derive(Deserialize, Serialize)]
-pub enum ScyllaThrough {}
-/// ScyllaHandle to be passed to the children (Listener and Cluster)
-pub struct ScyllaHandle<T> {
-    phantom: std::marker::PhantomData<T>,
-    tx: tokio::sync::mpsc::UnboundedSender<ScyllaEvent>,
+pub enum ScyllaThrough {
+    AddNode(String),
+    RemoveNode(String),
+    TryBuild(u8),
 }
 
-impl<T> Clone for ScyllaHandle<T> {
+/// ScyllaHandle to be passed to the children (Listener and Cluster)
+pub struct ScyllaHandle<H: ScyllaScope> {
+    tx: tokio::sync::mpsc::UnboundedSender<ScyllaEvent<H::AppsEvents>>,
+}
+/// ScyllaInbox used to recv events
+pub struct ScyllaInbox<H: ScyllaScope> {
+    rx: tokio::sync::mpsc::UnboundedReceiver<ScyllaEvent<H::AppsEvents>>,
+}
+
+impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
     fn clone(&self) -> Self {
-        ScyllaHandle::<T> {
-            phantom: self.phantom.clone(),
-            tx: self.tx.clone(),
-        }
+        ScyllaHandle::<H> { tx: self.tx.clone() }
     }
 }
 
 /// Application state
-pub struct Scylla {
+pub struct Scylla<H: ScyllaScope> {
     service: Service,
     listener_handle: u8,
     cluster_handle: u8,
     websockets: usize,
+    handle: ScyllaHandle<H>,
+    inbox: ScyllaInbox<H>,
     /*    tcp_listener:
      *    listener: None,
      *    sockets: HashMap::new(),
@@ -63,21 +71,22 @@ pub enum ScyllaChild {
 }
 
 /// Event type of the Scylla Application
-pub enum ScyllaEvent {
+pub enum ScyllaEvent<T> {
+    Passthrough(T),
     Children(ScyllaChild),
 }
 
 /// implementation of the AppBuilder
-impl<H: ScyllaScope> AppBuilder<H> for ScyllaBuilder {}
+impl<H: ScyllaScope> AppBuilder<H> for ScyllaBuilder<H> {}
 
 /// implementation of through type
-impl ThroughType for ScyllaBuilder {
+impl<H: ScyllaScope> ThroughType for ScyllaBuilder<H> {
     type Through = ScyllaThrough;
 }
 
 /// implementation of builder
-impl Builder for ScyllaBuilder {
-    type State = Scylla;
+impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
+    type State = Scylla<H>;
     fn build(self) -> Self::State {
         todo!()
         // build Scylla app here
@@ -85,7 +94,7 @@ impl Builder for ScyllaBuilder {
 }
 
 /// implementation of passthrough functionality
-impl<T: Appsthrough<ScyllaThrough>> Passthrough<ScyllaThrough> for ScyllaHandle<T> {
+impl<H: ScyllaScope> Passthrough<ScyllaThrough> for ScyllaHandle<H> {
     fn launcher_status_change(&mut self, service: &Service) {
         todo!()
     }
@@ -101,7 +110,7 @@ impl<T: Appsthrough<ScyllaThrough>> Passthrough<ScyllaThrough> for ScyllaHandle<
 }
 
 /// implementation of shutdown functionality
-impl<T: Appsthrough<ScyllaThrough>> Shutdown for ScyllaHandle<T> {
+impl<H: ScyllaScope> Shutdown for ScyllaHandle<H> {
     fn shutdown(self) -> Option<Self>
     where
         Self: Sized,
@@ -110,25 +119,25 @@ impl<T: Appsthrough<ScyllaThrough>> Shutdown for ScyllaHandle<T> {
     }
 }
 
-impl<T: Appsthrough<ScyllaThrough>> Deref for ScyllaHandle<T> {
-    type Target = tokio::sync::mpsc::UnboundedSender<ScyllaEvent>;
+impl<H: ScyllaScope> Deref for ScyllaHandle<H> {
+    type Target = tokio::sync::mpsc::UnboundedSender<ScyllaEvent<H::AppsEvents>>;
 
     fn deref(&self) -> &Self::Target {
         &self.tx
     }
 }
 
-impl<T: Appsthrough<ScyllaThrough>> DerefMut for ScyllaHandle<T> {
+impl<H: ScyllaScope> DerefMut for ScyllaHandle<H> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.tx
     }
 }
 
 /// blanket actor implementation
-impl<H: ScyllaScope> Actor<H> for Scylla {}
+impl<H: ScyllaScope> Actor<H> for Scylla<H> {}
 
 /// impl name of the application
-impl Name for Scylla {
+impl<H: ScyllaScope> Name for Scylla<H> {
     fn set_name(mut self) -> Self {
         self.service.update_name("Scylla".to_string());
         self
