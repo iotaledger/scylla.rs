@@ -9,11 +9,16 @@ mod terminating;
 // Listener builder
 builder!(ListenerBuilder { tcp_listener: TcpListener });
 
+#[derive(Clone)]
 /// ListenerHandle to be passed to the application/Scylla in order to shutdown/abort the listener
 pub struct ListenerHandle {
     abort_handle: AbortHandle,
 }
-
+impl ListenerHandle {
+    pub fn new(abort_handle: AbortHandle) -> Self {
+        Self { abort_handle }
+    }
+}
 // Listener state
 pub struct Listener {
     service: Service,
@@ -25,19 +30,22 @@ impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for ListenerBuilder {}
 impl Builder for ListenerBuilder {
     type State = Listener;
     fn build(self) -> Self::State {
-        todo!()
+        Self::State {
+            service: Service::new(),
+            tcp_listener: self.tcp_listener.expect("Expected tcp_listener in ListenerBuilder"),
+        }
+        .set_name()
     }
 }
 
-impl<H: ScyllaScope> Actor<ScyllaHandle<H>> for Listener {}
-
 /// impl name of the Listener
 impl Name for Listener {
-    fn set_name(self) -> Self {
-        todo!()
+    fn set_name(mut self) -> Self {
+        self.service.update_name("Listener".to_string());
+        self
     }
     fn get_name(&self) -> String {
-        todo!()
+        self.service.get_name()
     }
 }
 

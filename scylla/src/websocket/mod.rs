@@ -3,6 +3,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
     StreamExt,
 };
+
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
@@ -15,17 +16,19 @@ builder!(
         peer: SocketAddr,
         stream: WebSocketStream<TcpStream>
 });
-
+/// The writehalf of the webssocket
+pub type WsTx = SplitSink<WebSocketStream<TcpStream>, Message>;
+/// The readhalf of the webssocket
+pub type WsRx = SplitStream<WebSocketStream<TcpStream>>;
 // Listener state
 pub struct Websocket {
     service: Service,
     peer: SocketAddr,
-    ws_rx: SplitStream<WebSocketStream<TcpStream>>,
-    ws_tx: Option<SplitSink<WebSocketStream<TcpStream>, Message>>,
+    ws_rx: WsRx,
+    opt_ws_tx: Option<WsTx>,
 }
 
 impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for WebsocketdBuilder {}
-impl<H: ScyllaScope> Actor<ScyllaHandle<H>> for Websocket {}
 
 impl Builder for WebsocketdBuilder {
     type State = Websocket;
@@ -36,7 +39,7 @@ impl Builder for WebsocketdBuilder {
             service: Service::new(),
             peer: self.peer.unwrap(),
             ws_rx,
-            ws_tx: Some(ws_tx),
+            opt_ws_tx: Some(ws_tx),
         }
         .set_name()
     }
@@ -45,6 +48,7 @@ impl Builder for WebsocketdBuilder {
 /// impl name of the Websocket
 impl Name for Websocket {
     fn set_name(mut self) -> Self {
+        // TODO make sure the name is unique
         let name: String = self.peer.to_string();
         self.service.update_name(name);
         self
@@ -58,7 +62,7 @@ impl Name for Websocket {
 impl<H: ScyllaScope> AknShutdown<Websocket> for ScyllaHandle<H> {
     async fn aknowledge_shutdown(mut self, mut _state: Websocket, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        let event = ScyllaEvent::Children(ScyllaChild::Websocket(_state.service.clone(), Some(_status)));
+        let event = ScyllaEvent::Children(ScyllaChild::Websocket(_state.service.clone(), None));
         let _ = self.send(event);
     }
 }

@@ -6,7 +6,7 @@ impl<H: ScyllaScope> Init<ScyllaHandle<H>> for Websocket {
         // todo authenticator using static secert key and noise protocol
         if true {
             self.service.update_status(ServiceStatus::Initializing);
-            let event = ScyllaEvent::Children(ScyllaChild::Websocket(self.service.clone(), None));
+            let event = ScyllaEvent::Children(ScyllaChild::Websocket(self.service.clone(), self.opt_ws_tx.take()));
             let _ = supervisor.as_mut().unwrap().send(event);
             status
         } else {

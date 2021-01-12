@@ -1,7 +1,14 @@
-pub use chronicle::*;
-use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
+// import children
+use crate::{listener::*, websocket::*};
 
+pub use chronicle::*;
+
+use log::*;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 mod event_loop;
 mod init;
 mod starter;
@@ -22,12 +29,13 @@ builder!(
         buffer_size: usize,
         recv_buffer_size: usize,
         send_buffer_size: usize,
-        nodes: Vec<String>,
+        listener_handle: ListenerHandle,
         authenticator: usize
 });
 
 #[derive(Deserialize, Serialize)]
 pub enum ScyllaThrough {
+    Shutdown,
     AddNode(String),
     RemoveNode(String),
     TryBuild(u8),
@@ -51,10 +59,10 @@ impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
 /// Application state
 pub struct Scylla<H: ScyllaScope> {
     service: Service,
-    listener_handle: u8,
-    cluster_handle: u8,
-    websockets: usize,
-    handle: ScyllaHandle<H>,
+    listener_handle: Option<ListenerHandle>,
+    // cluster_handle: u8,
+    websockets: HashMap<String, WsTx>,
+    handle: Option<ScyllaHandle<H>>,
     inbox: ScyllaInbox<H>,
     /*    tcp_listener:
      *    listener: None,
@@ -67,7 +75,7 @@ pub struct Scylla<H: ScyllaScope> {
 pub enum ScyllaChild {
     Listener(Service, Option<Result<(), Need>>),
     Cluster(Service, Option<Result<(), Need>>),
-    Websocket(Service, Option<Result<(), Need>>),
+    Websocket(Service, Option<WsTx>),
 }
 
 /// Event type of the Scylla Application
@@ -88,25 +96,27 @@ impl<H: ScyllaScope> ThroughType for ScyllaBuilder<H> {
 impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
     type State = Scylla<H>;
     fn build(self) -> Self::State {
-        todo!()
-        // build Scylla app here
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = Some(ScyllaHandle { tx });
+        let inbox = ScyllaInbox { rx };
+        Scylla::<H> {
+            service: Service::new(),
+            listener_handle: Some(self.listener_handle.expect("Expected Listener handle")),
+            // cluster_handle: u8,
+            websockets: HashMap::new(),
+            handle,
+            inbox,
+        }
+        .set_name()
     }
 }
 
 /// implementation of passthrough functionality
 impl<H: ScyllaScope> Passthrough<ScyllaThrough> for ScyllaHandle<H> {
-    fn launcher_status_change(&mut self, service: &Service) {
-        todo!()
-    }
-    fn app_status_change(&mut self, service: &Service) {
-        todo!()
-    }
-    fn send_event(&mut self, event: ScyllaThrough, from_app_name: String) {
-        todo!()
-    }
-    fn service(&mut self, service: &Service) {
-        todo!()
-    }
+    fn launcher_status_change(&mut self, service: &Service) {}
+    fn app_status_change(&mut self, service: &Service) {}
+    fn passthrough(&mut self, event: ScyllaThrough, from_app_name: String) {}
+    fn service(&mut self, service: &Service) {}
 }
 
 /// implementation of shutdown functionality
@@ -115,7 +125,9 @@ impl<H: ScyllaScope> Shutdown for ScyllaHandle<H> {
     where
         Self: Sized,
     {
-        todo!()
+        let scylla_shutdown: H::AppsEvents = serde_json::from_str("{\"Scylla\": \"Shutdown\"}").unwrap();
+        let i = self.send(ScyllaEvent::Passthrough(scylla_shutdown)).is_ok();
+        None
     }
 }
 
@@ -132,9 +144,6 @@ impl<H: ScyllaScope> DerefMut for ScyllaHandle<H> {
         &mut self.tx
     }
 }
-
-/// blanket actor implementation
-impl<H: ScyllaScope> Actor<H> for Scylla<H> {}
 
 /// impl name of the application
 impl<H: ScyllaScope> Name for Scylla<H> {

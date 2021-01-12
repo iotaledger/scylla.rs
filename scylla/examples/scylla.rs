@@ -6,8 +6,9 @@ impl Builder for AppsBuilder {
     type State = Apps;
     fn build(self) -> Self::State {
         // create Scylla app
-        let scylla_builder = ScyllaBuilder::new(); // TODO add args
-                                                   // add it to launcher
+        let scylla_builder = ScyllaBuilder::new().listen_address("127.0.0.1:8080".to_owned());
+        // TODO add args
+        // add it to launcher
         self.Scylla(scylla_builder).to_apps()
     }
 }
