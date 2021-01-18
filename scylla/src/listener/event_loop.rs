@@ -1,10 +1,17 @@
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::websocket::WebsocketdBuilder;
 use tokio_tungstenite::accept_async;
 
 #[async_trait::async_trait]
 impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Listener {
-    async fn event_loop(&mut self, _status: Result<(), Need>, supervisor: &mut Option<ScyllaHandle<H>>) -> Result<(), Need> {
+    async fn event_loop(
+        &mut self,
+        _status: Result<(), Need>,
+        supervisor: &mut Option<ScyllaHandle<H>>,
+    ) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Running);
         let event = ScyllaEvent::Children(ScyllaChild::Listener(self.service.clone(), None));
         let my_sup = supervisor.as_mut().unwrap();

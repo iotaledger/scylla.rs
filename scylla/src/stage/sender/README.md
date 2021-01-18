@@ -1,2 +1,2 @@
 ## About
-Sender is a stage child
+Sender is a Reporters child

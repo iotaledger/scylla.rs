@@ -18,6 +18,7 @@ log = "*"
 env_logger = "0.7.1"
 futures = "0.3"
 futures-util = "0.3.8"
+rand = "0.7"
 
 [dev-dependencies]
 serde = { version = "1.0.114", features = ["derive"] }
@@ -25,6 +26,7 @@ tokio = { version = "1.0", features = ["full", "time", "signal"] }
 log = "*"
 env_logger = "0.7.1"
 futures = "0.3"
+rand = "0.7"
 
 [[example]]
 name = "scylla"

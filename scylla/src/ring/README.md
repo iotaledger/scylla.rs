@@ -1,2 +1,2 @@
 ## About
-Ring holds the scylla cluster topology in thread local storage.
+Ring holds the Scylla cluster topology in thread local storage.

@@ -1,14 +1,18 @@
-// import children
-use crate::{listener::*, websocket::*};
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::{cluster::*, listener::*, websocket::*};
 
 pub use chronicle::*;
+pub use log::*;
+pub use tokio::{spawn, sync::mpsc};
 
-use log::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
 };
+
 mod event_loop;
 mod init;
 mod starter;
@@ -126,7 +130,7 @@ impl<H: ScyllaScope> Shutdown for ScyllaHandle<H> {
         Self: Sized,
     {
         let scylla_shutdown: H::AppsEvents = serde_json::from_str("{\"Scylla\": \"Shutdown\"}").unwrap();
-        let i = self.send(ScyllaEvent::Passthrough(scylla_shutdown)).is_ok();
+        let _ = self.send(ScyllaEvent::Passthrough(scylla_shutdown));
         None
     }
 }

@@ -1,13 +1,18 @@
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::application::*;
 
 use futures::future::AbortHandle;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 mod event_loop;
 mod init;
 mod terminating;
 
 // Listener builder
-builder!(ListenerBuilder { tcp_listener: TcpListener });
+builder!(ListenerBuilder {
+    tcp_listener: TcpListener
+});
 
 #[derive(Clone)]
 /// ListenerHandle to be passed to the application/Scylla in order to shutdown/abort the listener

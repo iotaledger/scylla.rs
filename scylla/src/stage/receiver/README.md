@@ -1,2 +1,2 @@
 ## About
-Receiver is a stage child
+Receiver is a Reporters child

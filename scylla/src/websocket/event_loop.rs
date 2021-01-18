@@ -1,8 +1,15 @@
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 
 #[async_trait::async_trait]
 impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Websocket {
-    async fn event_loop(&mut self, status: Result<(), Need>, supervisor: &mut Option<ScyllaHandle<H>>) -> Result<(), Need> {
+    async fn event_loop(
+        &mut self,
+        status: Result<(), Need>,
+        supervisor: &mut Option<ScyllaHandle<H>>,
+    ) -> Result<(), Need> {
         // exit the websocket event_loop if status is Err
         status?;
         // socket running

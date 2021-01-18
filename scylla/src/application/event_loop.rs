@@ -1,3 +1,6 @@
+// Copyright 2020 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use futures::SinkExt;
 
@@ -41,7 +44,8 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                                     // if service is_stopping do nothing
                                     if !self.service.is_stopping() {
                                         // Ask launcher to shutdown scylla application,
-                                        // this is usefull in case the shutdown event sent by the websocket client.
+                                        // this is usefull in case the shutdown event sent by the websocket
+                                        // client.
                                         my_sup.shutdown_app(&self.get_name());
                                         // shutdown children
                                         // Listener
