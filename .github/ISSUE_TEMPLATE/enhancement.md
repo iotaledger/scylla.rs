@@ -1,6 +1,6 @@
 ---
 name: Enhancement
-about: Propose and enhancement for this project
+about: Propose an enhancement for this project
 title: ''
 labels: enhancement
 assignees: ''
