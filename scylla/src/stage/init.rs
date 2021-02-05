@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -28,7 +28,7 @@ impl Init<NodeHandle> for Stage {
             // Start reporter
         }
         self.service.update_status(ServiceStatus::Initializing);
-        let event = NodeEvent::StageService(self.service.clone(), Some(self.reporters_handles.clone()));
+        let event = NodeEvent::RegisterReporters(self.service.clone(), self.reporters_handles.clone().unwrap());
         let _ = supervisor.as_mut().unwrap().send(event);
         status
     }

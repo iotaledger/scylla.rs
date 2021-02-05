@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::node::*;
@@ -17,9 +17,36 @@ mod terminating;
 pub use reporter::{ReporterEvent, ReporterHandle};
 
 /// The reporters of shard id to its corresponding sender of stage reporter events.
-pub type ReportersHandles = HashMap<u8, mpsc::UnboundedSender<reporter::ReporterEvent>>;
+#[derive(Clone)]
+pub struct ReportersHandles(HashMap<u8, mpsc::UnboundedSender<reporter::ReporterEvent>>);
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
+
+impl Deref for ReportersHandles {
+    type Target = HashMap<u8, mpsc::UnboundedSender<reporter::ReporterEvent>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ReportersHandles {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Shutdown for ReportersHandles {
+    fn shutdown(self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        for reporter_handle in self.values() {
+            reporter_handle.send(ReporterEvent::Session(reporter::Session::Shutdown));
+        }
+        None
+    }
+}
 
 // Stage builder
 builder!(StageBuilder {
@@ -63,8 +90,8 @@ pub enum StageEvent {
     // Connect(sender::Sender, sender::Receiver),
     /// Reporter child status change
     Reporter(Service),
-    /// Reconnection request.
-    Reconnect(usize),
+    /// Establish connection to scylla shard.
+    Connect,
     /// Shutdwon a stage.
     Shutdown,
 }
@@ -73,7 +100,7 @@ pub struct Stage {
     service: Service,
     address: SocketAddr,
     reporter_count: u8,
-    reporters_handles: ReportersHandles,
+    reporters_handles: Option<ReportersHandles>,
     session_id: usize,
     reconnect_requests: u8,
     connected: bool,
@@ -125,7 +152,7 @@ impl Builder for StageBuilder {
             service: Service::new(),
             address: self.address.unwrap(),
             reporter_count,
-            reporters_handles: HashMap::with_capacity(reporter_count as usize),
+            reporters_handles: Some(ReportersHandles(HashMap::with_capacity(reporter_count as usize))),
             session_id: 0,
             reconnect_requests: 0,
             connected: false,

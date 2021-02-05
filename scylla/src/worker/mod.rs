@@ -1,7 +1,8 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::stage::ReporterHandle;
+use scylla_cql::CqlError;
 
 pub use crate::stage::ReporterEvent;
 use std::io::Error;
@@ -18,7 +19,7 @@ pub trait Worker: Send + std::fmt::Debug {
 /// The CQL worker error.
 pub enum WorkerError {
     // The CQL Error reported from ScyllaDB.
-    // Cql(CqlError),
+    Cql(CqlError),
     /// The IO Error.
     Io(Error),
     /// The overload when we do not have any more streams.
@@ -32,7 +33,7 @@ pub enum WorkerError {
 impl std::fmt::Display for WorkerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            // UNCOMMENT WorkerError::Cql(cql_error) => write!(f, "Worker CqlError: {:?}", cql_error),
+            WorkerError::Cql(cql_error) => write!(f, "Worker CqlError: {:?}", cql_error),
             WorkerError::Io(io_error) => write!(f, "Worker IoError: {:?}", io_error),
             WorkerError::Overload => write!(f, "Worker Overload"),
             WorkerError::Lost => write!(f, "Worker Lost"),

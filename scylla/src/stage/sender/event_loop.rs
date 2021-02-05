@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -12,7 +12,7 @@ impl EventLoop<ReportersHandles> for Sender {
     ) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Running);
         let reporters_handles = supervisor.as_ref().unwrap();
-        for (_, reporter_handle) in reporters_handles {
+        for reporter_handle in reporters_handles.values() {
             let event = ReporterEvent::Session(Session::Service(self.service.clone()));
             let _ = reporter_handle.send(event);
         }

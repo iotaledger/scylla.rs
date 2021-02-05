@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 /// Import supervisor scope
@@ -57,9 +57,10 @@ impl DerefMut for NodeHandle {
 pub enum NodeEvent {
     /// Shutdown the node.
     Shutdown,
-    StageService(Service, Option<ReportersHandles>),
-    /* Register the node in its corresponding stage.
-     * RegisterReporters(u8, stage::supervisor::Reporters), */
+    /// Register the stage reporters.
+    RegisterReporters(Service, ReportersHandles),
+    /// To keep the node with up to date stage service
+    Service(Service),
 }
 // Node state
 pub struct Node {

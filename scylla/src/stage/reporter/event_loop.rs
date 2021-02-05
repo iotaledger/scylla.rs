@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -10,9 +10,6 @@ impl EventLoop<StageHandle> for Reporter {
         _status: Result<(), Need>,
         supervisor: &mut Option<StageHandle>,
     ) -> Result<(), Need> {
-        self.service.update_status(ServiceStatus::Degraded);
-        let event = StageEvent::Reporter(self.service.clone());
-        let _ = supervisor.as_ref().unwrap().send(event);
         while let Some(event) = self.inbox.rx.recv().await {
             match event {
                 ReporterEvent::Request { worker, mut payload } => {
@@ -67,7 +64,7 @@ impl EventLoop<StageHandle> for Reporter {
                                 // drop the sender_handle
                                 self.sender_handle = None;
                             } else {
-                                // do not ate the status if service is_stopping
+                                // do not update the status if service is_stopping
                                 if !self.service.is_stopping() {
                                     // degraded service
                                     self.service.update_status(ServiceStatus::Degraded);
@@ -115,6 +112,9 @@ impl EventLoop<StageHandle> for Reporter {
 
 impl Reporter {
     fn handle_response(&mut self, stream: i16) {
+        // TODO if payload is error, invoke handle_error,
+        // make sure to decode the cql error
+
         // remove the worker from workers and send response.
         let worker = self.workers.remove(&stream).unwrap();
         worker.send_response(&self.handle, self.payloads[stream as usize].as_mut().take().unwrap());
@@ -122,6 +122,8 @@ impl Reporter {
         self.streams.push(stream);
     }
     fn handle_error(&mut self, stream: i16, error: WorkerError) {
+        // TODO to handle UNPREPARED, pass &self.handle.
+
         // remove the worker from workers and send error.
         let worker = self.workers.remove(&stream).unwrap();
         // drop payload.
