@@ -8,3 +8,11 @@ homepage = "https://docs.iota.org/docs/chronicle/1.1/overview"
 repository = "https://github.com/iotaledger/scylla.rs"
 
 [dependencies]
+
+rand = "0.7"
+lz4 = "1.23"
+snap = "1.0"
+socket2 = "0.3"
+port_scanner = "0.1.5"
+futures = "*"
+tokio = {version = "1.0", features = ["full"]}
