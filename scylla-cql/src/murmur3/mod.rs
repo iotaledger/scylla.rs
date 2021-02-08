@@ -24,7 +24,7 @@ where
 ///
 /// # Example
 /// ```
-/// use scylla_cql::murmur3::murmur3_cassandra_x64_128;
+/// use scylla_cql::murmur3_cassandra_x64_128;
 /// use std::io::Cursor;
 /// let hash_result = murmur3_cassandra_x64_128(
 ///     &mut Cursor::new("EHUHSJRCMDJSZUQMNLDBSRFC9O9XCI9SMHFWWHNDYOOOWMSOJQHCC9GFUEGECEVVXCSXYTHSRJ9TZ9999"),
