@@ -11,8 +11,6 @@ use super::{
 };
 use crate::compression::{Compression, MyCompression};
 
-type QueryCount = u16;
-
 /// Blanket cql frame header for BATCH frame.
 const BATCH_HEADER: &'static [u8] = &[4, 0, 0, 0, BATCH, 0, 0, 0, 0];
 
@@ -29,24 +27,21 @@ pub enum BatchTypes {
     /// The batch will be a "counter" batch.
     Counter = 2,
 }
-struct BatchBuilder<Stage> {
+pub struct BatchBuilder<Stage> {
     buffer: Vec<u8>,
     query_count: u16,
     stage: Stage,
 }
-struct BatchHeader;
-struct BatchType;
-struct BatchStatementOrId;
-struct BatchValues {
+pub struct BatchHeader;
+pub struct BatchType;
+pub struct BatchStatementOrId;
+pub struct BatchValues {
     value_count: u16,
     index: usize,
 }
-struct BatchFlags;
-struct BatchConsistency;
-
-struct BatchSerialConsistency;
-struct BatchTimestamp;
-struct BatchBuild;
+pub struct BatchFlags;
+pub struct BatchTimestamp;
+pub struct BatchBuild;
 
 impl BatchBuilder<BatchHeader> {
     pub fn new() -> BatchBuilder<BatchType> {
@@ -287,10 +282,12 @@ impl BatchBuilder<BatchBuild> {
     }
 }
 impl Batch {
-    fn new() -> BatchBuilder<BatchType> {
+    /// Create Batch cql frame
+    pub fn new() -> BatchBuilder<BatchType> {
         BatchBuilder::<BatchHeader>::new()
     }
-    fn with_capacity(capacity: usize) -> BatchBuilder<BatchType> {
+    /// Create Batch cql frame with capacity
+    pub fn with_capacity(capacity: usize) -> BatchBuilder<BatchType> {
         BatchBuilder::<BatchHeader>::with_capacity(capacity)
     }
 }

@@ -41,7 +41,7 @@ pub struct QueryTimestamp {
 pub struct QueryBuild;
 
 impl QueryBuilder<QueryHeader> {
-    pub(crate) fn new() -> QueryBuilder<QueryStatement> {
+    fn new() -> QueryBuilder<QueryStatement> {
         let mut buffer: Vec<u8> = Vec::new();
         buffer.extend_from_slice(&QUERY_HEADER);
         QueryBuilder::<QueryStatement> {
@@ -49,7 +49,7 @@ impl QueryBuilder<QueryHeader> {
             stage: QueryStatement,
         }
     }
-    pub(crate) fn with_capacity(capacity: usize) -> QueryBuilder<QueryStatement> {
+    fn with_capacity(capacity: usize) -> QueryBuilder<QueryStatement> {
         let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
         buffer.extend_from_slice(&QUERY_HEADER);
         QueryBuilder::<QueryStatement> {
@@ -466,9 +466,11 @@ impl QueryBuilder<QueryBuild> {
 pub struct Query(pub Vec<u8>);
 
 impl Query {
+    /// Create CQL query by following the cql binary v4 specs
     pub fn new() -> QueryBuilder<QueryStatement> {
         QueryBuilder::<QueryHeader>::new()
     }
+    /// Create CQL query with_capacity by following the cql binary v4 specs
     pub fn with_capacity(capacity: usize) -> QueryBuilder<QueryStatement> {
         QueryBuilder::<QueryHeader>::with_capacity(capacity)
     }

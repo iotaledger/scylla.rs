@@ -51,14 +51,6 @@ pub struct Cql {
     msb: u8,
 }
 
-pub struct Token {
-    token: i64,
-    address: Ipv4Addr,
-    dc: String,
-    msb: u8,
-    shard_count: u16,
-}
-
 impl<Auth: Authenticator> CqlBuilder<Auth> {
     pub fn address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
@@ -284,9 +276,11 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
 }
 
 impl Cql {
+    /// Create new cql connection builder struct
     pub fn new() -> CqlBuilder<AllowAllAuth> {
         CqlBuilder::<AllowAllAuth>::default()
     }
+    /// Create new cql connection builder struct with attached authenticator
     pub fn with_auth(user: String, pass: String) -> CqlBuilder<PasswordAuth> {
         let cql_builder = CqlBuilder::<PasswordAuth>::default();
         let auth = PasswordAuth::new(user, pass);
@@ -315,11 +309,25 @@ impl Cql {
         }
         Ok(())
     }
+    /// Get the socket stream behind the cql connection
+    pub fn stream(&mut self) -> &mut TcpStream {
+        &mut self.stream
+    }
+    /// Take the associated tokens of the connected scylla node
     pub fn take_tokens(&mut self) -> Option<Vec<i64>> {
         self.tokens.take()
     }
+    /// Get the shard_id of the connection
     pub fn shard_id(&self) -> u16 {
         self.shard_id
+    }
+    /// Get the address of the connection
+    pub fn address(&self) -> SocketAddr {
+        self.address.clone()
+    }
+    /// Get the most significant bit (msb)
+    pub fn msb(&self) -> u8 {
+        self.msb
     }
 }
 

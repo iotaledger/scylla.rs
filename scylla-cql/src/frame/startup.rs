@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 pub(crate) struct StartupBuilder<Stage> {
     buffer: Vec<u8>,
+    #[allow(unused)]
     stage: Stage,
 }
 struct StartupHeader;
@@ -23,14 +24,6 @@ const STARTUP_HEADER: &'static [u8] = &[4, 0, 0, 0, STARTUP, 0, 0, 0, 0];
 impl StartupBuilder<StartupHeader> {
     pub fn new() -> StartupBuilder<StartupOptions> {
         let mut buffer: Vec<u8> = Vec::new();
-        buffer.extend_from_slice(&STARTUP_HEADER);
-        StartupBuilder::<StartupOptions> {
-            buffer,
-            stage: StartupOptions,
-        }
-    }
-    pub fn with_capacity(capacity: usize) -> StartupBuilder<StartupOptions> {
-        let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
         buffer.extend_from_slice(&STARTUP_HEADER);
         StartupBuilder::<StartupOptions> {
             buffer,
@@ -68,9 +61,6 @@ impl Startup {
     pub(crate) fn new() -> StartupBuilder<StartupOptions> {
         StartupBuilder::<StartupHeader>::new()
     }
-    fn with_capacity(capacity: usize) -> StartupBuilder<StartupOptions> {
-        StartupBuilder::<StartupHeader>::with_capacity(capacity)
-    }
 }
 
 #[cfg(test)]
@@ -83,6 +73,6 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("CQL_VERSION".to_string(), "3.0.0".to_string());
 
-        let Startup(_payload) = Startup::new().options(&options).build(); // build uncompressed
+        let Startup(_payload) = Startup::new().options(&options).build();
     }
 }

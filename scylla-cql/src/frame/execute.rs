@@ -14,34 +14,34 @@ use crate::compression::{Compression, MyCompression};
 /// Blanket cql frame header for execute frame.
 const EXECUTE_HEADER: &'static [u8] = &[4, 0, 0, 0, EXECUTE, 0, 0, 0, 0];
 
-struct ExecuteBuilder<Stage> {
+pub struct ExecuteBuilder<Stage> {
     buffer: Vec<u8>,
     stage: Stage,
 }
 
-struct ExecuteHeader;
-struct ExecuteId;
-struct ExecuteConsistency;
-struct ExecuteFlags {
+pub struct ExecuteHeader;
+pub struct ExecuteId;
+pub struct ExecuteConsistency;
+pub struct ExecuteFlags {
     index: usize,
 }
-struct ExecuteValues {
+pub struct ExecuteValues {
     query_flags: ExecuteFlags,
     value_count: u16,
 }
-struct ExecutePagingState {
+pub struct ExecutePagingState {
     query_flags: ExecuteFlags,
 }
-struct ExecuteSerialConsistency {
+pub struct ExecuteSerialConsistency {
     query_flags: ExecuteFlags,
 }
-struct ExecuteTimestamp {
+pub struct ExecuteTimestamp {
     query_flags: ExecuteFlags,
 }
-struct ExecuteBuild;
+pub struct ExecuteBuild;
 
 impl ExecuteBuilder<ExecuteHeader> {
-    pub fn new() -> ExecuteBuilder<ExecuteId> {
+    fn new() -> ExecuteBuilder<ExecuteId> {
         let mut buffer: Vec<u8> = Vec::new();
         buffer.extend_from_slice(&EXECUTE_HEADER);
         ExecuteBuilder::<ExecuteId> {
@@ -49,7 +49,7 @@ impl ExecuteBuilder<ExecuteHeader> {
             stage: ExecuteId,
         }
     }
-    pub fn with_capacity(capacity: usize) -> ExecuteBuilder<ExecuteId> {
+    fn with_capacity(capacity: usize) -> ExecuteBuilder<ExecuteId> {
         let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
         buffer.extend_from_slice(&EXECUTE_HEADER);
         ExecuteBuilder::<ExecuteId> {
@@ -466,10 +466,12 @@ impl ExecuteBuilder<ExecuteBuild> {
 pub struct Execute(pub Vec<u8>);
 
 impl Execute {
-    fn new() -> ExecuteBuilder<ExecuteId> {
+    /// Create Execute Cql frame
+    pub fn new() -> ExecuteBuilder<ExecuteId> {
         ExecuteBuilder::<ExecuteHeader>::new()
     }
-    fn with_capacity(capacity: usize) -> ExecuteBuilder<ExecuteId> {
+    /// Create Execute Cql frame with capacity
+    pub fn with_capacity(capacity: usize) -> ExecuteBuilder<ExecuteId> {
         ExecuteBuilder::<ExecuteHeader>::with_capacity(capacity)
     }
 }

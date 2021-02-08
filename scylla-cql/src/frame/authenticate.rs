@@ -17,6 +17,7 @@ impl Authenticate {
         Self::from(decoder.body())
     }
     /// Get the autenticator name.
+    #[allow(unused)]
     pub fn authenticator(&self) -> &str {
         &self.authenticator[..]
     }

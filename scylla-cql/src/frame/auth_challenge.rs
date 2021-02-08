@@ -7,6 +7,7 @@ use super::decoder::{bytes, Decoder, Frame};
 
 /// The Autentication Challenge structure with the token field.
 pub(crate) struct AuthChallenge {
+    #[allow(unused)]
     token: Option<Vec<u8>>,
 }
 

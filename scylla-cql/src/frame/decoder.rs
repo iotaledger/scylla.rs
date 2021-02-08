@@ -18,7 +18,9 @@ use std::{
 
 /// RowsDecoder trait to decode the rows result from scylla
 pub trait RowsDecoder<K, V> {
+    /// Try to decode the provided Decoder with an expected Rows result
     fn try_decode(&mut self, decoder: Decoder) -> Result<Option<V>, error::CqlError>;
+    /// Decode the provided Decoder with an deterministic Rows result
     fn decode(&mut self, decoder: Decoder) -> Option<V> {
         self.try_decode(decoder).unwrap()
     }
@@ -26,7 +28,9 @@ pub trait RowsDecoder<K, V> {
 
 /// VoidDecoder trait to decode the VOID result from scylla
 pub trait VoidDecoder<K, V> {
+    /// Try to decode the provided Decoder with an expected Void result
     fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
+    /// Decode the provided Decoder with an deterministic Void result
     fn decode(&mut self, decoder: Decoder) {
         self.try_decode(decoder).unwrap()
     }

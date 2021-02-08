@@ -60,10 +60,9 @@ pub(crate) struct AuthResponse(pub Vec<u8>);
 
 impl AuthResponse {
     pub(crate) fn new() -> Self {
-        AuthResponse(Vec::new())
-    }
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        AuthResponse(Vec::with_capacity(capacity))
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&AUTH_RESPONSE_HEADER);
+        AuthResponse(buffer)
     }
     /// Update the response token to be the token from autenticator.
     pub(crate) fn token(mut self, authenticator: &impl Authenticator) -> Self {
