@@ -1,9 +1,10 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use super::tokens::{Info, Row};
 use crate::frame::{
     auth_challenge::AuthChallenge,
-    auth_response::{AuthResponse, Authenticator},
+    auth_response::{AllowAllAuth, AuthResponse, Authenticator, PasswordAuth},
     authenticate::Authenticate,
     consistency::Consistency,
     decoder::{Decoder, Frame},
@@ -12,22 +13,23 @@ use crate::frame::{
     startup::Startup,
     supported::Supported,
 };
+
 use std::{
     convert::TryInto,
     io::{Error, ErrorKind},
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
+
+use crate::compression::{MyCompression, UNCOMPRESSED};
+use port_scanner::{local_port_available, request_open_port};
+use std::collections::HashMap;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpSocket, TcpStream},
 };
 
-use crate::compression::{MyCompression, UNCOMPRESSED};
-use port_scanner::{local_port_available, request_open_port};
-use std::collections::HashMap;
-
 #[derive(Default)]
-struct CqlBuilder<Auth: Authenticator> {
+pub struct CqlBuilder<Auth: Authenticator> {
     address: Option<SocketAddr>,
     local_addr: Option<SocketAddr>,
     tokens: bool,
@@ -40,7 +42,8 @@ struct CqlBuilder<Auth: Authenticator> {
 /// CQL connection structure.
 pub struct Cql {
     stream: TcpStream,
-    tokens: Option<usize>, // todo
+    address: SocketAddr,
+    tokens: Option<Vec<i64>>,
     dc: Option<String>,
     shard_id: u16,
     shard_aware_port: u16,
@@ -50,34 +53,35 @@ pub struct Cql {
 
 pub struct Token {
     token: i64,
-    address: SocketAddr,
+    address: Ipv4Addr,
     dc: String,
     msb: u8,
     shard_count: u16,
 }
 
 impl<Auth: Authenticator> CqlBuilder<Auth> {
-    fn new() -> Self {
-        CqlBuilder::<Auth>::default()
-    }
-    fn address(mut self, address: SocketAddr) -> Self {
+    pub fn address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
         self
     }
-    fn recv_buffer_size(mut self, recv_buffer_size: u32) -> Self {
+    pub fn recv_buffer_size(mut self, recv_buffer_size: u32) -> Self {
         self.recv_buffer_size.replace(recv_buffer_size);
         self
     }
-    fn send_buffer_size(mut self, send_buffer_size: u32) -> Self {
+    pub fn send_buffer_size(mut self, send_buffer_size: u32) -> Self {
         self.send_buffer_size.replace(send_buffer_size);
         self
     }
-    fn tokens(mut self) -> Self {
+    pub fn tokens(mut self) -> Self {
         self.tokens = true;
         self
     }
+    pub fn shard_id(mut self, shard_id: u16) -> Self {
+        self.shard_id.replace(shard_id);
+        self
+    }
     fn set_local_addr(&mut self, local_addr: SocketAddr) {
-        self.address.replace(local_addr);
+        self.local_addr.replace(local_addr);
     }
     async fn connect(&mut self) -> Result<(), Error> {
         let socket = TcpSocket::new_v4()?;
@@ -132,7 +136,7 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         let decoder = Decoder::new(buffer, MyCompression::get());
         if decoder.is_authenticate() {
             if self.authenticator.is_none() {
-                let authenticate = Authenticate::new(&decoder);
+                let _authenticate = Authenticate::new(&decoder);
                 return Err(Error::new(
                     ErrorKind::Other,
                     "CQL connection not ready due to authenticator is not provided",
@@ -151,7 +155,7 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
                 return Err(Error::new(ErrorKind::Other, "CQL connection not ready due to CqlError"));
             }
             if decoder.is_auth_challenge() {
-                let auth_challenge = AuthChallenge::new(&decoder);
+                let _auth_challenge = AuthChallenge::new(&decoder);
                 return Err(Error::new(
                     ErrorKind::Other,
                     "CQL connection not ready due to Unsupported Auth Challenge",
@@ -177,6 +181,7 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         // create cqlconn
         let cqlconn = Cql {
             stream,
+            address: self.address.unwrap(),
             tokens: None,
             shard_id: shard,
             shard_aware_port,
@@ -188,11 +193,11 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         Ok(())
     }
 
-    async fn build(mut self) -> Result<Cql, Error> {
+    pub async fn build(mut self) -> Result<Cql, Error> {
         // connect
         self.connect().await?;
         // take the cql_connection
-        let cqlconn = self.cql.take().unwrap();
+        let mut cqlconn = self.cql.take().unwrap();
         // make sure to connect to the right shard(if provided)
         if let Some(requested_shard_id) = self.shard_id {
             if requested_shard_id != cqlconn.shard_id {
@@ -205,16 +210,17 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
                             // make sure the potential_open_port is open
                             if local_port_available(potential_open_port) {
                                 let local_address =
-                                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), potential_open_port);
+                                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), potential_open_port);
                                 self.set_local_addr(local_address);
                                 // reconnect
                                 self.connect().await?;
                                 // take the cql_connection
-                                let cqlconn = self.cql.take().unwrap();
+                                let mut cqlconn = self.cql.take().unwrap();
                                 // assert shard_id is equal
                                 assert_eq!(cqlconn.shard_id, requested_shard_id);
-                                // todo fetch tokens (if set)
-
+                                if self.tokens {
+                                    cqlconn.fetch_tokens().await?;
+                                }
                                 return Ok(cqlconn);
                             } else {
                                 // continue, request new open_port
@@ -235,10 +241,11 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
                     loop {
                         match self.connect().await {
                             Ok(_) => {
-                                let cqlconn = self.cql.take().unwrap();
+                                let mut cqlconn = self.cql.take().unwrap();
                                 if cqlconn.shard_id == requested_shard_id {
-                                    // return
-                                    // TODO fetch tokens (if set)
+                                    if self.tokens {
+                                        cqlconn.fetch_tokens().await?;
+                                    }
                                     return Ok(cqlconn);
                                 } else if requested_shard_id >= cqlconn.shard_count {
                                     // error as it's impossible to connect to shard_id doesn't exist
@@ -261,20 +268,58 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
                 }
             } else {
                 // FOUND connection
-                // todo fetch tokens (if set)
+                if self.tokens {
+                    cqlconn.fetch_tokens().await?;
+                }
                 return Ok(cqlconn);
             }
         } else {
             // shard_id not provided, so connection is ready
-            // todo fetch tokens (if set)
+            if self.tokens {
+                cqlconn.fetch_tokens().await?;
+            }
             return Ok(cqlconn);
         }
     }
 }
 
 impl Cql {
-    pub async fn fetch_tokens(&mut self) -> Result<(), Error> {
-        todo!()
+    pub fn new() -> CqlBuilder<AllowAllAuth> {
+        CqlBuilder::<AllowAllAuth>::default()
+    }
+    pub fn with_auth(user: String, pass: String) -> CqlBuilder<PasswordAuth> {
+        let cql_builder = CqlBuilder::<PasswordAuth>::default();
+        let auth = PasswordAuth::new(user, pass);
+        CqlBuilder::<PasswordAuth>::default().authenticator.replace(auth);
+        cql_builder
+    }
+    async fn fetch_tokens(&mut self) -> Result<(), Error> {
+        // create query to fetch tokens and info from system.local;
+        let query = fetch_tokens_query();
+        // write_all query to the stream
+        self.stream.write_all(query.as_slice()).await?;
+        // collect_frame_response
+        let buffer = collect_frame_response(&mut self.stream).await?;
+        // Create Decoder from buffer.
+        let decoder = Decoder::new(buffer, MyCompression::get());
+
+        if decoder.is_rows() {
+            let Row { data_center, tokens } = Info::new(decoder).next().unwrap();
+            self.dc.replace(data_center);
+            self.tokens.replace(tokens.iter().map(|x| x.parse().unwrap()).collect());
+        } else {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "CQL connection didn't return rows due to CqlError",
+            ));
+        }
+        Ok(())
+    }
+    pub fn take_tokens(&mut self) -> Option<Vec<i64>> {
+        self.tokens.take()
+    }
+    pub fn shard_id(&self) -> u16 {
+        self.shard_id
     }
 }
 
@@ -290,11 +335,10 @@ async fn collect_frame_response(stream: &mut TcpStream) -> Result<Vec<u8>, Error
     Ok(buffer)
 }
 
-// ----------- encoding scope -----------
-/// Query the data center, broadcast address, and tokens from the ScyllaDB.
-pub fn query() -> Vec<u8> {
+/// Query the data center, and tokens from the ScyllaDB.
+fn fetch_tokens_query() -> Vec<u8> {
     let Query(payload) = Query::new()
-        .statement("SELECT data_center, broadcast_address, tokens FROM system.local")
+        .statement("SELECT data_center, tokens FROM system.local")
         .consistency(Consistency::One)
         .build();
     payload
