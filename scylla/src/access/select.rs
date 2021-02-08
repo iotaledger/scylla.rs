@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use scylla_cql::SelectDecoder;
+use scylla_cql::RowsDecoder;
 
 #[async_trait::async_trait]
 /// `Select<K, V>` trait extends the `keyspace` with `select` operation for the (key: K, value: V);
@@ -12,5 +12,5 @@ pub trait Select<K, V>: Keyspace {
     /// and responde back using async callback to the worker.
     async fn select<T>(&self, worker: Box<T>, key: &K)
     where
-        T: SelectDecoder<K, V> + Worker;
+        T: RowsDecoder<K, V> + Worker;
 }

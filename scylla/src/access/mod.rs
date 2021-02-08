@@ -4,6 +4,8 @@
 mod insert;
 mod keyspace;
 mod select;
+mod delete;
+mod update;
 
 use keyspace::Keyspace;
 
