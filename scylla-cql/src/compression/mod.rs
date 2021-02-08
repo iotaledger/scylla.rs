@@ -125,6 +125,7 @@ pub struct MyCompression(pub &'static dyn Compression);
 
 impl MyCompression {
     /// Set the global compression syte as `LZ4`.
+    #[allow(unused)]
     pub fn set_lz4() {
         unsafe {
             MY_COMPRESSION = MyCompression(&LZ4);
@@ -132,6 +133,7 @@ impl MyCompression {
         }
     }
     /// Set the global compression syte as `SNAPPY`.
+    #[allow(unused)]
     pub fn set_snappy() {
         unsafe {
             MY_COMPRESSION = MyCompression(&SNAPPY);
@@ -139,6 +141,7 @@ impl MyCompression {
         }
     }
     /// Set the global compression syte as `UNCOMPRESSED`.
+    #[allow(unused)]
     pub fn set_uncompressed() {
         unsafe {
             MY_COMPRESSION = MyCompression(&UNCOMPRESSED);

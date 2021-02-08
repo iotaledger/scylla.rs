@@ -31,6 +31,7 @@ where
 ///     0,
 /// );
 /// ```
+#[allow(unused)]
 pub fn murmur3_cassandra_x64_128<T: Read>(source: &mut T, seed: u32) -> Result<i64> {
     const C1: i64 = -8_663_945_395_140_668_459_i64; // 0x87c3_7b91_1142_53d5;
     const C2: i64 = 0x4cf5_ad43_2745_937f;
