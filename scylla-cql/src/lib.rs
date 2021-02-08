@@ -13,4 +13,4 @@ pub use connection::*;
 /// This is the public API of this crate
 pub use frame::*;
 
-// TODO expose murmur3
+pub use murmur3::murmur3_cassandra_x64_128;
