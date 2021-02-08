@@ -6,6 +6,7 @@ use crate::application::*;
 use std::ops::{Deref, DerefMut};
 
 use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
+use scylla_cql::{Cql,PasswordAuth};
 
 mod event_loop;
 mod init;
@@ -51,12 +52,12 @@ impl Shutdown for ReportersHandles {
 // Stage builder
 builder!(StageBuilder {
     address: SocketAddr,
+    authenticator: PasswordAuth,
     reporter_count: u8,
-    shard_id: u8,
+    shard_id: u16,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>,
-    //authenticator: Option<PasswordAuth>
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
     handle: StageHandle,
     inbox: StageInbox
 });
@@ -99,16 +100,16 @@ pub enum StageEvent {
 pub struct Stage {
     service: Service,
     address: SocketAddr,
+    authenticator: PasswordAuth,
     reporter_count: u8,
     reporters_handles: Option<ReportersHandles>,
     session_id: usize,
-    reconnect_requests: u8,
     connected: bool,
-    shard_id: u8,
+    shard_id: u16,
     payloads: Payloads,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>,
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
     handle: Option<StageHandle>,
     inbox: StageInbox,
 }
@@ -151,10 +152,10 @@ impl Builder for StageBuilder {
         Self::State {
             service: Service::new(),
             address: self.address.unwrap(),
+            authenticator: self.authenticator.unwrap(),
             reporter_count,
             reporters_handles: Some(ReportersHandles(HashMap::with_capacity(reporter_count as usize))),
             session_id: 0,
-            reconnect_requests: 0,
             connected: false,
             shard_id: self.shard_id.unwrap(),
             payloads,

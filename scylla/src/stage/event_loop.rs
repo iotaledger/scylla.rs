@@ -16,12 +16,14 @@ impl EventLoop<NodeHandle> for Stage {
                     {
                         if !self.service.is_stopping() {
                             self.service.update_status(ServiceStatus::Degraded);
-                            // need to connect
+                            // need to connect for the first time
+                            let _ = self.handle.as_mut().unwrap().send(StageEvent::Connect);
                         }
                     } else if microservices.all(|ms| ms.is_maintenance()) {
                         if !self.service.is_stopping() {
                             self.service.update_status(ServiceStatus::Maintenance);
                             // need to reconnect
+                            let _ = self.handle.as_mut().unwrap().send(StageEvent::Connect);
                         }
                     } else if microservices.all(|ms| ms.is_running())
                         && microservices.len() == self.reporter_count as usize
@@ -38,14 +40,30 @@ impl EventLoop<NodeHandle> for Stage {
                     self.handle = None;
                     self.service.update_status(ServiceStatus::Stopping);
                     // shutdown children
-                    if let Some(reporters_handls) = self.reporters_handles.take() {
-                        reporters_handls.shutdown();
+                    if let Some(reporters_handles) = self.reporters_handles.take() {
+                        reporters_handles.shutdown();
                     };
                 }
                 StageEvent::Connect => {
-                    // cql connect
-
+                    // cql connect // TODO replace it with cqlbuilder and make use of PasswordAuth
+                    let mut cql_builder = Cql::new().address(self.address).shard_id(self.shard_id);
                     // Split the stream
+                    if let Some(recv_buf) = self.recv_buffer_size {
+                        cql_builder = cql_builder.recv_buffer_size(recv_buf);
+                    }
+                    if let Some(send_buf) = self.send_buffer_size {
+                        cql_builder = cql_builder.send_buffer_size(send_buf);
+                    }
+                    match cql_builder.build().await {
+                        Ok(mut cql_conn) => {
+                            self.session_id += 1;
+                            
+                        }
+                        Err(_) => {
+
+                        }
+                    }
+
                     // let (socket_rx, socket_tx) = tokio::io::split(cqlconn.take_stream());
                 }
             }
