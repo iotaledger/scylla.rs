@@ -16,40 +16,16 @@ use std::{
     str,
 };
 
-/// SelectDecoder trait to decode the rows result from scylla
-pub trait SelectDecoder<K, V> {
+/// RowsDecoder trait to decode the rows result from scylla
+pub trait RowsDecoder<K, V> {
     fn try_decode(&mut self, decoder: Decoder) -> Result<Option<V>, error::CqlError>;
     fn decode(&mut self, decoder: Decoder) -> Option<V> {
         self.try_decode(decoder).unwrap()
     }
 }
 
-/// InsertDecoder trait to decode the VOID result from scylla upon insert query
-pub trait InsertDecoder<K, V> {
-    fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
-    fn decode(&mut self, decoder: Decoder) {
-        self.try_decode(decoder).unwrap()
-    }
-}
-
-/// UpdateDecoder trait to decode the VOID result from scylla upon update query
-pub trait UpdateDecoder<K, V> {
-    fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
-    fn decode(&mut self, decoder: Decoder) {
-        self.try_decode(decoder).unwrap()
-    }
-}
-
-/// DeleteDecoder trait to decode the VOID result from scylla upon delete query
-pub trait DeleteDecoder<K, V> {
-    fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
-    fn decode(&mut self, decoder: Decoder) {
-        self.try_decode(decoder).unwrap()
-    }
-}
-
-/// BatchDecoder trait to decode the VOID result from scylla upon batch query
-pub trait BatchDecoder<K, V> {
+/// VoidDecoder trait to decode the VOID result from scylla
+pub trait VoidDecoder<K, V> {
     fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
     fn decode(&mut self, decoder: Decoder) {
         self.try_decode(decoder).unwrap()
@@ -393,103 +369,103 @@ impl Frame for Decoder {
 /// The column decoder trait to decode the frame.
 pub trait ColumnDecoder {
     /// Decode the column.
-    fn decode(slice: &[u8], length: usize) -> Self;
+    fn decode(slice: &[u8]) -> Self;
 }
 
 impl<T: ColumnDecoder> ColumnDecoder for Option<T> {
-    fn decode(slice: &[u8], length: usize) -> Self {
-        if length <= 0 {
+    fn decode(slice: &[u8]) -> Self {
+        if slice.is_empty() {
             None
         } else {
-            Some(T::decode(slice, length))
+            Some(T::decode(slice))
         }
     }
 }
 
 impl ColumnDecoder for i64 {
-    fn decode(slice: &[u8], length: usize) -> i64 {
-        i64::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> i64 {
+        i64::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for u64 {
-    fn decode(slice: &[u8], length: usize) -> u64 {
-        u64::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> u64 {
+        u64::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for f64 {
-    fn decode(slice: &[u8], length: usize) -> f64 {
-        f64::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> f64 {
+        f64::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for i32 {
-    fn decode(slice: &[u8], length: usize) -> i32 {
-        i32::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> i32 {
+        i32::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for u32 {
-    fn decode(slice: &[u8], length: usize) -> u32 {
-        u32::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> u32 {
+        u32::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for f32 {
-    fn decode(slice: &[u8], length: usize) -> f32 {
-        f32::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> f32 {
+        f32::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for i16 {
-    fn decode(slice: &[u8], length: usize) -> i16 {
-        i16::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> i16 {
+        i16::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for u16 {
-    fn decode(slice: &[u8], length: usize) -> u16 {
-        u16::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> u16 {
+        u16::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for i8 {
-    fn decode(slice: &[u8], length: usize) -> i8 {
-        i8::from_be_bytes(slice[..length].try_into().unwrap())
+    fn decode(slice: &[u8]) -> i8 {
+        i8::from_be_bytes(slice.try_into().unwrap())
     }
 }
 
 impl ColumnDecoder for u8 {
-    fn decode(slice: &[u8], _length: usize) -> u8 {
+    fn decode(slice: &[u8]) -> u8 {
         slice[0]
     }
 }
 
 impl ColumnDecoder for String {
-    fn decode(slice: &[u8], length: usize) -> String {
-        String::from_utf8(slice[..length].to_vec()).unwrap()
+    fn decode(slice: &[u8]) -> String {
+        String::from_utf8(slice.to_vec()).unwrap()
     }
 }
 
 impl ColumnDecoder for IpAddr {
-    fn decode(slice: &[u8], length: usize) -> Self {
-        if length == 4 {
-            IpAddr::V4(Ipv4Addr::decode(slice, length))
+    fn decode(slice: &[u8]) -> Self {
+        if slice.len() == 4 {
+            IpAddr::V4(Ipv4Addr::decode(slice))
         } else {
-            IpAddr::V6(Ipv6Addr::decode(slice, length))
+            IpAddr::V6(Ipv6Addr::decode(slice))
         }
     }
 }
 
 impl ColumnDecoder for Ipv4Addr {
-    fn decode(slice: &[u8], _length: usize) -> Self {
+    fn decode(slice: &[u8]) -> Self {
         Ipv4Addr::new(slice[0], slice[1], slice[2], slice[3])
     }
 }
 
 impl ColumnDecoder for Ipv6Addr {
-    fn decode(slice: &[u8], _length: usize) -> Self {
+    fn decode(slice: &[u8]) -> Self {
         Ipv6Addr::new(
             ((slice[0] as u16) << 8) | slice[1] as u16,
             ((slice[2] as u16) << 8) | slice[3] as u16,
@@ -507,18 +483,25 @@ impl<E> ColumnDecoder for Vec<E>
 where
     E: ColumnDecoder,
 {
-    fn decode(slice: &[u8], mut _length: usize) -> Vec<E> {
+    fn decode(slice: &[u8]) -> Vec<E> {
         let list_len = i32::from_be_bytes(slice[0..4].try_into().unwrap()) as usize;
         let mut list: Vec<E> = Vec::new();
         let mut element_start = 4;
         for _ in 0..list_len {
             // decode element byte_size
             let element_value_start = element_start + 4;
-            _length = i32::from_be_bytes(slice[element_start..element_value_start].try_into().unwrap()) as usize;
-            let e = E::decode(&slice[element_value_start..], _length);
-            list.push(e);
-            // next element start
-            element_start = element_value_start + _length;
+            let length = i32::from_be_bytes(slice[element_start..element_value_start].try_into().unwrap()) as usize;
+            if length > 0 {
+                let e = E::decode(&slice[element_value_start..(element_value_start + length)]);
+                list.push(e);
+                // next element start
+                element_start = element_value_start + length;
+            } else {
+                let e = E::decode(&[]);
+                list.push(e);
+                // next element start
+                element_start = element_value_start;
+            }
         }
         list
     }
@@ -530,24 +513,33 @@ where
     V: ColumnDecoder,
     S: ::std::hash::BuildHasher + Default,
 {
-    fn decode(slice: &[u8], mut _length: usize) -> HashMap<K, V, S> {
+    fn decode(slice: &[u8]) -> HashMap<K, V, S> {
         let map_len = i32::from_be_bytes(slice[0..4].try_into().unwrap()) as usize;
         let mut map: HashMap<K, V, S> = HashMap::default();
         let mut pair_start = 4;
         for _ in 0..map_len {
+            let k;
+            let v;
             // decode key_byte_size
-            let key_start = pair_start + 4;
-            _length = i32::from_be_bytes(slice[pair_start..key_start].try_into().unwrap()) as usize;
-            let k = K::decode(&slice[key_start..], _length);
-            // modify pair_start to be the vtype_start
-            pair_start = key_start + _length;
-            let value_start = pair_start + 4;
-            _length = i32::from_be_bytes(slice[pair_start..value_start].try_into().unwrap()) as usize;
-            let v = V::decode(&slice[value_start..], _length);
+            let length = i32::from_be_bytes(slice[pair_start..][..4].try_into().unwrap()) as usize;
+            pair_start += 4;
+            if length > 0 {
+                k = K::decode(&slice[pair_start..][..length]);
+                // modify pair_start to be the vtype_start
+                pair_start += length;
+            } else {
+                k = K::decode(&[]);
+            }
+            let length = i32::from_be_bytes(slice[pair_start..][..4].try_into().unwrap()) as usize;
+            pair_start += 4;
+            if length > 0 {
+                v = V::decode(&slice[pair_start..][..length]);
+                pair_start += length;
+            } else {
+                v = V::decode(&[]);
+            }
             // insert key,value
             map.insert(k, v);
-            // next pair_start
-            pair_start = value_start + _length;
         }
         map
     }
@@ -575,7 +567,7 @@ pub fn string_list(slice: &[u8]) -> Vec<String> {
 /// Get the `String` from a u8 slice.
 pub fn string(slice: &[u8]) -> String {
     let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
-    String::decode(&slice[2..], length)
+    String::decode(&slice[2..][..length])
 }
 
 /// Get the `&str` from a u8 slice.

@@ -26,7 +26,10 @@ pub(crate) mod rows;
 pub(crate) mod startup;
 pub(crate) mod supported;
 
+pub use auth_response::{AllowAllAuth, PasswordAuth};
 pub use consistency::Consistency;
-pub use decoder::{BatchDecoder, Decoder, DeleteDecoder, Frame, InsertDecoder, SelectDecoder, UpdateDecoder};
+pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
 pub use error::CqlError;
 pub use query::Query;
+pub use rows::Metadata;
+pub use std::convert::TryInto;
