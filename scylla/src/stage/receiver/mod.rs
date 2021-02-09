@@ -4,7 +4,7 @@
 use super::{reporter::*, *};
 use tokio::io::AsyncReadExt;
 
-use tokio::{io::ReadHalf, net::TcpStream};
+use tokio::net::tcp::OwnedReadHalf;
 
 mod event_loop;
 mod init;
@@ -14,7 +14,7 @@ const CQL_FRAME_HEADER_BYTES_LENGTH: usize = 9;
 
 // Receiver builder
 builder!(ReceiverBuilder {
-    socket: ReadHalf<TcpStream>,
+    socket: OwnedReadHalf,
     session_id: usize,
     payloads: Payloads,
     buffer_size: usize,
@@ -24,14 +24,13 @@ builder!(ReceiverBuilder {
 /// Receiver state
 pub struct Receiver {
     service: Service,
-    socket: ReadHalf<TcpStream>,
+    socket: OwnedReadHalf,
     stream_id: i16,
     total_length: usize,
     current_length: usize,
     header: bool,
     buffer: Vec<u8>,
     i: usize,
-    session_id: usize,
     appends_num: i16,
     payloads: Payloads,
 }
@@ -51,7 +50,6 @@ impl Builder for ReceiverBuilder {
             header: false,
             buffer: vec![0; self.buffer_size.unwrap()],
             i: 0,
-            session_id: self.session_id.unwrap(),
             appends_num: self.appends_num.unwrap(),
             payloads: self.payloads.unwrap(),
         }

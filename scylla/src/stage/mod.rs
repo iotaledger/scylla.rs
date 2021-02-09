@@ -3,10 +3,17 @@
 
 use super::node::*;
 use crate::application::*;
-use std::ops::{Deref, DerefMut};
+use receiver::ReceiverBuilder;
+use reporter::ReporterBuilder;
+use sender::SenderBuilder;
 
-use scylla_cql::{CqlBuilder, PasswordAuth};
-use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+    cell::UnsafeCell,
+    collections::HashMap,
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 use tokio::net::TcpStream;
 
 mod event_loop;
@@ -20,13 +27,12 @@ pub use reporter::{ReporterEvent, ReporterHandle};
 
 /// The reporters of shard id to its corresponding sender of stage reporter events.
 #[derive(Clone)]
-pub struct ReportersHandles(HashMap<u8, mpsc::UnboundedSender<reporter::ReporterEvent>>);
+pub struct ReportersHandles(HashMap<u8, ReporterHandle>);
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
 
 impl Deref for ReportersHandles {
-    type Target = HashMap<u8, mpsc::UnboundedSender<reporter::ReporterEvent>>;
-
+    type Target = HashMap<u8, ReporterHandle>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -44,7 +50,7 @@ impl Shutdown for ReportersHandles {
         Self: Sized,
     {
         for reporter_handle in self.values() {
-            reporter_handle.send(ReporterEvent::Session(reporter::Session::Shutdown));
+            let _ = reporter_handle.send(ReporterEvent::Session(reporter::Session::Shutdown));
         }
         None
     }
@@ -64,6 +70,7 @@ builder!(StageBuilder {
 });
 
 /// StageHandle to be passed to the children (reporter/s)
+#[derive(Clone)]
 pub struct StageHandle {
     tx: mpsc::UnboundedSender<StageEvent>,
 }
@@ -88,8 +95,6 @@ impl DerefMut for StageHandle {
 
 /// Stage event enum.
 pub enum StageEvent {
-    // Connect to a shard.
-    // Connect(sender::Sender, sender::Receiver),
     /// Reporter child status change
     Reporter(Service),
     /// Establish connection to scylla shard.
@@ -102,10 +107,10 @@ pub struct Stage {
     service: Service,
     address: SocketAddr,
     authenticator: PasswordAuth,
+    appends_num: i16,
     reporter_count: u8,
     reporters_handles: Option<ReportersHandles>,
     session_id: usize,
-    connected: bool,
     shard_id: u16,
     payloads: Payloads,
     buffer_size: usize,
@@ -154,10 +159,10 @@ impl Builder for StageBuilder {
             service: Service::new(),
             address: self.address.unwrap(),
             authenticator: self.authenticator.unwrap(),
+            appends_num: 32767 / (reporter_count as i16),
             reporter_count,
             reporters_handles: Some(ReportersHandles(HashMap::with_capacity(reporter_count as usize))),
             session_id: 0,
-            connected: false,
             shard_id: self.shard_id.unwrap(),
             payloads,
             buffer_size: self.buffer_size.unwrap(),
@@ -187,7 +192,7 @@ impl Name for Stage {
 impl AknShutdown<Stage> for NodeHandle {
     async fn aknowledge_shutdown(self, mut _state: Stage, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        // let event = ScyllaEvent::Children(ScyllaChild::Cluster(_state.service.clone(), Some(_status)));
-        // let _ = self.send(event);
+        let event = NodeEvent::Service(_state.service.clone());
+        let _ = self.send(event);
     }
 }

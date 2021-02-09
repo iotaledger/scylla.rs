@@ -21,15 +21,14 @@ type Workers = HashMap<i16, Box<dyn Worker>>;
 builder!(ReporterBuilder {
     session_id: usize,
     reporter_id: u8,
+    shard_id: u16,
     streams: Vec<i16>,
     address: SocketAddr,
-    shard_id: u8,
-    payloads: Payloads,
-    handle: ReporterHandle,
-    inbox: ReporterInbox
+    payloads: Payloads
 });
 
 /// ReporterHandle to be passed to the children (Stage)
+#[derive(Clone)]
 pub struct ReporterHandle {
     tx: mpsc::UnboundedSender<ReporterEvent>,
 }
@@ -85,12 +84,18 @@ pub struct Reporter {
     session_id: usize,
     reporter_id: u8,
     streams: Vec<i16>,
-    shard_id: u8,
+    shard_id: u16,
     workers: Workers,
     sender_handle: Option<SenderHandle>,
     payloads: Payloads,
     handle: Option<ReporterHandle>,
     inbox: ReporterInbox,
+}
+
+impl Reporter {
+    pub fn clone_handle(&self) -> ReporterHandle {
+        self.handle.as_ref().unwrap().clone()
+    }
 }
 
 impl ActorBuilder<StageHandle> for ReporterBuilder {}

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::time::Duration;
 
 #[async_trait::async_trait]
 impl EventLoop<NodeHandle> for Stage {
@@ -43,31 +44,51 @@ impl EventLoop<NodeHandle> for Stage {
                     if let Some(reporters_handles) = self.reporters_handles.take() {
                         reporters_handles.shutdown();
                     };
+                    let event = NodeEvent::Service(self.service.clone());
+                    let _ = supervisor.as_ref().unwrap().send(event);
                 }
                 StageEvent::Connect => {
-                    // cql connect
-                    let cql_builder = CqlBuilder::new()
-                        .authenticator(self.authenticator.clone())
-                        .address(self.address)
-                        .shard_id(self.shard_id)
-                        .recv_buffer_size(self.recv_buffer_size)
-                        .send_buffer_size(self.send_buffer_size)
-                        .build();
-                    // Split the stream
-                    match cql_builder.await {
-                        Ok(cql_conn) => {
-                            self.session_id += 1;
-                            // Split the stream
-                            let stream: TcpStream = cql_conn.into();
-                            let (socket_rx, socket_tx) = stream.into_split();
-                            // spawn sender
-
-                            // spawn receiver
+                    // ensure the service is not stopping
+                    if !self.service.is_stopping() {
+                        // cql connect
+                        let cql_builder = CqlBuilder::new()
+                            .authenticator(self.authenticator.clone())
+                            .address(self.address)
+                            .shard_id(self.shard_id)
+                            .recv_buffer_size(self.recv_buffer_size)
+                            .send_buffer_size(self.send_buffer_size)
+                            .build();
+                        // Split the stream
+                        match cql_builder.await {
+                            Ok(cql_conn) => {
+                                self.session_id += 1;
+                                // Split the stream
+                                let stream: TcpStream = cql_conn.into();
+                                let (socket_rx, socket_tx) = stream.into_split();
+                                // spawn sender
+                                let sender = SenderBuilder::new()
+                                    .socket(socket_tx)
+                                    .appends_num(self.appends_num)
+                                    .payloads(self.payloads.clone())
+                                    .build();
+                                tokio::spawn(sender.start(self.reporters_handles.clone()));
+                                // spawn receiver
+                                let receiver = ReceiverBuilder::new()
+                                    .socket(socket_rx)
+                                    .appends_num(self.appends_num)
+                                    .payloads(self.payloads.clone())
+                                    .session_id(self.session_id)
+                                    .buffer_size(1024000) // TODO make this configurable
+                                    .build();
+                                tokio::spawn(receiver.start(self.reporters_handles.clone()));
+                            }
+                            Err(_) => {
+                                tokio::time::sleep(Duration::from_millis(5000)).await;
+                                // try to reconnent
+                                let _ = self.handle.as_ref().unwrap().send(StageEvent::Connect);
+                            }
                         }
-                        Err(_) => {}
                     }
-
-                    // let (socket_rx, socket_tx) = tokio::io::split(cqlconn.take_stream());
                 }
             }
         }
