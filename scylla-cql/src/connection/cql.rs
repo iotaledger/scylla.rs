@@ -29,6 +29,7 @@ use tokio::{
 };
 
 #[derive(Default)]
+/// CqlBuilder struct to establish cql connection with the provided configurations
 pub struct CqlBuilder<Auth: Authenticator> {
     address: Option<SocketAddr>,
     local_addr: Option<SocketAddr>,
@@ -52,26 +53,32 @@ pub struct Cql {
 }
 
 impl<Auth: Authenticator> CqlBuilder<Auth> {
+    /// Add scylla broadcast_address
     pub fn address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
         self
     }
-    pub fn recv_buffer_size(mut self, recv_buffer_size: u32) -> Self {
-        self.recv_buffer_size.replace(recv_buffer_size);
+    /// Add an optional recv_buffer_size
+    pub fn recv_buffer_size(mut self, recv_buffer_size: Option<u32>) -> Self {
+        self.recv_buffer_size = recv_buffer_size;
         self
     }
-    pub fn send_buffer_size(mut self, send_buffer_size: u32) -> Self {
-        self.send_buffer_size.replace(send_buffer_size);
+    /// Add an optional send_buffer_size
+    pub fn send_buffer_size(mut self, send_buffer_size: Option<u32>) -> Self {
+        self.send_buffer_size = send_buffer_size;
         self
     }
+    /// Instruct the builder to fetch cql tokens from the connection once established
     pub fn tokens(mut self) -> Self {
         self.tokens = true;
         self
     }
+    /// Instruct the builder to connect to scylla shard with shard_id
     pub fn shard_id(mut self, shard_id: u16) -> Self {
         self.shard_id.replace(shard_id);
         self
     }
+    /// Instruct the builder to use the provided authenticator for establishing the connection
     pub fn authenticator(mut self, auth: Auth) -> Self {
         self.authenticator.replace(auth);
         self
@@ -188,7 +195,7 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         self.cql.replace(cqlconn);
         Ok(())
     }
-
+    /// Build the CqlBuilder and then try to connect
     pub async fn build(mut self) -> Result<Cql, Error> {
         // connect
         self.connect().await?;
