@@ -4,4 +4,4 @@
 mod cql;
 mod tokens;
 
-pub use cql::Cql;
+pub use cql::{Cql, CqlBuilder};

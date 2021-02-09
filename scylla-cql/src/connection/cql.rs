@@ -72,6 +72,10 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         self.shard_id.replace(shard_id);
         self
     }
+    pub fn authenticator(mut self, auth: Auth) -> Self {
+        self.authenticator.replace(auth);
+        self
+    }
     fn set_local_addr(&mut self, local_addr: SocketAddr) {
         self.local_addr.replace(local_addr);
     }
@@ -272,6 +276,12 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
             }
             return Ok(cqlconn);
         }
+    }
+}
+
+impl Into<TcpStream> for Cql {
+    fn into(self) -> TcpStream {
+        self.stream
     }
 }
 
