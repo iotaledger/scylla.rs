@@ -45,23 +45,26 @@ impl EventLoop<NodeHandle> for Stage {
                     };
                 }
                 StageEvent::Connect => {
-                    // cql connect // TODO replace it with cqlbuilder and make use of PasswordAuth
-                    let mut cql_builder = Cql::new().address(self.address).shard_id(self.shard_id);
+                    // cql connect
+                    let cql_builder = CqlBuilder::new()
+                        .authenticator(self.authenticator.clone())
+                        .address(self.address)
+                        .shard_id(self.shard_id)
+                        .recv_buffer_size(self.recv_buffer_size)
+                        .send_buffer_size(self.send_buffer_size)
+                        .build();
                     // Split the stream
-                    if let Some(recv_buf) = self.recv_buffer_size {
-                        cql_builder = cql_builder.recv_buffer_size(recv_buf);
-                    }
-                    if let Some(send_buf) = self.send_buffer_size {
-                        cql_builder = cql_builder.send_buffer_size(send_buf);
-                    }
-                    match cql_builder.build().await {
-                        Ok(mut cql_conn) => {
+                    match cql_builder.await {
+                        Ok(cql_conn) => {
                             self.session_id += 1;
-                            
-                        }
-                        Err(_) => {
+                            // Split the stream
+                            let stream: TcpStream = cql_conn.into();
+                            let (socket_rx, socket_tx) = stream.into_split();
+                            // spawn sender
 
+                            // spawn receiver
                         }
+                        Err(_) => {}
                     }
 
                     // let (socket_rx, socket_tx) = tokio::io::split(cqlconn.take_stream());

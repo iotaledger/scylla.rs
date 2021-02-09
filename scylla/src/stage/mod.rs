@@ -5,8 +5,9 @@ use super::node::*;
 use crate::application::*;
 use std::ops::{Deref, DerefMut};
 
+use scylla_cql::{CqlBuilder, PasswordAuth};
 use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
-use scylla_cql::{Cql,PasswordAuth};
+use tokio::net::TcpStream;
 
 mod event_loop;
 mod init;
