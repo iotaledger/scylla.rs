@@ -53,6 +53,10 @@ pub struct Cql {
 }
 
 impl<Auth: Authenticator> CqlBuilder<Auth> {
+    /// Create CqlBuilder associated with Auth type;
+    pub fn new() -> Self {
+        CqlBuilder::<Auth>::default()
+    }
     /// Add scylla broadcast_address
     pub fn address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
