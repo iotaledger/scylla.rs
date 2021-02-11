@@ -1,8 +1,13 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::application::*;
-use std::net::SocketAddr;
+use crate::{application::*, stage::ReportersHandles};
+
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+};
 
 mod event_loop;
 mod init;
@@ -27,6 +32,20 @@ pub struct ClusterInbox {
     rx: mpsc::UnboundedReceiver<ClusterEvent>,
 }
 
+impl Deref for ClusterHandle {
+    type Target = mpsc::UnboundedSender<ClusterEvent>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
+impl DerefMut for ClusterHandle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tx
+    }
+}
+
 // Cluster state
 pub struct Cluster {
     service: Service,
@@ -45,7 +64,8 @@ pub struct Cluster {
 
 // Cluster Event type
 pub enum ClusterEvent {
-    // RegisterReporters(node::supervisor::NodeRegistry, Address),
+    RegisterReporters(Service, HashMap<SocketAddr, ReportersHandles>),
+    Service(Service),
     SpawnNode(SocketAddr),
     ShutDownNode(SocketAddr),
     TryBuild(u8),

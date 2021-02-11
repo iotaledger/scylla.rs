@@ -17,6 +17,10 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
         // TODO event loop
         while let Some(event) = self.inbox.rx.recv().await {
             match event {
+                ClusterEvent::RegisterReporters(microservice, reporters_handles) => {}
+                ClusterEvent::Service(microservice) => {
+                    self.service.update_microservice(microservice.get_name(), microservice);
+                }
                 ClusterEvent::SpawnNode(address) => {}
                 ClusterEvent::ShutDownNode(address) => {}
                 ClusterEvent::TryBuild(uniform_rf) => {}

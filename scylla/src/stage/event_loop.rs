@@ -12,24 +12,21 @@ impl EventLoop<NodeHandle> for Stage {
                 StageEvent::Reporter(service) => {
                     self.service.update_microservice(service.get_name(), service);
                     let mut microservices = self.service.microservices.values();
-                    if microservices.all(|ms| ms.is_initializing())
-                        && microservices.len() == self.reporter_count as usize
-                    {
-                        if !self.service.is_stopping() {
+                    // update the service if it's not already shutting down.
+                    if !self.service.is_stopping() {
+                        if microservices.all(|ms| ms.is_initializing())
+                            && microservices.len() == self.reporter_count as usize
+                        {
                             self.service.update_status(ServiceStatus::Degraded);
                             // need to connect for the first time
                             let _ = self.handle.as_mut().unwrap().send(StageEvent::Connect);
-                        }
-                    } else if microservices.all(|ms| ms.is_maintenance()) {
-                        if !self.service.is_stopping() {
+                        } else if microservices.all(|ms| ms.is_maintenance()) {
                             self.service.update_status(ServiceStatus::Maintenance);
                             // need to reconnect
                             let _ = self.handle.as_mut().unwrap().send(StageEvent::Connect);
-                        }
-                    } else if microservices.all(|ms| ms.is_running())
-                        && microservices.len() == self.reporter_count as usize
-                    {
-                        if !self.service.is_stopping() {
+                        } else if microservices.all(|ms| ms.is_running())
+                            && microservices.len() == self.reporter_count as usize
+                        {
                             self.service.update_status(ServiceStatus::Running);
                         }
                     }
@@ -58,7 +55,6 @@ impl EventLoop<NodeHandle> for Stage {
                             .recv_buffer_size(self.recv_buffer_size)
                             .send_buffer_size(self.send_buffer_size)
                             .build();
-                        // Split the stream
                         match cql_builder.await {
                             Ok(cql_conn) => {
                                 self.session_id += 1;
