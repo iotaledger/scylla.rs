@@ -13,12 +13,12 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
             match event {
                 ScyllaEvent::Children(scylla_child) => {
                     match scylla_child {
-                        ScyllaChild::Listener(microservice, _) => {
+                        ScyllaChild::Listener(microservice) => {
                             self.service.update_microservice(microservice.get_name(), microservice);
                             // tell all the active applications about status_change
                             my_sup.status_change(self.service.clone());
                         }
-                        ScyllaChild::Cluster(microservice, _) => {
+                        ScyllaChild::Cluster(microservice) => {
                             self.service.update_microservice(microservice.get_name(), microservice);
                             // tell all the active applications about status_change
                             my_sup.status_change(self.service.clone());

@@ -119,7 +119,11 @@ pub struct Stage {
     handle: Option<StageHandle>,
     inbox: StageInbox,
 }
-
+impl Stage {
+    pub(crate) fn clone_handle(&self) -> StageHandle {
+        self.handle.clone().unwrap()
+    }
+}
 #[derive(Default)]
 /// The reusable sender payload.
 pub struct Reusable {

@@ -112,7 +112,7 @@ impl Name for Cluster {
 impl<H: ScyllaScope> AknShutdown<Cluster> for ScyllaHandle<H> {
     async fn aknowledge_shutdown(self, mut _state: Cluster, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        let event = ScyllaEvent::Children(ScyllaChild::Cluster(_state.service.clone(), Some(_status)));
+        let event = ScyllaEvent::Children(ScyllaChild::Cluster(_state.service.clone()));
         let _ = self.send(event);
     }
 }

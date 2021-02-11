@@ -13,7 +13,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Listener {
         supervisor: &mut Option<ScyllaHandle<H>>,
     ) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Running);
-        let event = ScyllaEvent::Children(ScyllaChild::Listener(self.service.clone(), None));
+        let event = ScyllaEvent::Children(ScyllaChild::Listener(self.service.clone()));
         let my_sup = supervisor.as_mut().unwrap();
         let _ = my_sup.send(event);
         loop {

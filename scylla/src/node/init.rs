@@ -18,7 +18,10 @@ impl Init<ClusterHandle> for Node {
                 .buffer_size(self.buffer_size)
                 .recv_buffer_size(self.recv_buffer_size)
                 .send_buffer_size(self.send_buffer_size)
-                .authenticator(self.authenticator.clone());
+                .authenticator(self.authenticator.clone())
+                .build();
+            let stage_handle = stage.clone_handle();
+            self.stages.insert(shard_id, stage_handle);
         }
         status
     }

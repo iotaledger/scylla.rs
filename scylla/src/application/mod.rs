@@ -77,8 +77,8 @@ pub struct Scylla<H: ScyllaScope> {
 
 /// SubEvent type, indicated the children
 pub enum ScyllaChild {
-    Listener(Service, Option<Result<(), Need>>),
-    Cluster(Service, Option<Result<(), Need>>),
+    Listener(Service),
+    Cluster(Service),
     Websocket(Service, Option<WsTx>),
 }
 

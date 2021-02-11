@@ -69,7 +69,7 @@ impl Shutdown for ListenerHandle {
 impl<H: ScyllaScope> AknShutdown<Listener> for ScyllaHandle<H> {
     async fn aknowledge_shutdown(self, mut _state: Listener, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        let event = ScyllaEvent::Children(ScyllaChild::Listener(_state.service.clone(), Some(_status)));
+        let event = ScyllaEvent::Children(ScyllaChild::Listener(_state.service.clone()));
         let _ = self.send(event);
     }
 }

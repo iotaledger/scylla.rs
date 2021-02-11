@@ -11,7 +11,7 @@ impl<H: ScyllaScope> Terminating<ScyllaHandle<H>> for Cluster {
         _supervisor: &mut Option<ScyllaHandle<H>>,
     ) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Stopping);
-        let event = ScyllaEvent::Children(ScyllaChild::Cluster(self.service.clone(), None));
+        let event = ScyllaEvent::Children(ScyllaChild::Cluster(self.service.clone()));
         let _ = _supervisor.as_mut().unwrap().send(event);
         _status
     }
