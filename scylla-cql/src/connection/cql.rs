@@ -338,9 +338,17 @@ impl Cql {
     pub fn take_tokens(&mut self) -> Option<Vec<i64>> {
         self.tokens.take()
     }
+    /// Take DataCenter of the connected scylla node
+    pub fn take_dc(&mut self) -> Option<String> {
+        self.dc.take()
+    }
     /// Get the shard_id of the connection
     pub fn shard_id(&self) -> u16 {
         self.shard_id
+    }
+    /// Get the shard_count of the connection
+    pub fn shard_count(&self) -> u16 {
+        self.shard_count
     }
     /// Get the address of the connection
     pub fn address(&self) -> SocketAddr {
