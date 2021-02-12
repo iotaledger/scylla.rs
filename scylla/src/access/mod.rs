@@ -1,12 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-mod delete;
-mod insert;
-mod keyspace;
-mod select;
-mod update;
-
-use keyspace::Keyspace;
+pub mod delete;
+pub mod insert;
+pub mod keyspace;
+pub mod select;
+pub mod update;
 
 use super::Worker;
+use keyspace::Keyspace;
