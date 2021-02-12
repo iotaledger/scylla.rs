@@ -3,7 +3,7 @@
 
 use scylla::application::*;
 // launcher
-launcher!(builder: AppsBuilder {[] -> Scylla: ScyllaBuilder<Sender>}, state: Apps {});
+launcher!(builder: AppsBuilder {[] -> Scylla<Sender>: ScyllaBuilder<Sender>}, state: Apps {});
 
 impl Builder for AppsBuilder {
     type State = Apps;
