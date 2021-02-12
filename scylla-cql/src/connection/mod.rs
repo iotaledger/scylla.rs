@@ -2,4 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod cql;
-// mod tokens;
+mod tokens;
+
+pub use cql::{Cql, CqlBuilder};

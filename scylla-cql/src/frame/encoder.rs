@@ -25,6 +25,7 @@ pub const BE_NULL_BYTES_LEN: [u8; 4] = [255, 255, 255, 255]; // -1 length
 /// The UNSET body length.
 pub const BE_UNSET_BYTES_LEN: [u8; 4] = [255, 255, 255, 254]; // -2 length
 /// The NULL value used to indicate the body length.
+#[allow(unused)]
 pub const NULL_VALUE: Null = Null;
 /// The unset value used to indicate the body length.
 pub const UNSET_VALUE: Unset = Unset;

@@ -4,6 +4,7 @@
 //! This module defines the header trait.
 
 /// The ignore flag.
+#[allow(unused)]
 pub const IGNORE: u8 = 0x00;
 /// The compression flag.
 pub(crate) const COMPRESSION: u8 = 0x01;

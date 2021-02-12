@@ -11,18 +11,19 @@ use crate::compression::{Compression, MyCompression};
 const PREPARE_HEADER: &'static [u8] = &[4, 0, 0, 0, PREPARE, 0, 0, 0, 0];
 
 /// The prepare frame structure.
-pub struct Prepare(Vec<u8>);
+pub struct Prepare(pub Vec<u8>);
 
-struct PrepareBuilder<Stage> {
+#[allow(dead_code)]
+pub struct PrepareBuilder<Stage> {
     buffer: Vec<u8>,
     stage: Stage,
 }
-struct PrepareHeader;
-struct PrepareStatement;
-struct PrepareBuild;
+pub struct PrepareHeader;
+pub struct PrepareStatement;
+pub struct PrepareBuild;
 
 impl PrepareBuilder<PrepareHeader> {
-    pub fn new() -> PrepareBuilder<PrepareStatement> {
+    fn new() -> PrepareBuilder<PrepareStatement> {
         let mut buffer: Vec<u8> = Vec::new();
         buffer.extend_from_slice(&PREPARE_HEADER);
         PrepareBuilder::<PrepareStatement> {
@@ -30,7 +31,7 @@ impl PrepareBuilder<PrepareHeader> {
             stage: PrepareStatement,
         }
     }
-    pub fn with_capacity(capacity: usize) -> PrepareBuilder<PrepareStatement> {
+    fn with_capacity(capacity: usize) -> PrepareBuilder<PrepareStatement> {
         let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
         buffer.extend_from_slice(&PREPARE_HEADER);
         PrepareBuilder::<PrepareStatement> {
@@ -54,19 +55,21 @@ impl PrepareBuilder<PrepareStatement> {
 
 impl PrepareBuilder<PrepareBuild> {
     /// Build the prepare frame with an assigned compression type.
-    pub fn build(mut self, compression: impl Compression) -> Prepare {
+    pub fn build(mut self) -> Prepare {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
-        self.buffer = compression.compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer);
         Prepare(self.buffer)
     }
 }
 
 impl Prepare {
-    fn new() -> PrepareBuilder<PrepareStatement> {
+    /// Create preapre Cql frame
+    pub fn new() -> PrepareBuilder<PrepareStatement> {
         PrepareBuilder::<PrepareHeader>::new()
     }
-    fn with_capacity(capacity: usize) -> PrepareBuilder<PrepareStatement> {
+    /// Create preapre Cql frame with_capacity
+    pub fn with_capacity(capacity: usize) -> PrepareBuilder<PrepareStatement> {
         PrepareBuilder::<PrepareHeader>::with_capacity(capacity)
     }
 }
@@ -74,10 +77,9 @@ impl Prepare {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compression::UNCOMPRESSED;
     #[test]
     // note: junk data
     fn simple_prepare_builder_test() {
-        let Prepare(_payload) = Prepare::new().statement("INSERT_TX_QUERY").build(UNCOMPRESSED); // build uncompressed
+        let Prepare(_payload) = Prepare::new().statement("INSERT_TX_QUERY").build();
     }
 }

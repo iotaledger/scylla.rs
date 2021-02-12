@@ -24,13 +24,14 @@ where
 ///
 /// # Example
 /// ```
-/// use chronicle_cql::murmur3::murmur3_cassandra_x64_128;
+/// use scylla_cql::murmur3_cassandra_x64_128;
 /// use std::io::Cursor;
 /// let hash_result = murmur3_cassandra_x64_128(
 ///     &mut Cursor::new("EHUHSJRCMDJSZUQMNLDBSRFC9O9XCI9SMHFWWHNDYOOOWMSOJQHCC9GFUEGECEVVXCSXYTHSRJ9TZ9999"),
 ///     0,
 /// );
 /// ```
+#[allow(unused)]
 pub fn murmur3_cassandra_x64_128<T: Read>(source: &mut T, seed: u32) -> Result<i64> {
     const C1: i64 = -8_663_945_395_140_668_459_i64; // 0x87c3_7b91_1142_53d5;
     const C2: i64 = 0x4cf5_ad43_2745_937f;
@@ -141,7 +142,6 @@ fn fmix64_i64(k: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Cursor;
-
     #[test]
     fn test_tx_murmur3_token_generation() {
         let tx = "EHUHSJRCMDJSZUQMNLDBSRFC9O9XCI9SMHFWWHNDYOOOWMSOJQHCC9GFUEGECEVVXCSXYTHSRJ9TZ9999";

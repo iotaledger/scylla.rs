@@ -68,24 +68,23 @@ impl Metadata {
 #[macro_export]
 /// The rows macro implements the row decoder.
 macro_rules! rows {
-    (rows: $rows:ident {$( $field:ident:$type:ty ),*}, row: $row:ident {$( $col_field:ident:$col_type:tt ),*}
-    , column_decoder: $decoder:ident ) => {
-        use std::convert::TryInto;
-        use chronicle_cql::compression::Compression;
-        /// The `rows` structure for processing each received row in ScyllaDB.
+    (rows: $rows:ident {$( $field:ident:$type:ty ),*}, row: $row:ident {$( $col_field:ident: $col_type:ty,)*} ) => {
+        #[allow(dead_code)]
+        /// The `rows` struct for processing each received row in ScyllaDB.
         pub struct $rows {
             decoder: Decoder,
             rows_count: usize,
             remaining_rows_count: usize,
-            metadata: chronicle_cql::frame::rows::Metadata,
+            metadata: Metadata,
             column_start: usize,
             $(
                 $field: $type,
             )*
         }
-        struct $row {
+        /// It's the `row` struct
+        pub struct $row {
             $(
-                $col_field: $col_type,
+                pub $col_field: $col_type,
             )*
         }
 
@@ -99,20 +98,20 @@ macro_rules! rows {
                         $(
                             $col_field: {
                                 let length = i32::from_be_bytes(
-                                    self.decoder.buffer_as_ref()[self.column_start..(self.column_start+4)].try_into().unwrap()
+                                    self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
                                 );
                                 self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
                                 if length > 0 {
-                                    let col_slice = self.decoder.buffer_as_ref()[self.column_start..(self.column_start+length)];
+                                    let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
                                     // update the next column_start to start from next column
                                     self.column_start += (length as usize);
-                                    $col_type::decode(col_slice, length)
+                                    <$col_type>::decode(col_slice)
                                 } else {
-                                    $col_type::decode(&[], length)
+                                    <$col_type>::decode(&[])
                                 }
                             },
                         )*
-                    }
+                    };
                     Some(row_struct)
                 } else {
                     None
@@ -122,7 +121,7 @@ macro_rules! rows {
 
         impl $rows {
             /// Create a new rows structure.
-            pub fn new(mut decoder: Decoder, $($field: $type,)*) -> Self {
+            pub fn new(decoder: Decoder, $($field: $type,)*) -> Self {
                 let metadata = decoder.metadata();
                 let rows_start = metadata.rows_start();
                 let column_start = rows_start+4;
@@ -137,10 +136,6 @@ macro_rules! rows {
                         $field,
                     )*
                 }
-            }
-            /// Get the frame buffer.
-            pub fn buffer(&mut self) -> &mut Vec<u8> {
-                self.decoder.buffer_as_mut()
             }
         }
     };
