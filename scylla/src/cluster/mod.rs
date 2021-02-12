@@ -1,8 +1,12 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{application::*, node::*, stage::ReportersHandles};
-
+use crate::{
+    application::*,
+    node::*,
+    ring::{build_ring, initialize_ring, ArcRing, Registry, WeakRing},
+    stage::ReportersHandles,
+};
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -12,6 +16,8 @@ use std::{
 mod event_loop;
 mod init;
 mod terminating;
+
+pub(crate) type Nodes = HashMap<SocketAddr, NodeInfo>;
 
 // Cluster builder
 builder!(ClusterBuilder {
@@ -46,7 +52,15 @@ impl DerefMut for ClusterHandle {
         &mut self.tx
     }
 }
-
+impl Shutdown for ClusterHandle {
+    fn shutdown(self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let _ = self.tx.send(ClusterEvent::Shutdown);
+        None
+    }
+}
 // Cluster state
 pub struct Cluster {
     service: Service,
@@ -57,10 +71,12 @@ pub struct Cluster {
     recv_buffer_size: Option<u32>,
     send_buffer_size: Option<u32>,
     authenticator: PasswordAuth,
-    nodes: HashMap<SocketAddr, NodeInfo>,
-    // registry: Registry,
-    // arc_ring: Option<ArcRing>,
-    // weak_rings: Vec<Box<WeakRing>>,
+    nodes: Nodes,
+    should_build: bool,
+    version: u8,
+    registry: Registry,
+    arc_ring: Option<ArcRing>,
+    weak_rings: Vec<Box<WeakRing>>,
     handle: Option<ClusterHandle>,
     inbox: ClusterInbox,
 }
@@ -76,7 +92,7 @@ pub enum ClusterEvent {
     Service(Service),
     AddNode(SocketAddr),
     RemoveNode(SocketAddr),
-    TryBuild(u8),
+    BuildRing(u8),
     Shutdown,
 }
 
@@ -89,8 +105,8 @@ impl Builder for ClusterBuilder {
         let (tx, rx) = mpsc::unbounded_channel::<ClusterEvent>();
         let handle = Some(ClusterHandle { tx });
         let inbox = ClusterInbox { rx };
-        // TODO initialize global_ring
-
+        // initialize global_ring
+        let (arc_ring, _none) = initialize_ring(0, false);
         Self::State {
             service: Service::new(),
             reporter_count: self.reporter_count.unwrap(),
@@ -101,6 +117,11 @@ impl Builder for ClusterBuilder {
             send_buffer_size: self.send_buffer_size.unwrap(),
             authenticator: self.authenticator.unwrap(),
             nodes: HashMap::new(),
+            should_build: false,
+            version: 0,
+            registry: HashMap::new(),
+            arc_ring: Some(arc_ring),
+            weak_rings: Vec::new(),
             handle,
             inbox,
         }
@@ -110,17 +131,17 @@ impl Builder for ClusterBuilder {
 
 /// `NodeInfo` contains the field to identify a ScyllaDB node.
 pub struct NodeInfo {
-    address: SocketAddr,
+    pub(crate) address: SocketAddr,
     /// in which data_center the scylla node exist
-    data_center: String,
+    pub(crate) data_center: String,
     /// it's the node handle for the Node supervisor tree
-    node_handle: NodeHandle,
+    pub(crate) node_handle: NodeHandle,
     /// The tokens of all nodes shards.
-    tokens: Vec<i64>,
+    pub(crate) tokens: Vec<i64>,
     /// the shard_count in scylla node.
-    shard_count: u16,
+    pub(crate) shard_count: u16,
     /// the most significant bit
-    msb: u8,
+    pub(crate) msb: u8,
 }
 
 /// impl name of the Cluster

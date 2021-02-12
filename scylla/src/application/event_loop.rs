@@ -44,10 +44,10 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                     match apps_events.try_get_my_event() {
                         Ok(my_event) => {
                             match my_event {
-                                Shutdown => {
+                                ScyllaThrough::Shutdown => {
                                     // if service is_stopping do nothing
                                     if !self.service.is_stopping() {
-                                        // Ask launcher to shutdown scylla application,
+                                        // Ask launcher to shutdown scylla application, in order to drop scylla handle.
                                         // this is usefull in case the shutdown event sent by the websocket
                                         // client.
                                         my_sup.shutdown_app(&self.get_name());
@@ -55,8 +55,9 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                                         // Listener
                                         let listener_handle = self.listener_handle.take().unwrap();
                                         listener_handle.shutdown();
-                                        // TODO shutdown cluster
-
+                                        // shutdown cluster
+                                        let cluster_handle = self.cluster_handle.take().unwrap();
+                                        cluster_handle.shutdown();
                                         // Shutdown the websockets
                                         for (_, ws) in &mut self.websockets {
                                             let _ = ws.close().await;
@@ -67,8 +68,17 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                                         self.service.update_status(ServiceStatus::Stopping);
                                     }
                                 }
-                                _ => {
-                                    // TODO Add node, remove node, build ring
+                                ScyllaThrough::AddNode(address) => {
+                                    let event = ClusterEvent::AddNode(address);
+                                    let _ = self.cluster_handle.as_ref().unwrap().send(event);
+                                }
+                                ScyllaThrough::RemoveNode(address) => {
+                                    let event = ClusterEvent::RemoveNode(address);
+                                    let _ = self.cluster_handle.as_ref().unwrap().send(event);
+                                }
+                                ScyllaThrough::BuildRing(rf) => {
+                                    let event = ClusterEvent::BuildRing(rf);
+                                    let _ = self.cluster_handle.as_ref().unwrap().send(event);
                                 }
                             }
                         }

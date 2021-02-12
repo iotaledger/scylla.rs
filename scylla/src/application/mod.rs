@@ -44,9 +44,9 @@ builder!(
 #[derive(Deserialize, Serialize)]
 pub enum ScyllaThrough {
     Shutdown,
-    AddNode(String),
-    RemoveNode(String),
-    TryBuild(u8),
+    AddNode(SocketAddr),
+    RemoveNode(SocketAddr),
+    BuildRing(u8),
 }
 
 /// ScyllaHandle to be passed to the children (Listener and Cluster)

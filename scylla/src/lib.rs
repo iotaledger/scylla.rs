@@ -10,10 +10,10 @@ pub mod access;
 pub mod cluster;
 pub mod listener;
 pub mod node;
+mod ring;
 pub mod stage;
 pub mod websocket;
 pub mod worker;
-// mod ring;
 
 /// API of the crate
 pub use worker::Worker;

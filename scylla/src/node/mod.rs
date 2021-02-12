@@ -53,7 +53,15 @@ impl DerefMut for NodeHandle {
         &mut self.tx
     }
 }
-
+impl Shutdown for NodeHandle {
+    fn shutdown(self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let _ = self.tx.send(NodeEvent::Shutdown);
+        None
+    }
+}
 /// Node event enum.
 pub enum NodeEvent {
     /// Shutdown the node.
