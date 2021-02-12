@@ -8,8 +8,6 @@ use super::stage::*;
 /// Import application scope
 use crate::application::*;
 
-pub(crate) use scylla_cql::{CqlBuilder, PasswordAuth};
-
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -33,6 +31,7 @@ builder!(NodeBuilder {
 });
 
 /// NodeHandle to be passed to the children (Stage)
+#[derive(Clone)]
 pub struct NodeHandle {
     tx: mpsc::UnboundedSender<NodeEvent>,
 }
@@ -79,7 +78,11 @@ pub struct Node {
     handle: Option<NodeHandle>,
     inbox: NodeInbox,
 }
-
+impl Node {
+    pub(crate) fn clone_handle(&self) -> NodeHandle {
+        self.handle.clone().unwrap()
+    }
+}
 impl ActorBuilder<ClusterHandle> for NodeBuilder {}
 
 /// implementation of builder

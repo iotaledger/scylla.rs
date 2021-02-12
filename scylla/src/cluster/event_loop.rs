@@ -10,7 +10,6 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
         _status: Result<(), Need>,
         supervisor: &mut Option<ScyllaHandle<H>>,
     ) -> Result<(), Need> {
-        // TODO event loop
         while let Some(event) = self.inbox.rx.recv().await {
             match event {
                 ClusterEvent::RegisterReporters(microservice, reporters_handles) => {}
@@ -37,8 +36,53 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                     let event = ScyllaEvent::Children(ScyllaChild::Cluster(self.service.clone()));
                     let _ = supervisor.as_ref().unwrap().send(event);
                 }
-                ClusterEvent::SpawnNode(address) => {}
-                ClusterEvent::ShutDownNode(address) => {}
+                // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster level?
+                ClusterEvent::AddNode(address) => {
+                    // to spawn node we first make sure it's online;
+                    let cql = CqlBuilder::new()
+                        .tokens()
+                        .recv_buffer_size(self.recv_buffer_size)
+                        .send_buffer_size(self.send_buffer_size)
+                        .authenticator(self.authenticator.clone())
+                        .build();
+                    match cql.await {
+                        Ok(mut cqlconn) => {
+                            // create node
+                            let node = NodeBuilder::new()
+                                .address(address.clone())
+                                .reporter_count(self.reporter_count)
+                                .shard_count(8) // TODO use cqlconn.shard_count()
+                                .data_center("TODO".to_string()) // TODO cqlconn.take_dc()
+                                .buffer_size(self.buffer_size)
+                                .recv_buffer_size(self.recv_buffer_size)
+                                .send_buffer_size(self.send_buffer_size)
+                                .authenticator(self.authenticator.clone())
+                                .build();
+                            // clone the node_handle
+                            let node_handle = node.clone_handle();
+                            // take tokens
+                            let tokens = cqlconn.take_tokens().unwrap();
+                            // get msb
+                            let msb = cqlconn.msb();
+                            // create nodeinfo
+                            let node_info = NodeInfo {
+                                address: address.clone(),
+                                msb,
+                                shard_count: 1, // todo
+                                node_handle,
+                                data_center: "TODO".to_string(),
+                                tokens,
+                            };
+                            // add node_info to nodes
+                            self.nodes.insert(address, node_info);
+                            tokio::spawn(node.start(self.handle.clone()));
+                        }
+                        Err(_) => {
+                            // TODO inform scylla app of a unreachable node .
+                        }
+                    }
+                }
+                ClusterEvent::RemoveNode(address) => {}
                 ClusterEvent::TryBuild(uniform_rf) => {}
                 ClusterEvent::Shutdown => {}
             }

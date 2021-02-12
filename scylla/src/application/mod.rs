@@ -7,9 +7,12 @@ pub use chronicle::*;
 pub use log::*;
 pub use tokio::{spawn, sync::mpsc};
 
+pub(crate) use scylla_cql::{CqlBuilder, PasswordAuth};
+
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     ops::{Deref, DerefMut},
 };
 
@@ -28,13 +31,14 @@ builder!(
     ScyllaBuilder<H> {
         listen_address: String,
         reporter_count: u8,
-        thread_count: u16,
+        thread_count: usize,
         local_dc: String,
         buffer_size: usize,
-        recv_buffer_size: usize,
-        send_buffer_size: usize,
+        recv_buffer_size: u32,
+        send_buffer_size: u32,
         listener_handle: ListenerHandle,
-        authenticator: usize
+        cluster_handle: ClusterHandle,
+        authenticator: PasswordAuth
 });
 
 #[derive(Deserialize, Serialize)]
@@ -64,15 +68,10 @@ impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
 pub struct Scylla<H: ScyllaScope> {
     service: Service,
     listener_handle: Option<ListenerHandle>,
-    // cluster_handle: u8,
+    cluster_handle: Option<ClusterHandle>,
     websockets: HashMap<String, WsTx>,
     handle: Option<ScyllaHandle<H>>,
     inbox: ScyllaInbox<H>,
-    /*    tcp_listener:
-     *    listener: None,
-     *    sockets: HashMap::new(),
-     *    tx: Sender(tx),
-     *    rx, */
 }
 
 /// SubEvent type, indicated the children
@@ -86,6 +85,20 @@ pub enum ScyllaChild {
 pub enum ScyllaEvent<T> {
     Passthrough(T),
     Children(ScyllaChild),
+    Result(SocketMsg),
+}
+
+#[derive(Deserialize, Serialize)]
+pub enum Topology {
+    AddingNode(SocketAddr),
+    RemovingNode(SocketAddr),
+    BuiltRing,
+}
+
+#[derive(Deserialize, Serialize)]
+// use Scylla to indicate to the websocket recipient that the json msg from Scylla application
+pub enum SocketMsg {
+    Scylla(Result<Topology, Topology>),
 }
 
 /// implementation of the AppBuilder
@@ -106,7 +119,7 @@ impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
         Scylla::<H> {
             service: Service::new(),
             listener_handle: Some(self.listener_handle.expect("Expected Listener handle")),
-            // cluster_handle: u8,
+            cluster_handle: self.cluster_handle,
             websockets: HashMap::new(),
             handle,
             inbox,

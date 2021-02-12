@@ -9,7 +9,7 @@ use futures::{
 
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+pub(crate) use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 mod event_loop;
 mod init;
 mod terminating;

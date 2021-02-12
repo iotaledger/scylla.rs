@@ -36,6 +36,10 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                         }
                     }
                 }
+                ScyllaEvent::Result(socket_msg) => {
+                    // TODO add logs based on the socket_msg
+                    self.response_to_sockets(socket_msg).await;
+                }
                 ScyllaEvent::Passthrough(apps_events) => {
                     match apps_events.try_get_my_event() {
                         Ok(my_event) => {
@@ -76,5 +80,15 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
             }
         }
         Ok(())
+    }
+}
+
+impl<H: ScyllaScope> Scylla<H> {
+    async fn response_to_sockets(&mut self, msg: SocketMsg) {
+        for socket in self.websockets.values_mut() {
+            let j = serde_json::to_string(&msg).unwrap();
+            let m = Message::text(j);
+            let _ = socket.send(m).await;
+        }
     }
 }

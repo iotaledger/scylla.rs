@@ -19,16 +19,29 @@ impl<H: ScyllaScope> Starter<H> for ScyllaBuilder<H> {
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         let listener_handle = ListenerHandle::new(abort_handle);
         // add listener handle to the scylla application and build its state
-        // TODO create cluster
+        // create cluster
+        let cluster = ClusterBuilder::new()
+            .reporter_count(self.reporter_count.clone().unwrap())
+            .thread_count(self.thread_count.clone().unwrap())
+            .data_centers(vec![self.local_dc.clone().unwrap()])
+            .buffer_size(self.buffer_size.clone().unwrap_or(1024000))
+            .recv_buffer_size(self.recv_buffer_size.clone())
+            .send_buffer_size(self.send_buffer_size.clone())
+            .authenticator(self.authenticator.clone().unwrap()) // or default to PasswordAuth::Default
+            .build();
+        // clone cluster handle
+        let cluster_handle = cluster.clone_handle();
         // build application
-        let scylla = self.listener_handle(listener_handle).build();
-
+        let scylla = self
+            .listener_handle(listener_handle)
+            .cluster_handle(cluster_handle)
+            .build();
         // get handle(supervisor) of the application to start the Children
         let supervisor = scylla.handle.clone().unwrap();
         // start listener in abortable mode
         tokio::spawn(listener.start_abortable(abort_registration, Some(supervisor.clone())));
-        // TODO start cluster
-
+        // start cluster
+        tokio::spawn(cluster.start(Some(supervisor.clone())));
         // start scylla application
         tokio::spawn(scylla.start(Some(handle)));
         Ok(supervisor)

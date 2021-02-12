@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{application::*, stage::ReportersHandles};
+use crate::{application::*, node::*, stage::ReportersHandles};
 
 use std::{
     collections::HashMap,
@@ -17,13 +17,14 @@ mod terminating;
 builder!(ClusterBuilder {
     reporter_count: u8,
     thread_count: usize,
-    //data_centers: Vec<DC>,
+    data_centers: Vec<String>,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>
-    //authenticator: Option<PasswordAuth>
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
+    authenticator: PasswordAuth
 });
 /// ClusterHandle to be passed to the children (Node)
+#[derive(Clone)]
 pub struct ClusterHandle {
     tx: mpsc::UnboundedSender<ClusterEvent>,
 }
@@ -51,10 +52,12 @@ pub struct Cluster {
     service: Service,
     reporter_count: u8,
     thread_count: usize,
-    // data_centers: Vec<DC>,
+    data_centers: Vec<String>,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>,
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
+    authenticator: PasswordAuth,
+    nodes: HashMap<SocketAddr, NodeInfo>,
     // registry: Registry,
     // arc_ring: Option<ArcRing>,
     // weak_rings: Vec<Box<WeakRing>>,
@@ -62,12 +65,17 @@ pub struct Cluster {
     inbox: ClusterInbox,
 }
 
+impl Cluster {
+    pub(crate) fn clone_handle(&self) -> ClusterHandle {
+        self.handle.clone().unwrap()
+    }
+}
 // Cluster Event type
 pub enum ClusterEvent {
     RegisterReporters(Service, HashMap<SocketAddr, ReportersHandles>),
     Service(Service),
-    SpawnNode(SocketAddr),
-    ShutDownNode(SocketAddr),
+    AddNode(SocketAddr),
+    RemoveNode(SocketAddr),
     TryBuild(u8),
     Shutdown,
 }
@@ -87,14 +95,32 @@ impl Builder for ClusterBuilder {
             service: Service::new(),
             reporter_count: self.reporter_count.unwrap(),
             thread_count: self.thread_count.unwrap(),
+            data_centers: self.data_centers.unwrap(),
             buffer_size: self.buffer_size.unwrap(),
             recv_buffer_size: self.recv_buffer_size.unwrap(),
             send_buffer_size: self.send_buffer_size.unwrap(),
+            authenticator: self.authenticator.unwrap(),
+            nodes: HashMap::new(),
             handle,
             inbox,
         }
         .set_name()
     }
+}
+
+/// `NodeInfo` contains the field to identify a ScyllaDB node.
+pub struct NodeInfo {
+    address: SocketAddr,
+    /// in which data_center the scylla node exist
+    data_center: String,
+    /// it's the node handle for the Node supervisor tree
+    node_handle: NodeHandle,
+    /// The tokens of all nodes shards.
+    tokens: Vec<i64>,
+    /// the shard_count in scylla node.
+    shard_count: u16,
+    /// the most significant bit
+    msb: u8,
 }
 
 /// impl name of the Cluster
