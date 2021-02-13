@@ -4,7 +4,6 @@
 #![warn(missing_docs)]
 /// Scylla application module
 pub mod application;
-// pub mod ring;
 
 pub mod access;
 pub mod cluster;
