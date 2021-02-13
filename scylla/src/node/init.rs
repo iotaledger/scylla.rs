@@ -22,6 +22,7 @@ impl Init<ClusterHandle> for Node {
                 .build();
             let stage_handle = stage.clone_handle();
             self.stages.insert(shard_id, stage_handle);
+            tokio::spawn(stage.start(self.handle.clone()));
         }
         status
     }
