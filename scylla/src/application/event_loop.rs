@@ -94,7 +94,7 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
 }
 
 impl<H: ScyllaScope> Scylla<H> {
-    async fn response_to_sockets(&mut self, msg: SocketMsg) {
+    async fn response_to_sockets(&mut self, msg: SocketMsg<Result<Topology, Topology>>) {
         for socket in self.websockets.values_mut() {
             let j = serde_json::to_string(&msg).unwrap();
             let m = Message::text(j);

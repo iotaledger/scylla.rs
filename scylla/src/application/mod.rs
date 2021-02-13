@@ -4,6 +4,7 @@
 use crate::{cluster::*, listener::*, websocket::*};
 
 pub use chronicle::*;
+pub use client::add_nodes::add_nodes;
 pub use log::*;
 pub use tokio::{spawn, sync::mpsc};
 
@@ -85,10 +86,10 @@ pub enum ScyllaChild {
 pub enum ScyllaEvent<T> {
     Passthrough(T),
     Children(ScyllaChild),
-    Result(SocketMsg),
+    Result(SocketMsg<Result<Topology, Topology>>),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub enum Topology {
     AddingNode(SocketAddr),
     RemovingNode(SocketAddr),
@@ -96,9 +97,9 @@ pub enum Topology {
 }
 
 #[derive(Deserialize, Serialize)]
-// use Scylla to indicate to the websocket recipient that the json msg from Scylla application
-pub enum SocketMsg {
-    Scylla(Result<Topology, Topology>),
+// use Scylla to indicate to the msg is from/to Scylla
+pub enum SocketMsg<T> {
+    Scylla(T),
 }
 
 /// implementation of the AppBuilder
