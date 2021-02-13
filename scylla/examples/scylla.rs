@@ -9,8 +9,11 @@ impl Builder for AppsBuilder {
     type State = Apps;
     fn build(self) -> Self::State {
         // create Scylla app
-        let scylla_builder = ScyllaBuilder::new().listen_address("127.0.0.1:8080".to_owned());
-        // TODO add args
+        let scylla_builder = ScyllaBuilder::new()
+            .listen_address("127.0.0.1:8080".to_owned())
+            .thread_count(num_cpus::get())
+            .reporter_count(2)
+            .local_dc("datacenter1".to_owned());
         // add it to launcher
         self.Scylla(scylla_builder).to_apps()
     }

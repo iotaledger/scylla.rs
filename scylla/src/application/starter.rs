@@ -27,7 +27,7 @@ impl<H: ScyllaScope> Starter<H> for ScyllaBuilder<H> {
             .buffer_size(self.buffer_size.clone().unwrap_or(1024000))
             .recv_buffer_size(self.recv_buffer_size.clone())
             .send_buffer_size(self.send_buffer_size.clone())
-            .authenticator(self.authenticator.clone().unwrap()) // or default to PasswordAuth::Default
+            .authenticator(self.authenticator.clone().unwrap_or(PasswordAuth::default()))
             .build();
         // clone cluster handle
         let cluster_handle = cluster.clone_handle();

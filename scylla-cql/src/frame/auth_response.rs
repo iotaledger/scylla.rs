@@ -27,13 +27,18 @@ impl Authenticator for AllowAllAuth {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 /// The password autentication structure with the user and password fields.
 pub struct PasswordAuth {
     user: String,
     pass: String,
 }
 
+impl Default for PasswordAuth {
+    fn default() -> Self {
+        PasswordAuth::new("cassandra".to_owned(), "cassandra".to_owned())
+    }
+}
 impl PasswordAuth {
     /// Create a new user with account and the corresponding password.
     pub fn new(user: String, pass: String) -> Self {
