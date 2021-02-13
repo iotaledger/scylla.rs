@@ -182,7 +182,10 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         let ignore_msb: u8 = supported.get_options().get("SCYLLA_SHARDING_IGNORE_MSB").unwrap()[0]
             .parse()
             .unwrap();
-        let shard_aware_port: u16 = supported.get_options().get("SCYLLA_SHARD_AWARE_PORT").unwrap()[0]
+        let shard_aware_port: u16 = supported
+            .get_options()
+            .get("SCYLLA_SHARD_AWARE_PORT")
+            .expect("Upgrade your Scylla to latest release")[0]
             .parse()
             .unwrap();
         // create cqlconn
