@@ -36,13 +36,13 @@ impl EventLoop<ClusterHandle> for Node {
                 NodeEvent::Service(microservice) => {
                     self.service.update_microservice(microservice.get_name(), microservice);
                     if !self.service.is_stopping() {
-                        let mut microservices = self.service.microservices.values();
-                        if microservices.all(|ms| ms.is_maintenance())
-                            && microservices.len() == self.shard_count as usize
+                        let microservices_len = self.service.microservices.len();
+                        if self.service.microservices.values().all(|ms| ms.is_maintenance())
+                            && microservices_len == self.shard_count as usize
                         {
                             self.service.update_status(ServiceStatus::Maintenance);
-                        } else if microservices.all(|ms| ms.is_running())
-                            && microservices.len() == self.shard_count as usize
+                        } else if self.service.microservices.values().all(|ms| ms.is_running())
+                            && microservices_len == self.shard_count as usize
                         {
                             // all shards are connected/running as expected
                             self.service.update_status(ServiceStatus::Running);

@@ -16,17 +16,16 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                     self.service.update_microservice(microservice.get_name(), microservice);
                     // keep scylla application up to date with the full tree;
                     // but first let's update the status of the cluster based on the status of the node/s
-                    let mut microservices = self.service.microservices.values();
                     // update the service if it's not already shutting down.
                     if !self.service.is_stopping() {
-                        if microservices.all(|ms| ms.is_initializing()) {
+                        if self.service.microservices.values().all(|ms| ms.is_initializing()) {
                             self.service.update_status(ServiceStatus::Initializing);
-                        } else if microservices.all(|ms| ms.is_maintenance()) {
+                        } else if self.service.microservices.values().all(|ms| ms.is_maintenance()) {
                             self.service.update_status(ServiceStatus::Maintenance);
                         // all the nodes in our Cluster are disconnected and in maintenance,
                         // which is an indicator of an outage
                         // TODO some alerts, logs, call 911 ;)
-                        } else if microservices.all(|ms| ms.is_running()) {
+                        } else if self.service.microservices.values().all(|ms| ms.is_running()) {
                             self.service.update_status(ServiceStatus::Running);
                         } else {
                             self.service.update_status(ServiceStatus::Degraded);

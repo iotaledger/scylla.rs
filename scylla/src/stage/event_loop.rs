@@ -11,21 +11,21 @@ impl EventLoop<NodeHandle> for Stage {
             match event {
                 StageEvent::Reporter(service) => {
                     self.service.update_microservice(service.get_name(), service);
-                    let mut microservices = self.service.microservices.values();
+                    let microservices_len = self.service.microservices.len();
                     // update the service if it's not already shutting down.
                     if !self.service.is_stopping() {
-                        if microservices.all(|ms| ms.is_initializing())
-                            && microservices.len() == self.reporter_count as usize
+                        if self.service.microservices.values().all(|ms| ms.is_initializing())
+                            && microservices_len == self.reporter_count as usize
                         {
                             self.service.update_status(ServiceStatus::Degraded);
                             // need to connect for the first time
                             let _ = self.handle.as_mut().unwrap().send(StageEvent::Connect);
-                        } else if microservices.all(|ms| ms.is_maintenance()) {
+                        } else if self.service.microservices.values().all(|ms| ms.is_maintenance()) {
                             self.service.update_status(ServiceStatus::Maintenance);
                             // need to reconnect
                             let _ = self.handle.as_mut().unwrap().send(StageEvent::Connect);
-                        } else if microservices.all(|ms| ms.is_running())
-                            && microservices.len() == self.reporter_count as usize
+                        } else if self.service.microservices.values().all(|ms| ms.is_running())
+                            && microservices_len == self.reporter_count as usize
                         {
                             self.service.update_status(ServiceStatus::Running);
                         }

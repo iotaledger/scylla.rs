@@ -72,9 +72,9 @@ impl EventLoop<StageHandle> for Reporter {
                             }
                             // update microservices
                             self.service.update_microservice(service.get_name(), service);
-                            let mut microservices = self.service.microservices.values();
+                            let microservices_len = self.service.microservices.len();
                             // check if all microservices are stopped
-                            if microservices.all(|ms| ms.is_stopped()) && microservices.len() == 2 {
+                            if self.service.microservices.values().all(|ms| ms.is_stopped()) && microservices_len == 2 {
                                 // first we drain workers map from stucked requests, to force_consistency of
                                 // the old_session requests
                                 force_consistency(&mut self.streams, &mut self.workers);
@@ -86,7 +86,9 @@ impl EventLoop<StageHandle> for Reporter {
                                     // Maintenance service mode
                                     self.service.update_status(ServiceStatus::Maintenance);
                                 }
-                            } else if microservices.all(|ms| ms.is_running()) && microservices.len() == 2 {
+                            } else if self.service.microservices.values().all(|ms| ms.is_running())
+                                && microservices_len == 2
+                            {
                                 if !self.service.is_stopping() {
                                     // running service
                                     self.service.update_status(ServiceStatus::Running);
