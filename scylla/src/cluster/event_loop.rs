@@ -37,8 +37,10 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                 }
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster level?
                 ClusterEvent::AddNode(address) => {
+                    // TODO make sure it doesn't already exist in our cluster
                     // to spawn node we first make sure it's online;
                     let cql = CqlBuilder::new()
+                        .address(address)
                         .tokens()
                         .recv_buffer_size(self.recv_buffer_size)
                         .send_buffer_size(self.send_buffer_size)
@@ -114,7 +116,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                     // update waiting for build to true
                     self.should_build = true;
                     // reply to scylla/dashboard
-                    let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::AddingNode(address))));
+                    let event = ScyllaEvent::Result(SocketMsg::Scylla(Ok(Topology::AddingNode(address))));
                     let _ = supervisor.as_ref().unwrap().send(event);
                 }
                 ClusterEvent::BuildRing(uniform_rf) => {
@@ -122,7 +124,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                     self.cleanup();
                     let mut microservices = self.service.microservices.values();
                     // make sure non of the nodes is still starting, and ensure should_build is true
-                    if microservices.any(|ms| ms.is_starting()) && self.should_build {
+                    if !microservices.any(|ms| ms.is_starting()) && self.should_build {
                         // re/build
                         let version = self.new_version();
                         if self.nodes.is_empty() {
