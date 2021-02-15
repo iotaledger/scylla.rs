@@ -306,9 +306,9 @@ impl Cql {
     }
     /// Create new cql connection builder struct with attached authenticator
     pub fn with_auth(user: String, pass: String) -> CqlBuilder<PasswordAuth> {
-        let cql_builder = CqlBuilder::<PasswordAuth>::default();
+        let mut cql_builder = CqlBuilder::<PasswordAuth>::default();
         let auth = PasswordAuth::new(user, pass);
-        CqlBuilder::<PasswordAuth>::default().authenticator.replace(auth);
+        cql_builder.authenticator.replace(auth);
         cql_builder
     }
     async fn fetch_tokens(&mut self) -> Result<(), Error> {
