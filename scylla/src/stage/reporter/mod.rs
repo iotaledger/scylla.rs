@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::worker::{Worker, WorkerError};
+use scylla_cql::{CqlError, Decoder};
 use sender::SenderHandle;
 
 use std::{
@@ -147,6 +148,18 @@ impl AknShutdown<Reporter> for StageHandle {
     }
 }
 
+impl Reporter {
+    fn force_consistency(&mut self) {
+        for (stream_id, worker_id) in self.workers.drain() {
+            // push the stream_id back into the streams vector
+            self.streams.push(stream_id);
+            // tell worker_id that we lost the response for his request, because we lost scylla connection in
+            // middle of request cycle, still this is a rare case.
+            worker_id.handle_error(WorkerError::Lost, &self.handle);
+        }
+    }
+}
+
 pub fn compute_reporter_num(stream_id: i16, appends_num: i16) -> u8 {
     (stream_id / appends_num) as u8
 }
@@ -157,12 +170,6 @@ fn assign_stream_to_payload(stream: i16, payload: &mut Vec<u8>) {
     payload[3] = stream as u8; // payload[3] is the second byte of the stream_id. please refer to cql specs
 }
 
-fn force_consistency(streams: &mut Vec<i16>, workers: &mut Workers) {
-    for (stream_id, worker_id) in workers.drain() {
-        // push the stream_id back into the streams vector
-        streams.push(stream_id);
-        // tell worker_id that we lost the response for his request, because we lost scylla connection in
-        // middle of request cycle, still this is a rare case.
-        worker_id.send_error(WorkerError::Lost);
-    }
+fn is_cql_error(buffer: &[u8]) -> bool {
+    buffer[4] == 0
 }

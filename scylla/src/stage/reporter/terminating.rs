@@ -10,7 +10,7 @@ impl Terminating<StageHandle> for Reporter {
         _status: Result<(), Need>,
         _supervisor: &mut Option<StageHandle>,
     ) -> Result<(), Need> {
-        force_consistency(&mut self.streams, &mut self.workers);
+        self.force_consistency();
         warn!(
             "reporter_id: {} of shard_id: {} in node: {}, gracefully shutting down.",
             self.reporter_id, self.shard_id, &self.address

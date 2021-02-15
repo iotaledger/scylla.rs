@@ -330,7 +330,7 @@ impl Endpoints for Option<Replicas> {
     ) {
         // simulate reporter,
         if let ReporterEvent::Request { worker, .. } = request {
-            worker.send_error(WorkerError::NoRing);
+            worker.handle_error(WorkerError::NoRing, &None);
         };
     }
 }

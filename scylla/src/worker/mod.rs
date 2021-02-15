@@ -9,10 +9,10 @@ use std::io::Error;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send + std::fmt::Debug {
-    /// Send the response.
-    fn send_response(self: Box<Self>, tx: &Option<ReporterHandle>, giveload: Vec<u8>);
-    /// Send the error.
-    fn send_error(self: Box<Self>, error: WorkerError);
+    /// Reporter will invoke this method to Send the cql response to worker
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>);
+    /// Reporter will invoke this method to Send the worker error to worker
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>);
 }
 
 #[derive(Debug)]

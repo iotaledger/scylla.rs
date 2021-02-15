@@ -29,12 +29,15 @@ impl EventLoop<StageHandle> for Reporter {
                                 self.streams.push(stream);
                                 // This means the sender_tx had been droped as a result of checkpoint from
                                 // receiver
-                                worker.send_error(WorkerError::Io(Error::new(ErrorKind::Other, "No Sender!")));
+                                worker.handle_error(
+                                    WorkerError::Io(Error::new(ErrorKind::Other, "No Sender!")),
+                                    &self.handle,
+                                );
                             }
                         }
                     } else {
                         // Send overload to the worker in-case we don't have anymore streams
-                        worker.send_error(WorkerError::Overload);
+                        worker.handle_error(WorkerError::Overload, &self.handle);
                     }
                 }
                 ReporterEvent::Response { stream_id } => {
@@ -77,7 +80,7 @@ impl EventLoop<StageHandle> for Reporter {
                             if self.service.microservices.values().all(|ms| ms.is_stopped()) && microservices_len == 2 {
                                 // first we drain workers map from stucked requests, to force_consistency of
                                 // the old_session requests
-                                force_consistency(&mut self.streams, &mut self.workers);
+                                self.force_consistency();
                                 warn!(
                                     "address: {}, shard_id: {}, reporter_id: {}, closing session: {:?}",
                                     &self.address, self.shard_id, self.reporter_id, self.session_id
@@ -116,21 +119,25 @@ impl Reporter {
     fn handle_response(&mut self, stream: i16) {
         // TODO if payload is error, invoke handle_error,
         // make sure to decode the cql error
-
-        // remove the worker from workers and send response.
+        // remove the worker from workers.
         let worker = self.workers.remove(&stream).unwrap();
-        worker.send_response(&self.handle, self.payloads[stream as usize].as_mut().take().unwrap());
+        let payload = self.payloads[stream as usize].as_mut().take().unwrap();
+        if is_cql_error(&payload) {
+            let cql_error = CqlError::new(&Decoder::from(payload));
+            let error = WorkerError::Cql(cql_error);
+            worker.handle_error(error, &self.handle);
+        } else {
+            worker.handle_response(payload);
+        }
         // push the stream_id back to streams vector.
         self.streams.push(stream);
     }
     fn handle_error(&mut self, stream: i16, error: WorkerError) {
-        // TODO to handle UNPREPARED, pass &self.handle.
-
         // remove the worker from workers and send error.
         let worker = self.workers.remove(&stream).unwrap();
         // drop payload.
         self.payloads[stream as usize].as_mut().take().unwrap();
-        worker.send_error(error);
+        worker.handle_error(error, &self.handle);
         // push the stream_id back to streams vector.
         self.streams.push(stream);
     }
