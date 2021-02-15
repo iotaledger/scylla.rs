@@ -4,7 +4,7 @@
 use crate::{
     application::*,
     node::*,
-    ring::{build_ring, initialize_ring, ArcRing, Registry, WeakRing},
+    ring::{build_ring, initialize_ring, ArcRing, Registry, Ring, WeakRing},
     stage::ReportersHandles,
 };
 use std::{

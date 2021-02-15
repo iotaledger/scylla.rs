@@ -174,6 +174,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                     let (new_arc_ring, old_weak_ring) = initialize_ring(version, true);
                     self.arc_ring.replace(new_arc_ring);
                     self.weak_rings.push(old_weak_ring.unwrap());
+                    Ring::rebuild();
                     // redo self cleanup on weaks
                     self.cleanup();
                     // drop self.handle
@@ -189,7 +190,8 @@ impl Cluster {
     fn cleanup(&mut self) {
         // total_weak_count = thread_count + 1(the global weak)
         // so we clear all old weaks once weak_count > self.thread_count
-        if std::sync::Arc::weak_count(self.arc_ring.as_ref().unwrap()) > self.thread_count {
+        let weak_count = std::sync::Arc::weak_count(self.arc_ring.as_ref().unwrap());
+        if weak_count > self.thread_count {
             self.weak_rings.clear();
         };
     }

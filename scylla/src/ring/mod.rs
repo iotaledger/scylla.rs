@@ -116,6 +116,31 @@ impl Ring {
     pub fn send_global_random_replica(token: Token, request: ReporterEvent) {
         RING.with(|local| local.borrow_mut().sending().global_random_replica(token, request))
     }
+    pub fn rebuild() {
+        RING.with(|local| {
+            let mut ring = local.borrow_mut();
+            unsafe {
+                if VERSION != ring.version {
+                    // load weak and upgrade to arc if strong_count > 0;
+                    if let Some(mut arc) =
+                        Weak::upgrade(GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap())
+                    {
+                        let new_weak = Arc::downgrade(&arc);
+                        let (dcs, uniform_dcs, uniform_rf, uniform, version, registry, root) = Arc::make_mut(&mut arc);
+                        // update the local ring
+                        ring.dcs = dcs.clone();
+                        ring.uniform_dcs = *uniform_dcs;
+                        ring.uniform_rf = *uniform_rf;
+                        ring.uniform = *uniform;
+                        ring.version = *version;
+                        ring.registry = registry.clone();
+                        ring.root = root.clone();
+                        ring.weak.replace(new_weak);
+                    };
+                }
+            }
+        });
+    }
     fn sending(&mut self) -> &mut Self {
         unsafe {
             if VERSION != self.version {
