@@ -86,13 +86,19 @@ impl Cluster {
         self.handle.clone().unwrap()
     }
 }
-// Cluster Event type
+/// Cluster Event type
 pub enum ClusterEvent {
+    /// Used by the Node to register its reporters with the cluster
     RegisterReporters(Service, HashMap<SocketAddr, ReportersHandles>),
+    /// Used by the Node to keep the cluster up to date with its service
     Service(Service),
+    /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
     AddNode(SocketAddr),
+    /// Used by Scylla/dashboard to remove/disconnect from existing scylla node in the cluster
     RemoveNode(SocketAddr),
+    /// Used by Scylla/dashboard to build new ring and expose the recent cluster topology
     BuildRing(u8),
+    /// Used by Scylla/dashboard to shutdown the cluster
     Shutdown,
 }
 

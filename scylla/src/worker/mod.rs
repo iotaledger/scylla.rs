@@ -18,7 +18,7 @@ pub trait Worker: Send + std::fmt::Debug {
 #[derive(Debug)]
 /// The CQL worker error.
 pub enum WorkerError {
-    // The CQL Error reported from ScyllaDB.
+    /// The CQL Error reported from ScyllaDB.
     Cql(CqlError),
     /// The IO Error.
     Io(Error),

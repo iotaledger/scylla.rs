@@ -74,7 +74,7 @@ impl EventLoop<NodeHandle> for Stage {
                                     .appends_num(self.appends_num)
                                     .payloads(self.payloads.clone())
                                     .session_id(self.session_id)
-                                    .buffer_size(1024000) // TODO make this configurable
+                                    .buffer_size(self.buffer_size)
                                     .build();
                                 tokio::spawn(receiver.start(self.reporters_handles.clone()));
                             }

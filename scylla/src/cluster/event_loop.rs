@@ -83,7 +83,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                             tokio::spawn(node.start(self.handle.clone()));
                         }
                         Err(_) => {
-                            let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::AddingNode(address))));
+                            let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::AddNode(address))));
                             let _ = supervisor.as_ref().unwrap().send(event);
                         }
                     }
@@ -115,7 +115,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                     // update waiting for build to true
                     self.should_build = true;
                     // reply to scylla/dashboard
-                    let event = ScyllaEvent::Result(SocketMsg::Scylla(Ok(Topology::AddingNode(address))));
+                    let event = ScyllaEvent::Result(SocketMsg::Scylla(Ok(Topology::AddNode(address))));
                     let _ = supervisor.as_ref().unwrap().send(event);
                 }
                 ClusterEvent::BuildRing(uniform_rf) => {
@@ -148,11 +148,11 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                         // incase of another BuildRing event
                         self.should_build = false;
                         // reply to scylla/dashboard
-                        let event = ScyllaEvent::Result(SocketMsg::Scylla(Ok(Topology::BuiltRing)));
+                        let event = ScyllaEvent::Result(SocketMsg::Scylla(Ok(Topology::BuildRing(uniform_rf))));
                         let _ = supervisor.as_ref().unwrap().send(event);
                     } else {
                         // reply to scylla/dashboard
-                        let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::BuiltRing)));
+                        let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::BuildRing(uniform_rf))));
                         let _ = supervisor.as_ref().unwrap().send(event);
                     }
                 }

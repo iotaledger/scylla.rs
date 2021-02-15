@@ -8,6 +8,7 @@ use scylla_cql::VoidDecoder;
 /// `Delete<K, V>` trait extends the `keyspace` with `delete` operation for the (key: K, value: V);
 /// therefore, it should be explicitly implemented for the corresponding `Keyspace` with the correct DELETE CQL query.
 pub trait Delete<K, V>: Keyspace {
+    /// Delete
     async fn delete<T>(&self, worker: T, key: &K)
     where
         T: VoidDecoder<K, V> + Worker;

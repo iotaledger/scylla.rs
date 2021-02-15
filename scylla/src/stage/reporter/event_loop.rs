@@ -117,8 +117,6 @@ impl EventLoop<StageHandle> for Reporter {
 
 impl Reporter {
     fn handle_response(&mut self, stream: i16) {
-        // TODO if payload is error, invoke handle_error,
-        // make sure to decode the cql error
         // remove the worker from workers.
         let worker = self.workers.remove(&stream).unwrap();
         let payload = self.payloads[stream as usize].as_mut().take().unwrap();

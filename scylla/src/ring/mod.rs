@@ -29,8 +29,6 @@ pub type Msb = u8;
 pub type ShardCount = u16;
 /// The tuple of recording a virtual node.
 pub type VnodeTuple = (Token, Token, SocketAddr, DC, Msb, ShardCount);
-/// The tuple of virtual nodes with their relicas
-pub type VnodeWithReplicas = (Token, Token, Replicas); // VnodeWithReplicas
 /// The data center string.
 pub type DC = String;
 type Replicas = HashMap<DC, Vec<Replica>>;
@@ -57,15 +55,15 @@ pub type WeakRing = Weak<GlobalRing>;
 
 /// The Ring structure used to handle the access to ScyllaDB ring.
 pub struct Ring {
-    version: u8,
-    weak: Option<Weak<GlobalRing>>,
-    registry: Registry,
-    root: Vcell,
-    uniform: Uniform<u8>,
-    rng: ThreadRng,
-    dcs: Vec<DC>,
-    uniform_dcs: Uniform<usize>,
-    uniform_rf: Uniform<usize>,
+    pub version: u8,
+    pub weak: Option<Weak<GlobalRing>>,
+    pub registry: Registry,
+    pub root: Vcell,
+    pub uniform: Uniform<u8>,
+    pub rng: ThreadRng,
+    pub dcs: Vec<DC>,
+    pub uniform_dcs: Uniform<usize>,
+    pub uniform_rf: Uniform<usize>,
 }
 
 static mut VERSION: u8 = 0;
@@ -95,7 +93,7 @@ thread_local! {
         })
     };
 }
-
+#[allow(unused)]
 impl Ring {
     /// Send request to a given data_center with the given replica_index and token.
     pub fn send(data_center: &str, replica_index: usize, token: Token, request: ReporterEvent) {
@@ -250,7 +248,7 @@ impl SmartId for Replica {
         // shard awareness algo,
         self.0
             .set_port((((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u16);
-        registry
+        let _ = registry
             .get_mut(&self.0)
             .unwrap()
             .get_mut(&rng.sample(uniform))
@@ -492,7 +490,7 @@ pub fn build_ring(
     version: u8,
 ) -> (Arc<GlobalRing>, Box<Weak<GlobalRing>>) {
     // complete tokens-range
-    let mut tokens = Vec::new();
+    let mut tokens: Tokens = Vec::new();
     // iter nodes
     for NodeInfo {
         tokens: node_tokens,

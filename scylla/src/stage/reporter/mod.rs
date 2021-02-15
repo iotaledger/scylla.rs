@@ -56,7 +56,7 @@ impl DerefMut for ReporterHandle {
 pub enum ReporterEvent {
     /// The request Cql query.
     Request {
-        // The worker which is used to process the request.
+        /// The worker which is used to process the request.
         worker: Box<dyn Worker>,
         /// The request payload.
         payload: Vec<u8>,

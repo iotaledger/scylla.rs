@@ -24,7 +24,8 @@ builder!(
 pub type WsTx = SplitSink<WebSocketStream<TcpStream>, Message>;
 /// The readhalf of the webssocket
 pub type WsRx = SplitStream<WebSocketStream<TcpStream>>;
-// Listener state
+
+/// Client Websocket struct
 pub struct Websocket {
     service: Service,
     peer: SocketAddr,

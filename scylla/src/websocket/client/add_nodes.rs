@@ -13,7 +13,7 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
             // add scylla nodes
             for address in addresses {
                 // add node
-                let msg = SocketMsg::Scylla(ScyllaThrough::AddNode(address));
+                let msg = SocketMsg::Scylla(ScyllaThrough::Topology(Topology::AddNode(address)));
                 let j = serde_json::to_string(&msg).expect("invalid AddNode event");
                 let m = Message::text(j);
                 ws_stream.send(m).await.unwrap();
@@ -21,7 +21,7 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                 if let Some(msg) = ws_stream.next().await {
                     let event: SocketMsg<Result<Topology, Topology>> =
                         serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
-                    if let SocketMsg::Scylla(Ok(Topology::AddingNode(_))) = event {
+                    if let SocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
                     } else {
                         // TODO (handle parallel admins) it's possible other admin is managing the cluster in parallel.
                         ws_stream.close(None).await.unwrap();
@@ -33,7 +33,7 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                 };
             }
             // build the ring
-            let msg = SocketMsg::Scylla(ScyllaThrough::BuildRing(uniform_rf));
+            let msg = SocketMsg::Scylla(ScyllaThrough::Topology(Topology::BuildRing(uniform_rf)));
             let j = serde_json::to_string(&msg).unwrap();
             let m = Message::text(j);
             ws_stream.send(m).await.unwrap();
@@ -43,8 +43,8 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                     serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap()
                 {
                     match result {
-                        Ok(Topology::BuiltRing) => info!("Succesfully Added Nodes and built cluster topology"),
-                        Err(Topology::BuiltRing) => error!("Unable to build cluster topology, please try again"),
+                        Ok(Topology::BuildRing(_)) => info!("Succesfully Added Nodes and built cluster topology"),
+                        Err(Topology::BuildRing(_)) => error!("Unable to build cluster topology, please try again"),
                         _ => error!("Currently we don't support concurrent admins managing the cluster simultaneously"),
                     }
                 } else {

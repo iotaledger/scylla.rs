@@ -169,7 +169,7 @@ impl Builder for StageBuilder {
             session_id: 0,
             shard_id: self.shard_id.unwrap(),
             payloads,
-            buffer_size: self.buffer_size.unwrap(),
+            buffer_size: self.buffer_size.unwrap_or(1024000),
             recv_buffer_size: self.recv_buffer_size.unwrap(),
             send_buffer_size: self.send_buffer_size.unwrap(),
             handle,

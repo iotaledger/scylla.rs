@@ -43,11 +43,11 @@ builder!(
 });
 
 #[derive(Deserialize, Serialize)]
+/// It's the Interface the scylla app to dynamiclly configure the application during runtime
 pub enum ScyllaThrough {
+    /// Shutdown json to gracefully shutdown scylla app
     Shutdown,
-    AddNode(SocketAddr),
-    RemoveNode(SocketAddr),
-    BuildRing(u8),
+    Topology(Topology),
 }
 
 /// ScyllaHandle to be passed to the children (Listener and Cluster)
@@ -77,23 +77,35 @@ pub struct Scylla<H: ScyllaScope> {
 
 /// SubEvent type, indicated the children
 pub enum ScyllaChild {
+    /// Used by Listener to keep scylla up to date with its service
     Listener(Service),
+    /// Used by Cluster to keep scylla up to date with its service
     Cluster(Service),
+    /// Used by Websocket to keep scylla up to date with its service
     Websocket(Service, Option<WsTx>),
 }
 
 /// Event type of the Scylla Application
 pub enum ScyllaEvent<T> {
+    /// It's the passthrough event, which the scylla application will receive from
     Passthrough(T),
+    /// Used by scylla children to push their service
     Children(ScyllaChild),
+    /// Used by cluster to inform scylla in order to inform the sockets with the result of topology events
     Result(SocketMsg<Result<Topology, Topology>>),
 }
 
 #[derive(Deserialize, Serialize, Debug)]
+/// Topology event
 pub enum Topology {
-    AddingNode(SocketAddr),
-    RemovingNode(SocketAddr),
-    BuiltRing,
+    /// AddNode json to add new scylla node
+    AddNode(SocketAddr),
+    /// RemoveNode json to remove an existing scylla node
+    RemoveNode(SocketAddr),
+    /// BuildRing json to re/build the cluster topology,
+    /// Current limitation: for now the admin supposed to define uniform replication factor among all DataCenter and
+    /// all keyspaces
+    BuildRing(u8),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -129,12 +141,13 @@ impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
     }
 }
 
+// TODO integrate well with other services;
 /// implementation of passthrough functionality
 impl<H: ScyllaScope> Passthrough<ScyllaThrough> for ScyllaHandle<H> {
-    fn launcher_status_change(&mut self, service: &Service) {}
-    fn app_status_change(&mut self, service: &Service) {}
-    fn passthrough(&mut self, event: ScyllaThrough, from_app_name: String) {}
-    fn service(&mut self, service: &Service) {}
+    fn launcher_status_change(&mut self, _service: &Service) {}
+    fn app_status_change(&mut self, _service: &Service) {}
+    fn passthrough(&mut self, _event: ScyllaThrough, _from_app_name: String) {}
+    fn service(&mut self, _service: &Service) {}
 }
 
 /// implementation of shutdown functionality

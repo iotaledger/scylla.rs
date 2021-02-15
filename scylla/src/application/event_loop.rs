@@ -6,7 +6,7 @@ use futures::SinkExt;
 
 #[async_trait::async_trait]
 impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
-    async fn event_loop(&mut self, status: Result<(), Need>, supervisor: &mut Option<H>) -> Result<(), Need> {
+    async fn event_loop(&mut self, _status: Result<(), Need>, supervisor: &mut Option<H>) -> Result<(), Need> {
         let my_sup = supervisor.as_mut().unwrap();
         self.service.update_status(ServiceStatus::Running);
         while let Some(event) = self.inbox.rx.recv().await {
@@ -68,18 +68,20 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                                         self.service.update_status(ServiceStatus::Stopping);
                                     }
                                 }
-                                ScyllaThrough::AddNode(address) => {
-                                    let event = ClusterEvent::AddNode(address);
-                                    let _ = self.cluster_handle.as_ref().unwrap().send(event);
-                                }
-                                ScyllaThrough::RemoveNode(address) => {
-                                    let event = ClusterEvent::RemoveNode(address);
-                                    let _ = self.cluster_handle.as_ref().unwrap().send(event);
-                                }
-                                ScyllaThrough::BuildRing(rf) => {
-                                    let event = ClusterEvent::BuildRing(rf);
-                                    let _ = self.cluster_handle.as_ref().unwrap().send(event);
-                                }
+                                ScyllaThrough::Topology(topology) => match topology {
+                                    Topology::AddNode(address) => {
+                                        let event = ClusterEvent::AddNode(address);
+                                        let _ = self.cluster_handle.as_ref().unwrap().send(event);
+                                    }
+                                    Topology::RemoveNode(address) => {
+                                        let event = ClusterEvent::RemoveNode(address);
+                                        let _ = self.cluster_handle.as_ref().unwrap().send(event);
+                                    }
+                                    Topology::BuildRing(rf) => {
+                                        let event = ClusterEvent::BuildRing(rf);
+                                        let _ = self.cluster_handle.as_ref().unwrap().send(event);
+                                    }
+                                },
                             }
                         }
                         Err(apps_events) => {

@@ -71,7 +71,7 @@ pub enum NodeEvent {
     /// To keep the node with up to date stage service
     Service(Service),
 }
-// Node state
+/// Node state
 pub struct Node {
     service: Service,
     address: SocketAddr,
