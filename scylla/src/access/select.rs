@@ -2,15 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use scylla_cql::RowsDecoder;
 
-#[async_trait::async_trait]
-/// `Select<K, V>` trait extends the `keyspace` with `select` operation for the (key: K, value: V);
-/// therefore, it should be explicitly implemented for the corresponding `Keyspace` with the correct SELECT CQL query.
+pub struct SelectQuery<K, V> {
+    inner: Query,
+    key: PhantomData<K>,
+    val: PhantomData<V>,
+}
+
+impl<K, V> Deref for SelectQuery<K, V> {
+    type Target = Query;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<K, V> DerefMut for SelectQuery<K, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 pub trait Select<K, V>: Keyspace {
-    /// Selects the value associated with the key from the storage keyspace,
-    /// and responde back using async callback to the worker.
-    async fn select<T>(&self, worker: Box<T>, key: &K)
-    where
-        T: RowsDecoder<K, V> + Worker;
+    fn select(&self, key: &K) -> SelectQuery<K, V>;
 }

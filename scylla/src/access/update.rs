@@ -2,13 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use scylla_cql::VoidDecoder;
 
-#[async_trait::async_trait]
-/// `Update<K, V>` trait extends the `keyspace` with `Update` operation for the (key: K, value: V);
-/// therefore, it should be explicitly implemented for the corresponding `Keyspace` with the correct UPDATE CQL query.
+pub struct UpdateQuery<K, V> {
+    inner: Query,
+    key: PhantomData<K>,
+    val: PhantomData<V>,
+}
+
+impl<K, V> Deref for UpdateQuery<K, V> {
+    type Target = Query;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<K, V> DerefMut for UpdateQuery<K, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 pub trait Update<K, V>: Keyspace {
-    async fn update<T>(&self, worker: Box<T>, key: &K, value: &V)
-    where
-        T: VoidDecoder<K, V> + Worker;
+    fn update(&self, key: &K, value: &V) -> UpdateQuery<K, V>;
 }

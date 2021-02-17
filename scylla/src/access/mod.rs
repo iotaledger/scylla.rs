@@ -9,3 +9,8 @@ pub mod update;
 
 use super::Worker;
 use keyspace::Keyspace;
+use scylla_cql::Query;
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};

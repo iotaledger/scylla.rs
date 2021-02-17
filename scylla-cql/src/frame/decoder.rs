@@ -17,22 +17,28 @@ use std::{
 };
 
 /// RowsDecoder trait to decode the rows result from scylla
-pub trait RowsDecoder<K, V> {
+pub trait RowsDecoder<V> {
     /// Try to decode the provided Decoder with an expected Rows result
-    fn try_decode(&mut self, decoder: Decoder) -> Result<Option<V>, error::CqlError>;
+    fn try_decode(decoder: Decoder) -> Result<Option<V>, error::CqlError>;
     /// Decode the provided Decoder with an deterministic Rows result
-    fn decode(&mut self, decoder: Decoder) -> Option<V> {
-        self.try_decode(decoder).unwrap()
+    fn decode(decoder: Decoder) -> Option<V> {
+        Self::try_decode(decoder).unwrap()
     }
 }
 
 /// VoidDecoder trait to decode the VOID result from scylla
-pub trait VoidDecoder<K, V> {
+pub trait VoidDecoder {
     /// Try to decode the provided Decoder with an expected Void result
-    fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
+    fn try_decode(decoder: Decoder) -> Result<(), error::CqlError> {
+        if decoder.is_error() {
+            Err(decoder.body().into())
+        } else {
+            Ok(())
+        }
+    }
     /// Decode the provided Decoder with an deterministic Void result
-    fn decode(&mut self, decoder: Decoder) {
-        self.try_decode(decoder).unwrap()
+    fn decode(decoder: Decoder) {
+        Self::try_decode(decoder).unwrap()
     }
 }
 
