@@ -23,6 +23,16 @@ impl<K, V> DerefMut for SelectQuery<K, V> {
     }
 }
 
+impl<K, V> SelectQuery<K, V> {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.inner.0
+    }
+
+    pub fn into_inner(self) -> Query {
+        self.inner
+    }
+}
+
 pub trait Select<K, V>: Keyspace {
     fn select(&self, key: &K) -> SelectQuery<K, V>;
 }

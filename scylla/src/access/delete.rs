@@ -22,6 +22,16 @@ impl<K> DerefMut for DeleteQuery<K> {
     }
 }
 
+impl<K> DeleteQuery<K> {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.inner.0
+    }
+
+    pub fn into_inner(self) -> Query {
+        self.inner
+    }
+}
+
 /// `Delete<K, V>` trait extends the `keyspace` with `delete` operation for the (key: K, value: V);
 /// therefore, it should be explicitly implemented for the corresponding `Keyspace` with the correct DELETE CQL query.
 pub trait Delete<K>: Keyspace {

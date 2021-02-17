@@ -22,6 +22,16 @@ impl<V> DerefMut for InsertQuery<V> {
     }
 }
 
+impl<V> InsertQuery<V> {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.inner.0
+    }
+
+    pub fn into_inner(self) -> Query {
+        self.inner
+    }
+}
+
 pub trait Insert<V>: Keyspace {
     fn insert(&self, value: &V) -> InsertQuery<V>;
 }

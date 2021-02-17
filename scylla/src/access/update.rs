@@ -23,6 +23,16 @@ impl<K, V> DerefMut for UpdateQuery<K, V> {
     }
 }
 
+impl<K, V> UpdateQuery<K, V> {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.inner.0
+    }
+
+    pub fn into_inner(self) -> Query {
+        self.inner
+    }
+}
+
 pub trait Update<K, V>: Keyspace {
     fn update(&self, key: &K, value: &V) -> UpdateQuery<K, V>;
 }
