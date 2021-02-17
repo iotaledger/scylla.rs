@@ -9,7 +9,7 @@ pub mod access;
 pub mod cluster;
 pub mod listener;
 pub mod node;
-mod ring;
+pub mod ring;
 pub mod stage;
 pub mod websocket;
 pub mod worker;
