@@ -5,7 +5,7 @@
 //! See `https://github.com/apache/cassandra/blob/trunk/doc/native_protocol_v4.spec` for more details.
 
 #![warn(missing_docs)]
-mod compression;
+pub mod compression;
 mod connection;
 mod frame;
 mod murmur3;
