@@ -32,18 +32,16 @@ impl Compression for Lz4 {
             // Decompress the body by lz4
             match lz4::block::decompress(&buffer[9..(9 + compressed_body_length)], None) {
                 Ok(decompressed_buffer) => {
-                    // adjust the length to equal the uncompressed length
-                    buffer.copy_within(9..13, 5);
-                    // reduce the frame to be a header only
-                    buffer.truncate(9);
+                    // reduce the frame to be a header only without length
+                    buffer.truncate(5);
+                    // make the body length to be the decompressed body length
+                    buffer.extend(&i32::to_be_bytes(decompressed_buffer.len() as i32));
                     // Extend the decompressed body
                     buffer.extend(&decompressed_buffer);
                     buffer
                 }
                 Err(_) => {
                     // return only the header as this is mostly a result of header only
-                    // adjust the length to equal the uncompressed length
-                    buffer.copy_within(9..13, 5);
                     buffer.truncate(9);
                     buffer
                 }
