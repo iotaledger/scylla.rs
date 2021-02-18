@@ -3,6 +3,7 @@
 
 use super::*;
 
+#[derive(Clone)]
 pub struct InsertQuery<S, V> {
     inner: Query,
     keyspace: PhantomData<S>,

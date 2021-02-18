@@ -3,6 +3,7 @@
 
 use super::*;
 
+#[derive(Clone)]
 pub struct UpdateQuery<S, K, V> {
     inner: Query,
     keyspace: PhantomData<S>,

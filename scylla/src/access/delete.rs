@@ -3,6 +3,7 @@
 
 use super::*;
 
+#[derive(Clone)]
 pub struct DeleteQuery<S, K> {
     inner: Query,
     keyspace: PhantomData<S>,
