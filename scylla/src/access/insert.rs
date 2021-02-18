@@ -9,6 +9,16 @@ pub struct InsertQuery<S, V> {
     val: PhantomData<V>,
 }
 
+impl<S, V> Default for InsertQuery<S, V> {
+    fn default() -> Self {
+        Self {
+            inner: Query::default(),
+            keyspace: PhantomData::default(),
+            val: PhantomData::default(),
+        }
+    }
+}
+
 impl<S, V> Deref for InsertQuery<S, V> {
     type Target = Query;
 
@@ -24,6 +34,13 @@ impl<S, V> DerefMut for InsertQuery<S, V> {
 }
 
 impl<S: Insert<V>, V> InsertQuery<S, V> {
+    pub fn new(query: Query) -> Self {
+        Self {
+            inner: query,
+            ..Default::default()
+        }
+    }
+
     pub fn into_bytes(&self) -> Vec<u8> {
         self.inner.0.clone()
     }

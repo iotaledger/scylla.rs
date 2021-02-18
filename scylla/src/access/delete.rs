@@ -9,6 +9,16 @@ pub struct DeleteQuery<S, K> {
     key: PhantomData<K>,
 }
 
+impl<S, K> Default for DeleteQuery<S, K> {
+    fn default() -> Self {
+        Self {
+            inner: Query::default(),
+            keyspace: PhantomData::default(),
+            key: PhantomData::default(),
+        }
+    }
+}
+
 impl<S, K> Deref for DeleteQuery<S, K> {
     type Target = Query;
 
@@ -24,6 +34,13 @@ impl<S, K> DerefMut for DeleteQuery<S, K> {
 }
 
 impl<S: Delete<K>, K> DeleteQuery<S, K> {
+    pub fn new(query: Query) -> Self {
+        Self {
+            inner: query,
+            ..Default::default()
+        }
+    }
+
     pub fn into_bytes(&self) -> Vec<u8> {
         self.inner.0.clone()
     }

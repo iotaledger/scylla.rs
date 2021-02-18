@@ -10,6 +10,17 @@ pub struct SelectQuery<S, K, V> {
     val: PhantomData<V>,
 }
 
+impl<S, K, V> Default for SelectQuery<S, K, V> {
+    fn default() -> Self {
+        Self {
+            inner: Query::default(),
+            keyspace: PhantomData::default(),
+            key: PhantomData::default(),
+            val: PhantomData::default(),
+        }
+    }
+}
+
 impl<S, K, V> Deref for SelectQuery<S, K, V> {
     type Target = Query;
 
@@ -25,6 +36,13 @@ impl<S, K, V> DerefMut for SelectQuery<S, K, V> {
 }
 
 impl<S: Select<K, V>, K, V> SelectQuery<S, K, V> {
+    pub fn new(query: Query) -> Self {
+        Self {
+            inner: query,
+            ..Default::default()
+        }
+    }
+
     pub fn into_bytes(&self) -> Vec<u8> {
         self.inner.0.clone()
     }
