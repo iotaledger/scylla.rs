@@ -462,6 +462,7 @@ impl QueryBuilder<QueryBuild> {
     }
 }
 
+#[derive(Default)]
 /// The query frame structure.
 pub struct Query(pub Vec<u8>);
 

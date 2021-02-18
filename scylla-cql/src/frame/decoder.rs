@@ -17,7 +17,7 @@ use std::{
 };
 
 /// RowsDecoder trait to decode the rows result from scylla
-pub trait RowsDecoder<V> {
+pub trait RowsDecoder<K, V> {
     /// Try to decode the provided Decoder with an expected Rows result
     fn try_decode(decoder: Decoder) -> Result<Option<V>, error::CqlError>;
     /// Decode the provided Decoder with an deterministic Rows result
