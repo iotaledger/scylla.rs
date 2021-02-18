@@ -30,15 +30,24 @@ impl Compression for Lz4 {
         if buffer[1] & COMPRESSION == COMPRESSION {
             let compressed_body_length = i32::from_be_bytes(buffer[5..9].try_into().unwrap()) as usize;
             // Decompress the body by lz4
-            let decompressed_buffer: Vec<u8> =
-                lz4::block::decompress(&buffer[13..(13 + compressed_body_length)], None).unwrap();
-            // adjust the length to equal the uncompressed length
-            buffer.copy_within(9..13, 5);
-            // reduce the frame to be a header only
-            buffer.truncate(9);
-            // Extend the decompressed body
-            buffer.extend(&decompressed_buffer);
-            buffer
+            match lz4::block::decompress(&buffer[9..(9 + compressed_body_length)], None) {
+                Ok(decompressed_buffer) => {
+                    // adjust the length to equal the uncompressed length
+                    buffer.copy_within(9..13, 5);
+                    // reduce the frame to be a header only
+                    buffer.truncate(9);
+                    // Extend the decompressed body
+                    buffer.extend(&decompressed_buffer);
+                    buffer
+                }
+                Err(_) => {
+                    // return only the header as this is mostly a result of header only
+                    // adjust the length to equal the uncompressed length
+                    buffer.copy_within(9..13, 5);
+                    buffer.truncate(9);
+                    buffer
+                }
+            }
         } else {
             // return the buffer as it's
             buffer

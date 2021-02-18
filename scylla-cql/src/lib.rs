@@ -15,3 +15,6 @@ pub use connection::*;
 pub use frame::*;
 
 pub use murmur3::murmur3_cassandra_x64_128;
+
+/// expose MyCompression
+pub use compression::MyCompression;

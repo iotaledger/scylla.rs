@@ -7,10 +7,8 @@ use scylla_cql::RowsDecoder;
 #[async_trait::async_trait]
 /// `Select<K, V>` trait extends the `keyspace` with `select` operation for the (key: K, value: V);
 /// therefore, it should be explicitly implemented for the corresponding `Keyspace` with the correct SELECT CQL query.
-pub trait Select<K, V>: Keyspace {
+pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> {
     /// Selects the value associated with the key from the storage keyspace,
     /// and responde back using async callback to the worker.
-    async fn select<T>(&self, worker: Box<T>, key: &K)
-    where
-        T: RowsDecoder<K, V> + Worker;
+    async fn select<T: Worker>(&self, worker: Box<T>, key: &K);
 }

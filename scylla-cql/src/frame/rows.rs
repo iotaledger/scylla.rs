@@ -65,10 +65,17 @@ impl Metadata {
         self.paging_state.paging_state.take()
     }
 }
+
+/// Rows trait to decode the final result from scylla
+pub trait Rows: Iterator {
+    /// create new rows decoder struct
+    fn new(decoder: super::decoder::Decoder) -> Self;
+}
+
 #[macro_export]
 /// The rows macro implements the row decoder.
 macro_rules! rows {
-    (rows: $rows:ident {$( $field:ident:$type:ty ),*}, row: $row:ident {$( $col_field:ident: $col_type:ty,)*} ) => {
+    (rows: $rows:ident, row: $row:ident {$( $col_field:ident: $col_type:ty,)*}, row_into: $row_into:tt ) => {
         #[allow(dead_code)]
         /// The `rows` struct for processing each received row in ScyllaDB.
         pub struct $rows {
@@ -77,9 +84,6 @@ macro_rules! rows {
             remaining_rows_count: usize,
             metadata: Metadata,
             column_start: usize,
-            $(
-                $field: $type,
-            )*
         }
         /// It's the `row` struct
         pub struct $row {
@@ -89,7 +93,7 @@ macro_rules! rows {
         }
 
         impl Iterator for $rows {
-            type Item = $row;
+            type Item = $row_into;
             /// Note the row decoder is implemented in this `next` method.
             fn next(&mut self) -> Option<<Self as Iterator>::Item> {
                 if self.remaining_rows_count > 0 {
@@ -112,16 +116,16 @@ macro_rules! rows {
                             },
                         )*
                     };
-                    Some(row_struct)
+                    Some(row_struct.into())
                 } else {
                     None
                 }
             }
         }
 
-        impl $rows {
+        impl Rows for $rows {
             /// Create a new rows structure.
-            pub fn new(decoder: Decoder, $($field: $type,)*) -> Self {
+            fn new(decoder: Decoder) -> Self {
                 let metadata = decoder.metadata();
                 let rows_start = metadata.rows_start();
                 let column_start = rows_start+4;
@@ -132,9 +136,6 @@ macro_rules! rows {
                     rows_count: rows_count as usize,
                     remaining_rows_count: rows_count as usize,
                     column_start,
-                    $(
-                        $field,
-                    )*
                 }
             }
         }

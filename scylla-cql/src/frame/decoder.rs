@@ -19,20 +19,26 @@ use std::{
 /// RowsDecoder trait to decode the rows result from scylla
 pub trait RowsDecoder<K, V> {
     /// Try to decode the provided Decoder with an expected Rows result
-    fn try_decode(&mut self, decoder: Decoder) -> Result<Option<V>, error::CqlError>;
-    /// Decode the provided Decoder with an deterministic Rows result
-    fn decode(&mut self, decoder: Decoder) -> Option<V> {
-        self.try_decode(decoder).unwrap()
+    fn try_decode(decoder: Decoder) -> Result<Option<V>, error::CqlError>;
+    /// Decode the provided Decoder with deterministic Rows result
+    fn decode(decoder: Decoder) -> Option<V> {
+        Self::try_decode(decoder).unwrap()
     }
 }
 
 /// VoidDecoder trait to decode the VOID result from scylla
-pub trait VoidDecoder<K, V> {
+pub trait VoidDecoder {
     /// Try to decode the provided Decoder with an expected Void result
-    fn try_decode(&mut self, decoder: Decoder) -> Result<(), error::CqlError>;
+    fn try_decode(decoder: Decoder) -> Result<(), error::CqlError> {
+        if decoder.is_error() {
+            Err(decoder.get_error())
+        } else {
+            Ok(())
+        }
+    }
     /// Decode the provided Decoder with an deterministic Void result
-    fn decode(&mut self, decoder: Decoder) {
-        self.try_decode(decoder).unwrap()
+    fn decode(decoder: Decoder) {
+        Self::try_decode(decoder).unwrap()
     }
 }
 
@@ -78,6 +84,8 @@ pub trait Frame {
     fn is_error(&self) -> bool;
     /// Get the `CqlError`.
     fn get_error(&self) -> error::CqlError;
+    /// Get Void `()`
+    fn get_void(&self) -> Result<(), error::CqlError>;
     /// Check whether the error is `UNPREPARED`.
     fn is_unprepared(&self) -> bool;
     /// Check whether the error is `ALREADY_EXISTS.
@@ -265,6 +273,13 @@ impl Frame for Decoder {
     }
     fn get_error(&self) -> error::CqlError {
         error::CqlError::new(self)
+    }
+    fn get_void(&self) -> Result<(), error::CqlError> {
+        if self.is_void() {
+            Ok(())
+        } else {
+            Err(self.get_error())
+        }
     }
     fn is_unprepared(&self) -> bool {
         self.opcode() == opcode::ERROR && self.body_kind() == error::UNPREPARED

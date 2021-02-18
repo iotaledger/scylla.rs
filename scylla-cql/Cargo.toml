@@ -10,7 +10,7 @@ repository = "https://github.com/iotaledger/scylla.rs"
 [dependencies]
 
 rand = "0.7"
-lz4 = "1.23"
+lz4 = "1.23.2"
 snap = "1.0"
 socket2 = "0.3"
 port_scanner = "0.1.5"

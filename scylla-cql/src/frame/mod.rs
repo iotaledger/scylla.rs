@@ -36,5 +36,5 @@ pub use error::CqlError;
 pub use execute::Execute;
 pub use prepare::Prepare;
 pub use query::Query;
-pub use rows::Metadata;
+pub use rows::{Metadata, Rows};
 pub use std::convert::TryInto;

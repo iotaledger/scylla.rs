@@ -10,6 +10,7 @@ use crate::frame::{
     decoder::{Decoder, Frame},
     options::Options,
     query::Query,
+    rows::Rows,
     startup::Startup,
     supported::Supported,
 };
