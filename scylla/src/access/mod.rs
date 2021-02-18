@@ -9,7 +9,7 @@ pub mod update;
 
 use super::Worker;
 use keyspace::Keyspace;
-use scylla_cql::Query;
+use scylla_cql::{CqlError, Decoder, Frame, Query};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},

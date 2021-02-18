@@ -3,12 +3,13 @@
 
 use super::*;
 
-pub struct InsertQuery<V> {
+pub struct InsertQuery<S, V> {
     inner: Query,
+    keyspace: PhantomData<S>,
     val: PhantomData<V>,
 }
 
-impl<V> Deref for InsertQuery<V> {
+impl<S, V> Deref for InsertQuery<S, V> {
     type Target = Query;
 
     fn deref(&self) -> &Self::Target {
@@ -16,22 +17,34 @@ impl<V> Deref for InsertQuery<V> {
     }
 }
 
-impl<V> DerefMut for InsertQuery<V> {
+impl<S, V> DerefMut for InsertQuery<S, V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<V> InsertQuery<V> {
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.inner.0
+impl<S: Insert<V>, V> InsertQuery<S, V> {
+    pub fn into_bytes(&self) -> Vec<u8> {
+        self.inner.0.clone()
     }
 
-    pub fn into_inner(self) -> Query {
-        self.inner
+    pub fn take(&mut self) -> Query {
+        std::mem::take(&mut self.inner)
+    }
+
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
+        S::decode(bytes.into())
     }
 }
 
 pub trait Insert<V>: Keyspace {
-    fn insert(&self, value: &V) -> InsertQuery<V>;
+    fn insert(&self, value: &V) -> InsertQuery<Self, V>;
+
+    fn decode(decoder: Decoder) -> Result<(), CqlError> {
+        if decoder.is_error() {
+            Err(decoder.body().into())
+        } else {
+            Ok(())
+        }
+    }
 }

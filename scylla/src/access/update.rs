@@ -3,13 +3,14 @@
 
 use super::*;
 
-pub struct UpdateQuery<K, V> {
+pub struct UpdateQuery<S, K, V> {
     inner: Query,
+    keyspace: PhantomData<S>,
     key: PhantomData<K>,
     val: PhantomData<V>,
 }
 
-impl<K, V> Deref for UpdateQuery<K, V> {
+impl<S, K, V> Deref for UpdateQuery<S, K, V> {
     type Target = Query;
 
     fn deref(&self) -> &Self::Target {
@@ -17,22 +18,34 @@ impl<K, V> Deref for UpdateQuery<K, V> {
     }
 }
 
-impl<K, V> DerefMut for UpdateQuery<K, V> {
+impl<S, K, V> DerefMut for UpdateQuery<S, K, V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<K, V> UpdateQuery<K, V> {
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.inner.0
+impl<S: Update<K, V>, K, V> UpdateQuery<S, K, V> {
+    pub fn into_bytes(&self) -> Vec<u8> {
+        self.inner.0.clone()
     }
 
-    pub fn into_inner(self) -> Query {
-        self.inner
+    pub fn take(&mut self) -> Query {
+        std::mem::take(&mut self.inner)
+    }
+
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
+        S::decode(bytes.into())
     }
 }
 
 pub trait Update<K, V>: Keyspace {
-    fn update(&self, key: &K, value: &V) -> UpdateQuery<K, V>;
+    fn update(&self, key: &K, value: &V) -> UpdateQuery<Self, K, V>;
+
+    fn decode(decoder: Decoder) -> Result<(), CqlError> {
+        if decoder.is_error() {
+            Err(decoder.body().into())
+        } else {
+            Ok(())
+        }
+    }
 }

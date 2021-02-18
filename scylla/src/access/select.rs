@@ -1,8 +1,6 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use scylla_cql::{CqlError, Decoder};
-
 use super::*;
 
 pub struct SelectQuery<S, K, V> {
@@ -35,21 +33,13 @@ impl<S: Select<K, V>, K, V> SelectQuery<S, K, V> {
         std::mem::take(&mut self.inner)
     }
 
-    pub fn try_decode(bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
-        S::try_decode(bytes.into())
-    }
-
-    fn decode(bytes: Vec<u8>) -> Option<V> {
-        Self::try_decode(bytes).unwrap()
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
+        S::decode(bytes.into())
     }
 }
 
 pub trait Select<K, V>: Keyspace {
     fn select(&self, key: &K) -> SelectQuery<Self, K, V>;
 
-    fn try_decode(decoder: Decoder) -> Result<Option<V>, CqlError>;
-
-    fn decode(decoder: Decoder) -> Option<V> {
-        Self::try_decode(decoder).unwrap()
-    }
+    fn decode(decoder: Decoder) -> Result<Option<V>, CqlError>;
 }

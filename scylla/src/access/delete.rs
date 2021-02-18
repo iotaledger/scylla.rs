@@ -3,12 +3,13 @@
 
 use super::*;
 
-pub struct DeleteQuery<K> {
+pub struct DeleteQuery<S, K> {
     inner: Query,
+    keyspace: PhantomData<S>,
     key: PhantomData<K>,
 }
 
-impl<K> Deref for DeleteQuery<K> {
+impl<S, K> Deref for DeleteQuery<S, K> {
     type Target = Query;
 
     fn deref(&self) -> &Self::Target {
@@ -16,25 +17,34 @@ impl<K> Deref for DeleteQuery<K> {
     }
 }
 
-impl<K> DerefMut for DeleteQuery<K> {
+impl<S, K> DerefMut for DeleteQuery<S, K> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<K> DeleteQuery<K> {
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.inner.0
+impl<S: Delete<K>, K> DeleteQuery<S, K> {
+    pub fn into_bytes(&self) -> Vec<u8> {
+        self.inner.0.clone()
     }
 
-    pub fn into_inner(self) -> Query {
-        self.inner
+    pub fn take(&mut self) -> Query {
+        std::mem::take(&mut self.inner)
+    }
+
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
+        S::decode(bytes.into())
     }
 }
 
-/// `Delete<K, V>` trait extends the `keyspace` with `delete` operation for the (key: K, value: V);
-/// therefore, it should be explicitly implemented for the corresponding `Keyspace` with the correct DELETE CQL query.
 pub trait Delete<K>: Keyspace {
-    /// Delete
-    fn delete(&self, key: &K) -> DeleteQuery<K>;
+    fn delete(&self, key: &K) -> DeleteQuery<Self, K>;
+
+    fn decode(decoder: Decoder) -> Result<(), CqlError> {
+        if decoder.is_error() {
+            Err(decoder.body().into())
+        } else {
+            Ok(())
+        }
+    }
 }
