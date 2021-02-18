@@ -45,8 +45,8 @@ impl<S: Delete<K>, K> DeleteQuery<S, K> {
         self.inner.0.clone()
     }
 
-    pub fn take(&mut self) -> Query {
-        std::mem::take(&mut self.inner)
+    pub fn take(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.inner).0
     }
 
     pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
