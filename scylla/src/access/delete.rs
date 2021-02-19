@@ -9,11 +9,11 @@ pub struct DeleteValRequest<'a, S, K, V> {
 }
 
 pub trait GetDeleteValRequest<S, K> {
-    fn for_value_type<V>(&self) -> DeleteValRequest<S, K, V>;
+    fn to_remove<V>(&self) -> DeleteValRequest<S, K, V>;
 }
 
 impl<S: Keyspace, K> GetDeleteValRequest<S, K> for S {
-    fn for_value_type<V>(&self) -> DeleteValRequest<S, K, V> {
+    fn to_remove<V>(&self) -> DeleteValRequest<S, K, V> {
         DeleteValRequest {
             keyspace: self,
             _marker: PhantomData,

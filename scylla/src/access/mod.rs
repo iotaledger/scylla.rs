@@ -156,6 +156,6 @@ mod tests {
     #[test]
     fn test_delete() {
         let worker = TestWorker;
-        let res = Mainnet.for_value_type::<f32>().delete(&3).send_local(Box::new(worker));
+        let res = Mainnet.to_remove::<f32>().delete(&3).send_local(Box::new(worker));
     }
 }
