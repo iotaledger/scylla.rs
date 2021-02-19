@@ -17,13 +17,20 @@ impl<S: Insert<K, V> + Default, K, V> VoidRequest<S, K, V> {
             _marker: PhantomData,
         }
     }
-    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeVoid<S> {
+    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         S::send_local(self.token, self.inner.0, worker);
-        DecodeVoid::default()
+        DecodeResult {
+            inner: DecodeVoid::default(),
+            request_type: RequestType::Insert,
+        }
+
     }
-    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeVoid<S> {
+    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         S::send_global(self.token, self.inner.0, worker);
-        DecodeVoid::default()
+        DecodeResult {
+            inner: DecodeVoid::default(),
+            request_type: RequestType::Insert,
+        }
     }
 }
 
