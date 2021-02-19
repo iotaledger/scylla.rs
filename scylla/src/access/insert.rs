@@ -3,28 +3,31 @@
 
 use super::*;
 
-pub struct VoidRequest<S, K, V> {
+pub struct InsertRequest<'a, S, K, V> {
     token: i64,
     inner: Query,
-    _marker: PhantomData<(S, K, V)>,
+    keyspace: &'a S,
+    _marker: PhantomData<(K, V)>,
 }
 
-impl<S: Insert<K, V> + Default, K, V> VoidRequest<S, K, V> {
-    pub fn new(query: Query, token: i64) -> Self {
+impl<'a, S: Insert<'a, K, V> + Default, K, V> InsertRequest<'a, S, K, V> {
+    pub fn new(query: Query, token: i64, keyspace: &'a S) -> Self {
         Self {
             token,
             inner: query,
+            keyspace,
             _marker: PhantomData,
         }
     }
+
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         S::send_local(self.token, self.inner.0, worker);
         DecodeResult {
             inner: DecodeVoid::default(),
             request_type: RequestType::Insert,
         }
-
     }
+
     pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         S::send_global(self.token, self.inner.0, worker);
         DecodeResult {
@@ -40,6 +43,6 @@ impl<S: VoidDecoder> DecodeVoid<S> {
     }
 }
 
-pub trait Insert<K, V>: Keyspace + VoidDecoder {
-    fn insert(&self, key: &K, value: &V) -> VoidRequest<Self, K, V>;
+pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
+    fn insert(&'a self, key: &K, value: &V) -> InsertRequest<'a, Self, K, V>;
 }
