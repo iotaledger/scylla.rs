@@ -49,14 +49,11 @@ mod tests {
         update::Update,
     };
     use scylla_cql::{CqlError, Decoder, RowsDecoder, VoidDecoder};
-    use std::borrow::Cow;
 
     #[derive(Default)]
     struct Mainnet;
 
     impl Keyspace for Mainnet {
-        type Error = Cow<'static, str>;
-
         const NAME: &'static str = "Mainnet";
 
         fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
