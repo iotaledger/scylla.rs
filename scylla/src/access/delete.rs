@@ -3,14 +3,38 @@
 
 use super::*;
 
-pub struct DeleteRequest<'a, S, K> {
+pub struct DeleteValRequest<'a, S, K, V> {
+    keyspace: &'a S,
+    _marker: PhantomData<(K, V)>,
+}
+
+pub trait GetDeleteValRequest<S, K> {
+    fn for_value_type<V>(&self) -> DeleteValRequest<S, K, V>;
+}
+
+impl<S: Keyspace, K> GetDeleteValRequest<S, K> for S {
+    fn for_value_type<V>(&self) -> DeleteValRequest<S, K, V> {
+        DeleteValRequest {
+            keyspace: self,
+            _marker: PhantomData,
+        }
+    }
+}
+
+pub struct DeleteRequest<'a, S, K, V> {
     token: i64,
     inner: Query,
     keyspace: &'a S,
-    _marker: PhantomData<K>,
+    _marker: PhantomData<(K, V)>,
 }
 
-impl<'a, S: Delete<'a, K>, K> DeleteRequest<'a, S, K> {
+impl<'a, S: Delete<'a, K, V>, K, V> DeleteValRequest<'a, S, K, V> {
+    pub fn delete(&self, key: &'a K) -> DeleteRequest<S, K, V> {
+        S::delete(self.keyspace, key)
+    }
+}
+
+impl<'a, S: Delete<'a, K, V>, K, V> DeleteRequest<'a, S, K, V> {
     pub fn new(query: Query, token: i64, keyspace: &'a S) -> Self {
         Self {
             token,
@@ -37,6 +61,6 @@ impl<'a, S: Delete<'a, K>, K> DeleteRequest<'a, S, K> {
     }
 }
 
-pub trait Delete<'a, K>: Keyspace {
-    fn delete(&'a self, key: &K) -> DeleteRequest<'a, Self, K>;
+pub trait Delete<'a, K, V>: Keyspace {
+    fn delete(&'a self, key: &K) -> DeleteRequest<'a, Self, K, V>;
 }

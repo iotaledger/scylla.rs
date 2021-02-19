@@ -42,10 +42,10 @@ mod tests {
     use crate::Worker;
 
     use super::{
-        delete::Delete,
+        delete::{Delete, GetDeleteValRequest},
         insert::Insert,
         keyspace::Keyspace,
-        select::{GetRequest, Select, SelectRequest},
+        select::{GetSelectValRequest, Select, SelectRequest},
         update::Update,
     };
     use scylla_cql::{CqlError, Decoder, RowsDecoder, VoidDecoder};
@@ -74,6 +74,12 @@ mod tests {
         }
     }
 
+    impl<'a> Select<'a, u32, i32> for Mainnet {
+        fn select(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32> {
+            todo!()
+        }
+    }
+
     impl<'a> Insert<'a, u32, f32> for Mainnet {
         fn insert(&'a self, key: &u32, value: &f32) -> super::insert::InsertRequest<'a, Self, u32, f32> {
             todo!()
@@ -86,14 +92,26 @@ mod tests {
         }
     }
 
-    impl<'a> Delete<'a, u32> for Mainnet {
-        fn delete(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32> {
+    impl<'a> Delete<'a, u32, f32> for Mainnet {
+        fn delete(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, f32> {
+            todo!()
+        }
+    }
+
+    impl<'a> Delete<'a, u32, i32> for Mainnet {
+        fn delete(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, i32> {
             todo!()
         }
     }
 
     impl RowsDecoder<u32, f32> for Mainnet {
         fn try_decode(decoder: Decoder) -> Result<Option<f32>, CqlError> {
+            todo!()
+        }
+    }
+
+    impl RowsDecoder<u32, i32> for Mainnet {
+        fn try_decode(decoder: Decoder) -> Result<Option<i32>, CqlError> {
             todo!()
         }
     }
@@ -138,6 +156,6 @@ mod tests {
     #[test]
     fn test_delete() {
         let worker = TestWorker;
-        let res = Mainnet.delete(&3).send_local(Box::new(worker));
+        let res = Mainnet.for_value_type::<f32>().delete(&3).send_local(Box::new(worker));
     }
 }

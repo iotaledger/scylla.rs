@@ -3,18 +3,18 @@
 
 use super::*;
 
-pub struct Request<'a, S, K, V> {
+pub struct SelectValRequest<'a, S, K, V> {
     keyspace: &'a S,
     _marker: PhantomData<(K, V)>,
 }
 
-pub trait GetRequest<S, K> {
-    fn to_get<V>(&self) -> Request<S, K, V>;
+pub trait GetSelectValRequest<S, K> {
+    fn to_get<V>(&self) -> SelectValRequest<S, K, V>;
 }
 
-impl<S: Keyspace, K> GetRequest<S, K> for S {
-    fn to_get<V>(&self) -> Request<S, K, V> {
-        Request {
+impl<S: Keyspace, K> GetSelectValRequest<S, K> for S {
+    fn to_get<V>(&self) -> SelectValRequest<S, K, V> {
+        SelectValRequest {
             keyspace: self,
             _marker: PhantomData,
         }
@@ -28,7 +28,7 @@ pub struct SelectRequest<'a, S, K, V> {
     _marker: PhantomData<(K, V)>,
 }
 
-impl<'a, S: Select<'a, K, V>, K, V> Request<'a, S, K, V> {
+impl<'a, S: Select<'a, K, V>, K, V> SelectValRequest<'a, S, K, V> {
     pub fn select(&self, key: &'a K) -> SelectRequest<S, K, V> {
         S::select(self.keyspace, key)
     }
