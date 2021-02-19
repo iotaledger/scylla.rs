@@ -9,11 +9,8 @@ pub mod update;
 
 use super::Worker;
 use keyspace::Keyspace;
-use scylla_cql::{CqlError, Decoder, Frame, Query, RowsDecoder, VoidDecoder};
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use scylla_cql::{CqlError, Query, RowsDecoder, VoidDecoder};
+use std::marker::PhantomData;
 
 #[repr(u8)]
 #[derive(Clone)]

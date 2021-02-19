@@ -24,7 +24,7 @@ impl<'a, S: Delete<'a, K>, K> DeleteRequest<'a, S, K> {
         S::send_local(self.token, self.inner.0, worker);
         DecodeResult {
             inner: DecodeVoid { _marker: PhantomData },
-            request_type: RequestType::Update,
+            request_type: RequestType::Delete,
         }
     }
 
@@ -32,7 +32,7 @@ impl<'a, S: Delete<'a, K>, K> DeleteRequest<'a, S, K> {
         S::send_global(self.token, self.inner.0, worker);
         DecodeResult {
             inner: DecodeVoid { _marker: PhantomData },
-            request_type: RequestType::Update,
+            request_type: RequestType::Delete,
         }
     }
 }
