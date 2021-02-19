@@ -6,9 +6,22 @@ use crate::stage::ReporterEvent;
 use crate::worker::Worker;
 use scylla_cql::{Frame, RowsDecoder};
 
-/// Keyspace trait, almost marker
+/// Represents a Scylla Keyspace which holds a set of tables and
+/// queries on those tables.
+///
+/// ## Usage
+/// A keyspace can have predefined queries and functionality to
+/// decode the results they return. To make use of this, implement
+/// the following traits on a `Keyspace`:
+///
+/// - `RowsDecoder`
+/// - `VoidDecoder`
+/// - `Select`
+/// - `Update`
+/// - `Insert`
+/// - `Delete`
 pub trait Keyspace: Send + Sized + Sync {
-    /// name of the keyspace
+    /// Name of the keyspace
     const NAME: &'static str;
 
     /// Get the name of the keyspace as represented in the database
@@ -30,8 +43,8 @@ pub trait Keyspace: Send + Sized + Sync {
         Self::try_decode(decoder)
     }
     /// Send query to a random replica in the local datacenter;
-    fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
+    fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
     /// Send query to a random replica in any global datacenter;
-    fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
+    fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
     // TODO replication_refactor, strategy, options,etc.
 }

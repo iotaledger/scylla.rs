@@ -26,9 +26,21 @@ pub struct DecodeRows<S, K, V> {
     _marker: PhantomData<(S, K, V)>,
 }
 
+impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
+        S::try_decode(bytes.into())
+    }
+}
+
 #[derive(Copy, Clone, Default)]
 pub struct DecodeVoid<S> {
     _marker: PhantomData<S>,
+}
+
+impl<S: VoidDecoder> DecodeVoid<S> {
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
+        S::try_decode(bytes.into())
+    }
 }
 
 #[derive(Clone)]
@@ -42,13 +54,13 @@ mod tests {
     use crate::Worker;
 
     use super::{
-        delete::{Delete, GetDeleteValRequest},
-        insert::Insert,
+        delete::{Delete, GetDeleteRequest},
+        insert::{GetInsertRequest, Insert},
         keyspace::Keyspace,
-        select::{GetSelectValRequest, Select, SelectRequest},
-        update::Update,
+        select::{GetSelectRequest, Select, SelectRequest},
+        update::{GetUpdateRequest, Update},
     };
-    use scylla_cql::{CqlError, Decoder, RowsDecoder, VoidDecoder};
+    use scylla_cql::{CqlError, Decoder, Query, RowsDecoder, VoidDecoder};
 
     #[derive(Default)]
     struct Mainnet;
@@ -56,48 +68,56 @@ mod tests {
     impl Keyspace for Mainnet {
         const NAME: &'static str = "Mainnet";
 
-        fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
+        fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
             todo!()
         }
 
-        fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
+        fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
             todo!()
         }
     }
 
     impl<'a> Select<'a, u32, f32> for Mainnet {
-        fn select(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32> {
+        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32> {
             todo!()
         }
     }
 
     impl<'a> Select<'a, u32, i32> for Mainnet {
-        fn select(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32> {
+        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32> {
             todo!()
         }
     }
 
     impl<'a> Insert<'a, u32, f32> for Mainnet {
-        fn insert(&'a self, key: &u32, value: &f32) -> super::insert::InsertRequest<'a, Self, u32, f32> {
+        fn get_request(&'a self, key: &u32, value: &f32) -> super::insert::InsertRequest<'a, Self, u32, f32> {
             todo!()
         }
     }
 
     impl<'a> Update<'a, u32, f32> for Mainnet {
-        fn update(&'a self, key: &u32, value: &f32) -> super::update::UpdateRequest<'a, Self, u32, f32> {
+        fn get_request(&'a self, key: &u32, value: &f32) -> super::update::UpdateRequest<'a, Self, u32, f32> {
             todo!()
         }
     }
 
     impl<'a> Delete<'a, u32, f32> for Mainnet {
-        fn delete(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, f32> {
+        fn get_request(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, f32> {
             todo!()
         }
     }
 
     impl<'a> Delete<'a, u32, i32> for Mainnet {
-        fn delete(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, i32> {
-            todo!()
+        fn get_request(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, i32> {
+            let query = Query::new()
+                .statement(&format!("DELETE FROM {}.table WHERE key = ?", Mainnet::name()))
+                .consistency(scylla_cql::Consistency::One)
+                .value(key.to_string())
+                .build();
+
+            let token = rand::random::<i64>();
+
+            super::delete::DeleteRequest::new(query, token, self)
         }
     }
 
@@ -135,7 +155,7 @@ mod tests {
     #[test]
     fn test_select() {
         let worker = TestWorker;
-        let res = Mainnet.to_get::<f32>().select(&8).send_local(Box::new(worker));
+        let res = Mainnet.select::<f32>(&3).send_local(Box::new(worker));
     }
 
     #[test]
@@ -153,6 +173,6 @@ mod tests {
     #[test]
     fn test_delete() {
         let worker = TestWorker;
-        let res = Mainnet.to_remove::<f32>().delete(&3).send_local(Box::new(worker));
+        let res = Mainnet.delete::<f32>(&3).send_local(Box::new(worker));
     }
 }
