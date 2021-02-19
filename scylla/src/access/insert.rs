@@ -3,66 +3,36 @@
 
 use super::*;
 
-#[derive(Clone)]
-pub struct InsertQuery<S, V> {
+pub struct VoidRequest<S, K, V> {
+    token: i64,
     inner: Query,
-    keyspace: PhantomData<S>,
-    val: PhantomData<V>,
+    _marker: PhantomData<(S, K, V)>,
 }
 
-impl<S, V> Default for InsertQuery<S, V> {
-    fn default() -> Self {
+impl<S: Insert<K, V> + Default, K, V> VoidRequest<S, K, V> {
+    pub fn new(query: Query, token: i64) -> Self {
         Self {
-            inner: Query::default(),
-            keyspace: PhantomData::default(),
-            val: PhantomData::default(),
-        }
-    }
-}
-
-impl<S, V> Deref for InsertQuery<S, V> {
-    type Target = Query;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<S, V> DerefMut for InsertQuery<S, V> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl<S: Insert<V>, V> InsertQuery<S, V> {
-    pub fn new(query: Query) -> Self {
-        Self {
+            token,
             inner: query,
-            ..Default::default()
+            _marker: PhantomData,
         }
     }
-
-    pub fn into_bytes(&self) -> Vec<u8> {
-        self.inner.0.clone()
+    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeVoid<S> {
+        S::send_local(self.token, self.inner.0, worker);
+        DecodeVoid::default()
     }
-
-    pub fn take(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.inner).0
-    }
-
-    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
-        S::decode(bytes.into())
+    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeVoid<S> {
+        S::send_global(self.token, self.inner.0, worker);
+        DecodeVoid::default()
     }
 }
 
-pub trait Insert<V>: Keyspace {
-    fn insert(&self, value: &V) -> InsertQuery<Self, V>;
-
-    fn decode(decoder: Decoder) -> Result<(), CqlError> {
-        if decoder.is_error() {
-            Err(decoder.body().into())
-        } else {
-            Ok(())
-        }
+impl<S: VoidDecoder> DecodeVoid<S> {
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
+        S::try_decode(bytes.into())
     }
+}
+
+pub trait Insert<K, V>: Keyspace + VoidDecoder {
+    fn insert(&self, key: &K, value: &V) -> VoidRequest<Self, K, V>;
 }

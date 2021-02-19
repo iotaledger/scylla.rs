@@ -3,62 +3,42 @@
 
 use super::*;
 
-#[derive(Clone)]
-pub struct SelectQuery<S, K, V> {
+pub struct SelectRequest<S, K, V> {
+    token: i64,
     inner: Query,
-    keyspace: PhantomData<S>,
-    key: PhantomData<K>,
-    val: PhantomData<V>,
+    _marker: PhantomData<(S, K, V)>,
 }
 
-impl<S, K, V> Default for SelectQuery<S, K, V> {
-    fn default() -> Self {
+impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
+    pub fn new(query: Query, token: i64) -> Self {
         Self {
-            inner: Query::default(),
-            keyspace: PhantomData::default(),
-            key: PhantomData::default(),
-            val: PhantomData::default(),
-        }
-    }
-}
-
-impl<S, K, V> Deref for SelectQuery<S, K, V> {
-    type Target = Query;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<S, K, V> DerefMut for SelectQuery<S, K, V> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl<S: Select<K, V>, K, V> SelectQuery<S, K, V> {
-    pub fn new(query: Query) -> Self {
-        Self {
+            token,
             inner: query,
-            ..Default::default()
+            _marker: PhantomData,
         }
     }
-
-    pub fn into_bytes(&self) -> Vec<u8> {
-        self.inner.0.clone()
+    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
+        S::send_local(self.token, self.inner.0, worker);
+        DecodeResult {
+            inner: DecodeRows::<S, K, V> {_marker: PhantomData},
+            request_type: RequestType::Select,
+        }
     }
-
-    pub fn take(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.inner).0
-    }
-
-    pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
-        S::decode(bytes.into())
+    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
+        S::send_global(self.token, self.inner.0, worker);
+        DecodeResult {
+            inner: DecodeRows::<S, K, V> {_marker: PhantomData},
+            request_type: RequestType::Select,
+        }
     }
 }
 
-pub trait Select<K, V>: Keyspace {
-    fn select(&self, key: &K) -> SelectQuery<Self, K, V>;
+impl<S: Select<K, V>, K, V> DecodeRows<S, K, V> {
+    pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
+        S::try_decode(bytes.into())
+    }
+}
 
-    fn decode(decoder: Decoder) -> Result<Option<V>, CqlError>;
+pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> {
+    fn select(&self, key: &K) -> SelectRequest<Self, K, V>;
 }
