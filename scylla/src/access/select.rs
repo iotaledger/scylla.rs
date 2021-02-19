@@ -9,8 +9,7 @@ use super::*;
 /// ## Example
 /// ```
 /// let res = keyspace // A Scylla keyspace
-///     .to_get::<MyValueType>() // Specify that we will be returning a ValueType record
-///     .select(key) // Get the Select Request
+///     .select::<MyValueType>(key) // Get the Select Request by specifying the return Value type
 ///     .send_local(worker) // Send the request to the Ring
 /// ```
 pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {

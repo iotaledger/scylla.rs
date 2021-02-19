@@ -9,8 +9,7 @@ use super::*;
 /// ## Example
 /// ```
 /// let res = keyspace // A Scylla keyspace
-///     .to_remove::<MyValueType>() // Specify that we will be deleting a ValueType record
-///     .delete(key) // Get the Delete Request
+///     .delete::<MyValueType>(key) // Get the Delete Request by specifying the Value type
 ///     .send_local(worker) // Send the request to the Ring
 /// ```
 pub trait Delete<'a, K, V>: Keyspace {
