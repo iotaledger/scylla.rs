@@ -10,7 +10,7 @@ pub mod update;
 use super::Worker;
 use keyspace::Keyspace;
 use scylla_cql::{CqlError, Query, RowsDecoder, VoidDecoder};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, ops::Deref};
 
 #[repr(u8)]
 #[derive(Clone)]
@@ -47,6 +47,14 @@ impl<S: VoidDecoder> DecodeVoid<S> {
 pub struct DecodeResult<T> {
     inner: T,
     request_type: RequestType,
+}
+
+impl<T> Deref for DecodeResult<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 mod tests {
