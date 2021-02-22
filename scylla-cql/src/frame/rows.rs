@@ -74,16 +74,85 @@ pub trait Rows: Iterator {
 
 #[macro_export]
 /// The rows macro implements the row decoder.
-macro_rules! rows {
-    (rows: $rows:ident, row: $row:ident {$( $col_field:ident: $col_type:ty,)*}, row_into: $row_into:tt ) => {
+macro_rules! simple_rows {
+    (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ty, row_into: $row_into:ty $(,)? ) => {
         #[allow(dead_code)]
+        #[allow(unused_parens)]
         /// The `rows` struct for processing each received row in ScyllaDB.
-        pub struct $rows {
+        pub struct $rows$(<$($t),+>)? {
             decoder: Decoder,
             rows_count: usize,
             remaining_rows_count: usize,
             metadata: Metadata,
             column_start: usize,
+            $(_marker: PhantomData<($($t),+)>,)?
+        }
+
+        impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
+            type Item = $row_into;
+            /// Note the row decoder is implemented in this `next` method.
+            fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+                if self.remaining_rows_count > 0 {
+                    self.remaining_rows_count -= 1;
+                    let length = i32::from_be_bytes(
+                        self.decoder.buffer_as_ref()[self.column_start..][..4]
+                            .try_into()
+                            .unwrap(),
+                    );
+                    self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
+                    if length > 0 {
+                        let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
+                        // update the next column_start to start from next column
+                        self.column_start += (length as usize);
+                        Some(<$row>::decode(col_slice).into())
+                    } else {
+                        Some(<$row>::decode(&[]).into())
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+
+        #[allow(unused_parens)]
+        impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
+            /// Create a new rows structure.
+            fn new(decoder: Decoder) -> Self {
+                let metadata = decoder.metadata();
+                let rows_start = metadata.rows_start();
+                let column_start = rows_start + 4;
+                let rows_count = i32::from_be_bytes(
+                    decoder.buffer_as_ref()[rows_start..column_start]
+                        .try_into()
+                        .unwrap(),
+                );
+                Self {
+                    decoder,
+                    metadata,
+                    rows_count: rows_count as usize,
+                    remaining_rows_count: rows_count as usize,
+                    column_start,
+                    $(_marker: PhantomData::<($($t),+)>,)?
+                }
+            }
+        }
+    };
+}
+
+#[macro_export]
+/// The rows macro implements the row decoder.
+macro_rules! rows {
+    (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ident {$( $col_field:ident: $col_type:ty),* $(,)?}, row_into: $row_into:ty $(,)? ) => {
+        #[allow(dead_code)]
+        #[allow(unused_parens)]
+        /// The `rows` struct for processing each received row in ScyllaDB.
+        pub struct $rows$(<$($t),+>)? {
+            decoder: Decoder,
+            rows_count: usize,
+            remaining_rows_count: usize,
+            metadata: Metadata,
+            column_start: usize,
+            $(_marker: PhantomData<($($t),+)>,)?
         }
         /// It's the `row` struct
         pub struct $row {
@@ -92,7 +161,7 @@ macro_rules! rows {
             )*
         }
 
-        impl Iterator for $rows {
+        impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
             type Item = $row_into;
             /// Note the row decoder is implemented in this `next` method.
             fn next(&mut self) -> Option<<Self as Iterator>::Item> {
@@ -123,7 +192,8 @@ macro_rules! rows {
             }
         }
 
-        impl Rows for $rows {
+        #[allow(unused_parens)]
+        impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
             /// Create a new rows structure.
             fn new(decoder: Decoder) -> Self {
                 let metadata = decoder.metadata();
@@ -136,6 +206,7 @@ macro_rules! rows {
                     rows_count: rows_count as usize,
                     remaining_rows_count: rows_count as usize,
                     column_start,
+                    $(_marker: PhantomData::<($($t),+)>,)?
                 }
             }
         }
