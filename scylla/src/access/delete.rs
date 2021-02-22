@@ -70,6 +70,7 @@ impl<'a, S: Delete<'a, K, V>, K, V> DeleteRequest<'a, S, K, V> {
         }
     }
 
+    /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         self.keyspace.send_local(self.token, self.inner.0, worker);
         DecodeResult {
@@ -78,6 +79,7 @@ impl<'a, S: Delete<'a, K, V>, K, V> DeleteRequest<'a, S, K, V> {
         }
     }
 
+    /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         self.keyspace.send_global(self.token, self.inner.0, worker);
         DecodeResult {

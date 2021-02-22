@@ -1,10 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ring::Ring;
-use crate::stage::ReporterEvent;
 use crate::worker::Worker;
-use scylla_cql::{Frame, RowsDecoder};
 
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.

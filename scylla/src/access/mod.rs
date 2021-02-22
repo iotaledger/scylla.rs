@@ -1,10 +1,25 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+/// Provides the `Delete` trait which can be implemented to
+/// define delete queries for Key / Value pairs and how
+/// they are decoded
 pub mod delete;
+/// Provides the `Insert` trait which can be implemented to
+/// define insert queries for Key / Value pairs and how
+/// they are decoded
 pub mod insert;
+/// Provides the `Keyspace` trait which defines a scylla
+/// keyspace. Structs that impl this trait should also impl
+/// required query and decoder traits.
 pub mod keyspace;
+/// Provides the `Select` trait which can be implemented to
+/// define select queries for Key / Value pairs and how
+/// they are decoded
 pub mod select;
+/// Provides the `Update` trait which can be implemented to
+/// define update queries for Key / Value pairs and how
+/// they are decoded
 pub mod update;
 
 use super::Worker;
@@ -21,28 +36,39 @@ enum RequestType {
     Select = 3,
 }
 
+/// A marker struct which holds types used for a query
+/// so that it may be decoded via `RowsDecoder` later
 #[derive(Clone, Copy, Default)]
 pub struct DecodeRows<S, K, V> {
     _marker: PhantomData<(S, K, V)>,
 }
 
 impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
+    /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
         S::try_decode(bytes.into())
     }
 }
 
+/// A marker struct which holds the keyspace type
+/// so that it may be decoded (checked for errors)
+/// via `VoidDecoder` later
 #[derive(Copy, Clone, Default)]
 pub struct DecodeVoid<S> {
     _marker: PhantomData<S>,
 }
 
 impl<S: VoidDecoder> DecodeVoid<S> {
+    /// Decode a result payload using the `VoidDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
         S::try_decode(bytes.into())
     }
 }
 
+/// A synchronous marker type returned when sending
+/// a query to the `Ring`. Provides the request's type
+/// as well as an appropriate decoder which can be used
+/// once the response is received.
 #[derive(Clone)]
 pub struct DecodeResult<T> {
     inner: T,
