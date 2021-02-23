@@ -13,28 +13,20 @@ use super::*;
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
 pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
-    /// Create your delete statement here.
-    ///
-    /// ## Examples
-    /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
-    ///     "DELETE FROM keyspace.table WHERE key = ?".into()
-    /// }
-    /// ```
-    /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
-    ///     format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
-    /// }
-    /// ```
-    fn statement(&'a self) -> Cow<'static, str>;
-
+    /// Hardcode your delete/prepare statement here.
+    const DELETE_STATEMENT: &'static str;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(self.statement().as_bytes()))
+    const DELETE_ID: [u8; 16] = md5::compute_hash(Self::DELETE_STATEMENT.as_bytes());
+    /// Get the cql statement
+    fn statement(&'a self) -> &'static str {
+        Self::DELETE_STATEMENT
     }
-
+    /// Get the prepared md5 id
+    fn id(&'a self) -> [u8; 16] {
+        Self::DELETE_ID
+    }
     /// Construct your delete query here and use it to create a
     /// `DeleteRequest`.
     /// ## Examples
@@ -134,6 +126,7 @@ impl<'a, S: Delete<'a, K, V>, K, V> DeleteRequest<'a, S, K, V> {
         DecodeResult {
             inner: DecodeVoid { _marker: PhantomData },
             request_type: RequestType::Delete,
+            cql: S::DELETE_STATEMENT,
         }
     }
 
@@ -143,6 +136,7 @@ impl<'a, S: Delete<'a, K, V>, K, V> DeleteRequest<'a, S, K, V> {
         DecodeResult {
             inner: DecodeVoid { _marker: PhantomData },
             request_type: RequestType::Delete,
+            cql: S::DELETE_STATEMENT,
         }
     }
 }

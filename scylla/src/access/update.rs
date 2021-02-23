@@ -13,28 +13,20 @@ use super::*;
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
 pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
-    /// Create your update statement here.
-    ///
-    /// ## Examples
-    /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
-    ///     "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
-    /// }
-    /// ```
-    /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
-    ///     format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
-    /// }
-    /// ```
-    fn statement(&'a self) -> Cow<'static, str>;
-
+    /// Hardcode your update/prepare statement here.
+    const UPDATE_STATEMENT: &'static str;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(self.statement().as_bytes()))
+    const UPDATE_ID: [u8; 16] = md5::compute_hash(Self::UPDATE_STATEMENT.as_bytes());
+    /// Get the cql statement
+    fn statement(&'a self) -> &'static str {
+        Self::UPDATE_STATEMENT
     }
-
+    /// Get the preapred md5 id
+    fn id(&'a self) -> [u8; 16] {
+        Self::UPDATE_ID
+    }
     /// Construct your update query here and use it to create an
     /// `UpdateRequest`.
     ///
@@ -46,7 +38,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Update<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Update::statement(self))
+    ///         .statement(&Self::STATEMENT)
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(value.val1.to_string())
     ///         .value(value.val2.to_string())
@@ -65,7 +57,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Update<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Update::get_prepared_hash(self))
+    ///         .id(&Self::ID)
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(value.val1.to_string())
     ///         .value(value.val2.to_string())
@@ -138,6 +130,7 @@ impl<'a, S: Update<'a, K, V>, K, V> UpdateRequest<'a, S, K, V> {
         DecodeResult {
             inner: DecodeVoid { _marker: PhantomData },
             request_type: RequestType::Update,
+            cql: S::UPDATE_STATEMENT,
         }
     }
 
@@ -147,6 +140,7 @@ impl<'a, S: Update<'a, K, V>, K, V> UpdateRequest<'a, S, K, V> {
         DecodeResult {
             inner: DecodeVoid { _marker: PhantomData },
             request_type: RequestType::Update,
+            cql: S::UPDATE_STATEMENT,
         }
     }
 }
