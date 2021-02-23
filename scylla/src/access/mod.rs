@@ -183,7 +183,7 @@ mod tests {
     }
 
     impl<'a> Update<'a, u32, f32> for Mainnet {
-        const UPDATE_STATEMENT: &'static str = "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?";
+        const UPDATE_STATEMENT: &'static str = "UPDATE mainnet.table SET val1 = ?, val2 = ? WHERE key = ?";
 
         fn get_request(&'a self, key: &u32, value: &f32) -> UpdateRequest<'a, Self, u32, f32>
         where
