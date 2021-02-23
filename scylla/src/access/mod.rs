@@ -24,16 +24,27 @@ pub mod update;
 
 use super::Worker;
 use keyspace::Keyspace;
-use scylla_cql::{CqlError, Query, RowsDecoder, VoidDecoder};
-use std::{marker::PhantomData, ops::Deref};
+use scylla_cql::{CqlError, Execute, Query, RowsDecoder, VoidDecoder};
+use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
 #[repr(u8)]
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 enum RequestType {
     Insert = 0,
     Update = 1,
     Delete = 2,
     Select = 3,
+}
+
+/// A query type which indicates whether the statement
+/// should be used dynamically or via its MD5 hash
+#[repr(u8)]
+#[derive(Copy, Clone)]
+pub enum QueryType {
+    /// A dynamic statement
+    Dynamic = 0,
+    /// A prepared statement
+    Prepared = 1,
 }
 
 /// A marker struct which holds types used for a query
@@ -84,17 +95,16 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
-
-    use crate::Worker;
-
+    #[allow(unused_imports)]
     use super::{
-        delete::{Delete, GetDeleteRequest},
-        insert::{GetInsertRequest, Insert},
+        delete::{Delete, DeleteRequest, GetDeleteRequest},
+        insert::{GetInsertRequest, Insert, InsertRequest},
         keyspace::Keyspace,
         select::{GetSelectRequest, Select, SelectRequest},
-        update::{GetUpdateRequest, Update},
+        update::{GetUpdateRequest, Update, UpdateRequest},
     };
-    use scylla_cql::{CqlError, Decoder, Query, RowsDecoder, VoidDecoder};
+    use crate::Worker;
+    use scylla_cql::{CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
 
     #[derive(Default)]
     struct Mainnet;
@@ -112,46 +122,121 @@ mod tests {
     }
 
     impl<'a> Select<'a, u32, f32> for Mainnet {
-        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32> {
-            todo!()
+        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+            "SELECT * FROM keyspace.table WHERE key = ?".into()
+        }
+
+        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32>
+        where
+            Self: Select<'a, u32, f32>,
+        {
+            let query = Query::new()
+                .statement(&Select::statement(self))
+                .consistency(scylla_cql::Consistency::One)
+                .value(key.to_string())
+                .build();
+            let token = rand::random::<i64>();
+
+            SelectRequest::from_query(query, token, self)
         }
     }
 
     impl<'a> Select<'a, u32, i32> for Mainnet {
-        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32> {
-            todo!()
+        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+            format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
+        }
+
+        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32>
+        where
+            Self: Select<'a, u32, i32>,
+        {
+            let prepared_cql = Execute::new()
+                .id(&Select::get_prepared_hash(self))
+                .consistency(scylla_cql::Consistency::One)
+                .value(key.to_string())
+                .build();
+            let token = rand::random::<i64>();
+            SelectRequest::from_prepared(prepared_cql, token, self)
         }
     }
 
     impl<'a> Insert<'a, u32, f32> for Mainnet {
-        fn get_request(&'a self, key: &u32, value: &f32) -> super::insert::InsertRequest<'a, Self, u32, f32> {
-            todo!()
+        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
+        }
+
+        fn get_request(&'a self, key: &u32, value: &f32) -> InsertRequest<'a, Self, u32, f32>
+        where
+            Self: Insert<'a, u32, f32>,
+        {
+            let query = Query::new()
+                .statement(&Insert::statement(self))
+                .consistency(scylla_cql::Consistency::One)
+                .value(key.to_string())
+                .value(value.to_string())
+                .value(value.to_string())
+                .build();
+            let token = rand::random::<i64>();
+            InsertRequest::from_query(query, token, self)
         }
     }
 
     impl<'a> Update<'a, u32, f32> for Mainnet {
-        fn get_request(&'a self, key: &u32, value: &f32) -> super::update::UpdateRequest<'a, Self, u32, f32> {
-            todo!()
+        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
+        }
+
+        fn get_request(&'a self, key: &u32, value: &f32) -> UpdateRequest<'a, Self, u32, f32>
+        where
+            Self: Update<'a, u32, f32>,
+        {
+            let query = Query::new()
+                .statement(&Update::statement(self))
+                .consistency(scylla_cql::Consistency::One)
+                .value(value.to_string())
+                .value(value.to_string())
+                .value(key.to_string())
+                .build();
+            let token = rand::random::<i64>();
+            UpdateRequest::from_query(query, token, self)
         }
     }
 
     impl<'a> Delete<'a, u32, f32> for Mainnet {
-        fn get_request(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, f32> {
-            todo!()
+        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+            "DELETE FROM keyspace.table WHERE key = ?".into()
+        }
+
+        fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, f32>
+        where
+            Self: Delete<'a, u32, f32>,
+        {
+            let query = Query::new()
+                .statement(&Delete::statement(self))
+                .consistency(scylla_cql::Consistency::One)
+                .value(key.to_string())
+                .build();
+            let token = rand::random::<i64>();
+            DeleteRequest::from_query(query, token, self)
         }
     }
 
     impl<'a> Delete<'a, u32, i32> for Mainnet {
-        fn get_request(&'a self, key: &u32) -> super::delete::DeleteRequest<'a, Self, u32, i32> {
-            let query = Query::new()
-                .statement(&format!("DELETE FROM {}.table WHERE key = ?", Mainnet::name()))
+        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+            format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
+        }
+
+        fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, i32>
+        where
+            Self: Delete<'a, u32, i32>,
+        {
+            let prepared_cql = Execute::new()
+                .id(&Delete::get_prepared_hash(self))
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
-
             let token = rand::random::<i64>();
-
-            super::delete::DeleteRequest::new(query, token, self)
+            DeleteRequest::from_prepared(prepared_cql, token, self)
         }
     }
 
@@ -186,25 +271,25 @@ mod tests {
         }
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn test_select() {
         let worker = TestWorker;
         let res = Mainnet.select::<f32>(&3).send_local(Box::new(worker));
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn test_insert() {
         let worker = TestWorker;
         let res = Mainnet.insert(&3, &8.0).send_local(Box::new(worker));
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn test_update() {
         let worker = TestWorker;
         let res = Mainnet.update(&3, &8.0).send_local(Box::new(worker));
     }
 
-    #[test]
+    #[allow(dead_code)]
     fn test_delete() {
         let worker = TestWorker;
         let res = Mainnet.delete::<f32>(&3).send_local(Box::new(worker));
