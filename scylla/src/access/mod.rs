@@ -4,28 +4,36 @@
 /// Provides the `Delete` trait which can be implemented to
 /// define delete queries for Key / Value pairs and how
 /// they are decoded
-pub mod delete;
+pub(crate) mod delete;
 /// Provides the `Insert` trait which can be implemented to
 /// define insert queries for Key / Value pairs and how
 /// they are decoded
-pub mod insert;
+pub(crate) mod insert;
 /// Provides the `Keyspace` trait which defines a scylla
 /// keyspace. Structs that impl this trait should also impl
 /// required query and decoder traits.
-pub mod keyspace;
+pub(crate) mod keyspace;
 /// Provides the `Select` trait which can be implemented to
 /// define select queries for Key / Value pairs and how
 /// they are decoded
-pub mod select;
+pub(crate) mod select;
 /// Provides the `Update` trait which can be implemented to
 /// define update queries for Key / Value pairs and how
 /// they are decoded
-pub mod update;
+pub(crate) mod update;
 
-use super::Worker;
-use keyspace::Keyspace;
-use scylla_cql::{CqlError, Execute, Query, RowsDecoder, VoidDecoder};
+pub use super::Worker;
+pub use keyspace::Keyspace;
+pub use select::*;
+pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
+pub use insert::{Insert, InsertRequest, GetInsertRequest};
+pub use update::{Update, UpdateRequest, GetUpdateRequest};
+
+/// alias to cql traits and types
+pub use scylla_cql::{CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
+
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
+
 
 #[repr(u8)]
 #[derive(Copy, Clone)]
@@ -95,18 +103,7 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
-    use std::borrow::Cow;
-
-    #[allow(unused_imports)]
-    use super::{
-        delete::{Delete, DeleteRequest, GetDeleteRequest},
-        insert::{GetInsertRequest, Insert, InsertRequest},
-        keyspace::Keyspace,
-        select::{GetSelectRequest, Select, SelectRequest},
-        update::{GetUpdateRequest, Update, UpdateRequest},
-    };
-    use crate::Worker;
-    use scylla_cql::{CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
+    use super::*;
 
     #[derive(Default)]
     struct Mainnet;
