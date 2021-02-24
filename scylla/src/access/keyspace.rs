@@ -46,3 +46,9 @@ pub trait Keyspace: Send + Sized + Sync {
     fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
     // TODO replication_refactor, strategy, options,etc.
 }
+
+pub trait StatementsStore {
+    fn init();
+}
+
+pub trait GetStatementsStore {}

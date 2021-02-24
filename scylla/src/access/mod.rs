@@ -23,17 +23,16 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 pub use super::Worker;
-pub use keyspace::Keyspace;
-pub use select::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
-pub use insert::{Insert, InsertRequest, GetInsertRequest};
-pub use update::{Update, UpdateRequest, GetUpdateRequest};
+pub use insert::{GetInsertRequest, Insert, InsertRequest};
+pub use keyspace::Keyspace;
+pub use select::{GetSelectRequest, Select, SelectRequest};
+pub use update::{GetUpdateRequest, Update, UpdateRequest};
 
 /// alias to cql traits and types
 pub use scylla_cql::{CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
 
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
-
 
 #[repr(u8)]
 #[derive(Copy, Clone)]

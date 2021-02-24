@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .delete::<MyValueType>(key) // Get the Delete Request by specifying the Value type
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,12 +16,12 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// Create your delete statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn delete_statement() -> Cow<'static, str> {
     ///     "DELETE FROM keyspace.table WHERE key = ?".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn delete_statement() -> Cow<'static, str> {
     ///     format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
     /// }
@@ -39,7 +39,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// `DeleteRequest`.
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType) -> DeleteRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
@@ -56,7 +56,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType) -> DeleteRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Delete<'a, MyKeyType, MyValueType>,

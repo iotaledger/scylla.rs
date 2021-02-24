@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .insert(key, value) // Get the Insert Request
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,12 +16,12 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     /// Create your insert statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn insert_statement() -> Cow<'static, str> {
     ///     "INSERT INTO keyspace.table (key, val1, val2) VALUES (?,?,?)".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn insert_statement() -> Cow<'static, str> {
     ///     format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
     /// }
@@ -39,7 +39,7 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     ///
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Insert<'a, MyKeyType, MyValueType>,
@@ -58,11 +58,12 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Insert<'a, MyKeyType, MyValueType>,
     /// {
+    ///     use scylla::access::*;
     ///     let prepared_cql = Execute::new()
     ///         .id(&Self::select_id())
     ///         .consistency(scylla_cql::Consistency::One)

@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .update(key, value) // Get the Update Request
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,12 +16,12 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     /// Create your update statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn update_statement() -> Cow<'static, str> {
     ///     "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn update_statement() -> Cow<'static, str> {
     ///     format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
     /// }
@@ -38,7 +38,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Update<'a, MyKeyType, MyValueType>,
@@ -57,7 +57,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Update<'a, MyKeyType, MyValueType>,
