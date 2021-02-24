@@ -88,6 +88,18 @@ macro_rules! rows {
             $(_marker: PhantomData<($($t),+)>,)?
         }
 
+        impl$(<$($t),+>)? $rows$(<$($t),+>)? {
+            #[allow(dead_code)]
+            pub fn rows_count(&self) -> usize {
+                self.rows_count
+            }
+
+            #[allow(dead_code)]
+            pub fn remaining_rows_count(&self) -> usize {
+                self.remaining_rows_count
+            }
+        }
+
         #[allow(unused_parens)]
         impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
             /// Create a new rows structure.
