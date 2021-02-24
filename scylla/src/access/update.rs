@@ -17,22 +17,22 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///
     /// ## Examples
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn update_statement() -> Cow<'static, str> {
     ///     "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
     /// }
     /// ```
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn update_statement() -> Cow<'static, str> {
     ///     format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
     /// }
     /// ```
-    fn statement(&'a self) -> Cow<'static, str>;
+    fn update_statement() -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
     fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(self.statement().as_bytes()))
+        format!("{:x}", md5::compute(Self::update_statement().as_bytes()))
     }
 
     /// Construct your update query here and use it to create an
@@ -46,7 +46,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Update<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Update::statement(self))
+    ///         .statement(&Self::update_statement())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(value.val1.to_string())
     ///         .value(value.val2.to_string())

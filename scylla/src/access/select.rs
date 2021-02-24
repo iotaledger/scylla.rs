@@ -17,22 +17,22 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     ///
     /// ## Examples
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn select_statement() -> Cow<'static, str> {
     ///     "SELECT * FROM keyspace.table WHERE key = ?".into()
     /// }
     /// ```
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn select_statement() -> Cow<'static, str> {
     ///     format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
     /// }
     /// ```
-    fn statement(&'a self) -> Cow<'static, str>;
+    fn select_statement() -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
     fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(self.statement().as_bytes()))
+        format!("{:x}", md5::compute(Self::select_statement().as_bytes()))
     }
 
     /// Construct your select query here and use it to create a
@@ -46,7 +46,7 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     ///     Self: Select<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Select::statement(self))
+    ///         .statement(&Self::select_statement())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();

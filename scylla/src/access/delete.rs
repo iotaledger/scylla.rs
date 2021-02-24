@@ -17,22 +17,22 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///
     /// ## Examples
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn delete_statement() -> Cow<'static, str> {
     ///     "DELETE FROM keyspace.table WHERE key = ?".into()
     /// }
     /// ```
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn delete_statement() -> Cow<'static, str> {
     ///     format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
     /// }
     /// ```
-    fn statement(&'a self) -> Cow<'static, str>;
+    fn delete_statement() -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
     fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(self.statement().as_bytes()))
+        format!("{:x}", md5::compute(Self::delete_statement().as_bytes()))
     }
 
     /// Construct your delete query here and use it to create a
@@ -45,7 +45,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Delete::statement(self))
+    ///         .statement(&Self::delete_statement())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();

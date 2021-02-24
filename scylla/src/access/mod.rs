@@ -95,6 +95,8 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
+    use std::borrow::Cow;
+
     #[allow(unused_imports)]
     use super::{
         delete::{Delete, DeleteRequest, GetDeleteRequest},
@@ -122,7 +124,7 @@ mod tests {
     }
 
     impl<'a> Select<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+        fn select_statement() -> Cow<'static, str> {
             "SELECT * FROM keyspace.table WHERE key = ?".into()
         }
 
@@ -131,7 +133,7 @@ mod tests {
             Self: Select<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Select::statement(self))
+                .statement(&Self::select_statement())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
@@ -142,7 +144,7 @@ mod tests {
     }
 
     impl<'a> Select<'a, u32, i32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+        fn select_statement() -> Cow<'static, str> {
             format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
         }
 
@@ -161,7 +163,7 @@ mod tests {
     }
 
     impl<'a> Insert<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+        fn insert_statement() -> Cow<'static, str> {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
         }
 
@@ -170,7 +172,7 @@ mod tests {
             Self: Insert<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Insert::statement(self))
+                .statement(&Self::insert_statement())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .value(value.to_string())
@@ -182,7 +184,7 @@ mod tests {
     }
 
     impl<'a> Update<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+        fn update_statement() -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
         }
 
@@ -191,7 +193,7 @@ mod tests {
             Self: Update<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Update::statement(self))
+                .statement(&Self::update_statement())
                 .consistency(scylla_cql::Consistency::One)
                 .value(value.to_string())
                 .value(value.to_string())
@@ -203,7 +205,7 @@ mod tests {
     }
 
     impl<'a> Delete<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+        fn delete_statement() -> Cow<'static, str> {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
@@ -212,7 +214,7 @@ mod tests {
             Self: Delete<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Delete::statement(self))
+                .statement(&Self::delete_statement())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
@@ -222,7 +224,7 @@ mod tests {
     }
 
     impl<'a> Delete<'a, u32, i32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
+        fn delete_statement() -> Cow<'static, str> {
             format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
         }
 

@@ -17,22 +17,22 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     ///
     /// ## Examples
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn insert_statement() -> Cow<'static, str> {
     ///     "INSERT INTO keyspace.table (key, val1, val2) VALUES (?,?,?)".into()
     /// }
     /// ```
     /// ```
-    /// fn statement(&'a self) -> Cow<'static, str> {
+    /// fn insert_statement() -> Cow<'static, str> {
     ///     format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
     /// }
     /// ```
-    fn statement(&'a self) -> Cow<'static, str>;
+    fn insert_statement() -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
     fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(self.statement().as_bytes()))
+        format!("{:x}", md5::compute(Self::insert_statement().as_bytes()))
     }
 
     /// Construct your insert query here and use it to create an
@@ -46,7 +46,7 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Insert<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Insert::statement(self))
+    ///         .statement(&Self::insert_statement())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .value(value.val1.to_string())
