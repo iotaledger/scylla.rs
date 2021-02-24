@@ -74,8 +74,8 @@ pub trait Rows: Iterator {
 
 #[macro_export]
 /// The rows macro implements the row decoder.
-macro_rules! simple_rows {
-    (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ty, row_into: $row_into:ty $(,)? ) => {
+macro_rules! rows {
+    (@common_rows $rows:ident$(<$($t:ident),+>)?) => {
         #[allow(dead_code)]
         #[allow(unused_parens)]
         /// The `rows` struct for processing each received row in ScyllaDB.
@@ -87,6 +87,69 @@ macro_rules! simple_rows {
             column_start: usize,
             $(_marker: PhantomData<($($t),+)>,)?
         }
+
+        #[allow(unused_parens)]
+        impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
+            /// Create a new rows structure.
+            fn new(decoder: Decoder) -> Self {
+                let metadata = decoder.metadata();
+                let rows_start = metadata.rows_start();
+                let column_start = rows_start + 4;
+                let rows_count = i32::from_be_bytes(
+                    decoder.buffer_as_ref()[rows_start..column_start]
+                        .try_into()
+                        .unwrap(),
+                );
+                Self {
+                    decoder,
+                    metadata,
+                    rows_count: rows_count as usize,
+                    remaining_rows_count: rows_count as usize,
+                    column_start,
+                    $(_marker: PhantomData::<($($t),+)>,)?
+                }
+            }
+        }
+    };
+    (@common_row $row:ident {$( $col_field:ident: $col_type:ty),*}) => {
+        /// It's the `row` struct
+        pub struct $row {
+            $(
+                pub $col_field: $col_type,
+            )*
+        }
+    };
+    (single_row: $rows:ident$(<$($t:ident),+>)?, row: $row:ident {$( $col_field:ident: $col_type:ty),* $(,)?}, row_into: $row_into:ty $(,)? ) => {
+        rows!(@common_rows $rows$(<$($t),+>)?);
+
+        rows!(@common_row $row {$( $col_field: $col_type),*});
+
+        impl $rows {
+            pub fn get(&mut self) -> $row_into {
+                let row_struct = $row {
+                    $(
+                        $col_field: {
+                            let length = i32::from_be_bytes(
+                                self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
+                            );
+                            self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
+                            if length > 0 {
+                                let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
+                                // update the next column_start to start from next column
+                                self.column_start += (length as usize);
+                                <$col_type>::decode(col_slice)
+                            } else {
+                                <$col_type>::decode(&[])
+                            }
+                        },
+                    )*
+                };
+                row_struct.into()
+            }
+        }
+    };
+    (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ty, row_into: $row_into:ty $(,)? ) => {
+        rows!(@common_rows $rows$(<$($t),+>)?);
 
         impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
             type Item = $row_into;
@@ -113,53 +176,11 @@ macro_rules! simple_rows {
                 }
             }
         }
-
-        #[allow(unused_parens)]
-        impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
-            /// Create a new rows structure.
-            fn new(decoder: Decoder) -> Self {
-                let metadata = decoder.metadata();
-                let rows_start = metadata.rows_start();
-                let column_start = rows_start + 4;
-                let rows_count = i32::from_be_bytes(
-                    decoder.buffer_as_ref()[rows_start..column_start]
-                        .try_into()
-                        .unwrap(),
-                );
-                Self {
-                    decoder,
-                    metadata,
-                    rows_count: rows_count as usize,
-                    remaining_rows_count: rows_count as usize,
-                    column_start,
-                    $(_marker: PhantomData::<($($t),+)>,)?
-                }
-            }
-        }
     };
-}
-
-#[macro_export]
-/// The rows macro implements the row decoder.
-macro_rules! rows {
     (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ident {$( $col_field:ident: $col_type:ty),* $(,)?}, row_into: $row_into:ty $(,)? ) => {
-        #[allow(dead_code)]
-        #[allow(unused_parens)]
-        /// The `rows` struct for processing each received row in ScyllaDB.
-        pub struct $rows$(<$($t),+>)? {
-            decoder: Decoder,
-            rows_count: usize,
-            remaining_rows_count: usize,
-            metadata: Metadata,
-            column_start: usize,
-            $(_marker: PhantomData<($($t),+)>,)?
-        }
-        /// It's the `row` struct
-        pub struct $row {
-            $(
-                pub $col_field: $col_type,
-            )*
-        }
+        rows!(@common_rows $rows$(<$($t),+>)?);
+
+        rows!(@common_row $row {$( $col_field: $col_type),*});
 
         impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
             type Item = $row_into;
@@ -188,25 +209,6 @@ macro_rules! rows {
                     Some(row_struct.into())
                 } else {
                     None
-                }
-            }
-        }
-
-        #[allow(unused_parens)]
-        impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
-            /// Create a new rows structure.
-            fn new(decoder: Decoder) -> Self {
-                let metadata = decoder.metadata();
-                let rows_start = metadata.rows_start();
-                let column_start = rows_start+4;
-                let rows_count = i32::from_be_bytes(decoder.buffer_as_ref()[rows_start..column_start].try_into().unwrap());
-                Self{
-                    decoder,
-                    metadata,
-                    rows_count: rows_count as usize,
-                    remaining_rows_count: rows_count as usize,
-                    column_start,
-                    $(_marker: PhantomData::<($($t),+)>,)?
                 }
             }
         }
