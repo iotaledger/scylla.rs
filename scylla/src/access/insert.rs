@@ -31,10 +31,9 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::insert_statement().as_bytes()))
+    fn insert_id() -> [u8; 16] {
+        md5::compute(Self::insert_statement().as_bytes()).into()
     }
-
     /// Construct your insert query here and use it to create an
     /// `InsertRequest`.
     ///
@@ -65,7 +64,7 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Insert<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Insert::get_prepared_hash(self))
+    ///         .id(&Self::select_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .value(value.val1.to_string())

@@ -8,6 +8,7 @@ use super::{
     consistency::Consistency,
     encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
     opcode::BATCH,
+    MD5_BE_LENGTH,
 };
 use crate::compression::{Compression, MyCompression};
 
@@ -122,11 +123,11 @@ impl BatchBuilder<BatchStatementOrId> {
         }
     }
     /// Set the id in the Batch frame.
-    pub fn id(mut self, id: &str) -> BatchBuilder<BatchValues> {
+    pub fn id(mut self, id: &[u8; 16]) -> BatchBuilder<BatchValues> {
         // prepared query
         self.buffer.push(1);
-        self.buffer.extend(&u16::to_be_bytes(id.len() as u16));
-        self.buffer.extend(id.bytes());
+        self.buffer.extend(&MD5_BE_LENGTH);
+        self.buffer.extend(id);
         self.query_count += 1;
         let index = self.buffer.len();
         // pad zero value_count for the query
@@ -178,14 +179,14 @@ impl BatchBuilder<BatchValues> {
         }
     }
     /// Set the id in the Batch frame.
-    pub fn id(mut self, id: &str) -> BatchBuilder<BatchValues> {
+    pub fn id(mut self, id: &[u8; 16]) -> BatchBuilder<BatchValues> {
         // adjust value_count for prev query
         self.buffer[self.stage.index..(self.stage.index + 2)]
             .copy_from_slice(&u16::to_be_bytes(self.stage.value_count));
         // prepared query
         self.buffer.push(1);
-        self.buffer.extend(&u16::to_be_bytes(id.len() as u16));
-        self.buffer.extend(id.bytes());
+        self.buffer.extend(&MD5_BE_LENGTH);
+        self.buffer.extend(id);
         self.query_count += 1;
         // pad zero value_count for the query
         self.buffer.extend(&[0, 0]);
@@ -319,7 +320,7 @@ mod tests {
             .value(0 as i64) // attachment_timestamp_upper
             .value("NONCE_VALUE") // nonce
             .unset_value() // not-set value for milestone
-            .id("HASHED_MD5_STATEMENT") // add second query(prepared one) to the batch
+            .id(&[0; 16]) // add second query(prepared one) to the batch
             .value("JUNK_VALUE") // junk value
             .consistency(Consistency::One)
             .build(UNCOMPRESSED); // build uncompressed batch

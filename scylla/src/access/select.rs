@@ -31,10 +31,9 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::select_statement().as_bytes()))
+    fn select_id() -> [u8; 16] {
+        md5::compute(Self::select_statement().as_bytes()).into()
     }
-
     /// Construct your select query here and use it to create a
     /// `SelectRequest`.
     ///
@@ -63,7 +62,7 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     ///     Self: Select<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Select::get_prepared_hash(self))
+    ///         .id(&Self::select_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();

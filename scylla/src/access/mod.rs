@@ -113,7 +113,9 @@ mod tests {
 
     impl Keyspace for Mainnet {
         const NAME: &'static str = "Mainnet";
-
+        fn new() -> Self {
+            Mainnet
+        }
         fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
             todo!()
         }
@@ -153,7 +155,7 @@ mod tests {
             Self: Select<'a, u32, i32>,
         {
             let prepared_cql = Execute::new()
-                .id(&Select::get_prepared_hash(self))
+                .id(&Self::select_id())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
@@ -233,7 +235,7 @@ mod tests {
             Self: Delete<'a, u32, i32>,
         {
             let prepared_cql = Execute::new()
-                .id(&Delete::get_prepared_hash(self))
+                .id(&Self::delete_id())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();

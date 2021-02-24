@@ -31,8 +31,8 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::delete_statement().as_bytes()))
+    fn delete_id() -> [u8; 16] {
+        md5::compute(Self::delete_statement().as_bytes()).into()
     }
 
     /// Construct your delete query here and use it to create a
@@ -62,7 +62,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Delete::get_prepared_hash(self))
+    ///         .id(&Self::delete_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();
