@@ -13,20 +13,28 @@ use super::*;
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
 pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
-    /// Hardcode your select/prepare statement here.
-    const SELECT_STATEMENT: &'static str;
+    /// Create your select statement here.
+    ///
+    /// ## Examples
+    /// ```
+    /// fn statement(&'a self) -> Cow<'static, str> {
+    ///     "SELECT * FROM keyspace.table WHERE key = ?".into()
+    /// }
+    /// ```
+    /// ```
+    /// fn statement(&'a self) -> Cow<'static, str> {
+    ///     format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
+    /// }
+    /// ```
+    fn statement(&'a self) -> Cow<'static, str>;
+
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    const SELECT_ID: [u8; 16] = md5::compute_hash(Self::SELECT_STATEMENT.as_bytes());
-    /// Get the cql statement
-    fn statement(&'a self) -> &'static str {
-        Self::SELECT_STATEMENT
+    fn get_prepared_hash(&'a self) -> String {
+        format!("{:x}", md5::compute(self.statement().as_bytes()))
     }
-    /// Get the preapred md5 id
-    fn id(&'a self) -> [u8; 16] {
-        Self::SELECT_ID
-    }
+
     /// Construct your select query here and use it to create a
     /// `SelectRequest`.
     ///
@@ -38,7 +46,7 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     ///     Self: Select<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Self::statement(self))
+    ///         .statement(&Select::statement(self))
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();
@@ -127,7 +135,6 @@ impl<'a, S: Select<'a, K, V>, K, V> SelectRequest<'a, S, K, V> {
         DecodeResult {
             inner: DecodeRows { _marker: PhantomData },
             request_type: RequestType::Select,
-            cql: S::SELECT_STATEMENT,
         }
     }
 
@@ -137,7 +144,6 @@ impl<'a, S: Select<'a, K, V>, K, V> SelectRequest<'a, S, K, V> {
         DecodeResult {
             inner: DecodeRows { _marker: PhantomData },
             request_type: RequestType::Select,
-            cql: S::SELECT_STATEMENT,
         }
     }
 }
