@@ -23,6 +23,7 @@ pub mod select;
 pub mod update;
 
 use super::Worker;
+use extendhash::md5;
 use keyspace::Keyspace;
 use scylla_cql::{CqlError, Execute, Query, RowsDecoder, VoidDecoder};
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
@@ -84,6 +85,14 @@ impl<S: VoidDecoder> DecodeVoid<S> {
 pub struct DecodeResult<T> {
     inner: T,
     request_type: RequestType,
+    cql: &'static str,
+}
+
+impl<T> DecodeResult<T> {
+    /// Get the cql statement if ever needed.
+    pub fn cql(&self) -> &'static str {
+        self.cql
+    }
 }
 
 impl<T> Deref for DecodeResult<T> {
@@ -110,7 +119,7 @@ mod tests {
     struct Mainnet;
 
     impl Keyspace for Mainnet {
-        const NAME: &'static str = "Mainnet";
+        const NAME: &'static str = "mainnet";
 
         fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
             todo!()
@@ -122,16 +131,13 @@ mod tests {
     }
 
     impl<'a> Select<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
-            "SELECT * FROM keyspace.table WHERE key = ?".into()
-        }
-
+        const SELECT_STATEMENT: &'static str = "SELECT * FROM keyspace.table WHERE key = ?";
         fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32>
         where
             Self: Select<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Select::statement(self))
+                .statement(Self::SELECT_STATEMENT)
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
@@ -142,16 +148,13 @@ mod tests {
     }
 
     impl<'a> Select<'a, u32, i32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
-            format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
-        }
-
+        const SELECT_STATEMENT: &'static str = "SELECT * FROM mainnet.table WHERE key = ?";
         fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32>
         where
             Self: Select<'a, u32, i32>,
         {
             let prepared_cql = Execute::new()
-                .id(&Select::get_prepared_hash(self))
+                .id(Self::SELECT_ID)
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
@@ -161,16 +164,14 @@ mod tests {
     }
 
     impl<'a> Insert<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
-            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
-        }
+        const INSERT_STATEMENT: &'static str = "INSERT INTO mainnet.table (key, val1, val2) VALUES (?,?,?)";
 
         fn get_request(&'a self, key: &u32, value: &f32) -> InsertRequest<'a, Self, u32, f32>
         where
             Self: Insert<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Insert::statement(self))
+                .statement(Self::INSERT_STATEMENT)
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .value(value.to_string())
@@ -182,16 +183,14 @@ mod tests {
     }
 
     impl<'a> Update<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
-            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
-        }
+        const UPDATE_STATEMENT: &'static str = "UPDATE mainnet.table SET val1 = ?, val2 = ? WHERE key = ?";
 
         fn get_request(&'a self, key: &u32, value: &f32) -> UpdateRequest<'a, Self, u32, f32>
         where
             Self: Update<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Update::statement(self))
+                .statement(Self::UPDATE_STATEMENT)
                 .consistency(scylla_cql::Consistency::One)
                 .value(value.to_string())
                 .value(value.to_string())
@@ -203,16 +202,14 @@ mod tests {
     }
 
     impl<'a> Delete<'a, u32, f32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
-            "DELETE FROM keyspace.table WHERE key = ?".into()
-        }
+        const DELETE_STATEMENT: &'static str = "DELETE FROM keyspace.table WHERE key = ?";
 
         fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, f32>
         where
             Self: Delete<'a, u32, f32>,
         {
             let query = Query::new()
-                .statement(&Delete::statement(self))
+                .statement(Self::DELETE_STATEMENT)
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
@@ -222,16 +219,14 @@ mod tests {
     }
 
     impl<'a> Delete<'a, u32, i32> for Mainnet {
-        fn statement(&'a self) -> std::borrow::Cow<'static, str> {
-            format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
-        }
+        const DELETE_STATEMENT: &'static str = "DELETE FROM mainnet.table WHERE key = ?";
 
         fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, i32>
         where
             Self: Delete<'a, u32, i32>,
         {
             let prepared_cql = Execute::new()
-                .id(&Delete::get_prepared_hash(self))
+                .id(Self::DELETE_ID)
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
