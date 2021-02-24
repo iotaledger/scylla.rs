@@ -119,32 +119,48 @@ macro_rules! rows {
             )*
         }
     };
+    (@common_iter $rows:ident$(<$($t:ident),+>)?, $row:ident {$( $col_field:ident: $col_type:ty),*}, $row_into:ty) => {
+        impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
+            type Item = $row_into;
+            /// Note the row decoder is implemented in this `next` method.
+            fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+                if self.remaining_rows_count > 0 {
+                    self.remaining_rows_count -= 1;
+                    let row_struct = $row {
+                        $(
+                            $col_field: {
+                                let length = i32::from_be_bytes(
+                                    self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
+                                );
+                                self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
+                                if length > 0 {
+                                    let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
+                                    // update the next column_start to start from next column
+                                    self.column_start += (length as usize);
+                                    <$col_type>::decode(col_slice)
+                                } else {
+                                    <$col_type>::decode(&[])
+                                }
+                            },
+                        )*
+                    };
+                    Some(row_struct.into())
+                } else {
+                    None
+                }
+            }
+        }
+    };
     (single_row: $rows:ident$(<$($t:ident),+>)?, row: $row:ident {$( $col_field:ident: $col_type:ty),* $(,)?}, row_into: $row_into:ty $(,)? ) => {
         rows!(@common_rows $rows$(<$($t),+>)?);
 
         rows!(@common_row $row {$( $col_field: $col_type),*});
 
+        rows!(@common_iter $rows$(<$($t),+>)?, $row {$( $col_field: $col_type),*}, $row_into);
+
         impl $rows {
-            pub fn get(&mut self) -> $row_into {
-                let row_struct = $row {
-                    $(
-                        $col_field: {
-                            let length = i32::from_be_bytes(
-                                self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
-                            );
-                            self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
-                            if length > 0 {
-                                let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
-                                // update the next column_start to start from next column
-                                self.column_start += (length as usize);
-                                <$col_type>::decode(col_slice)
-                            } else {
-                                <$col_type>::decode(&[])
-                            }
-                        },
-                    )*
-                };
-                row_struct.into()
+            pub fn get(&mut self) -> Option<$row_into> {
+                self.next()
             }
         }
     };
@@ -182,35 +198,6 @@ macro_rules! rows {
 
         rows!(@common_row $row {$( $col_field: $col_type),*});
 
-        impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
-            type Item = $row_into;
-            /// Note the row decoder is implemented in this `next` method.
-            fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-                if self.remaining_rows_count > 0 {
-                    self.remaining_rows_count -= 1;
-                    let row_struct = $row {
-                        $(
-                            $col_field: {
-                                let length = i32::from_be_bytes(
-                                    self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
-                                );
-                                self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
-                                if length > 0 {
-                                    let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
-                                    // update the next column_start to start from next column
-                                    self.column_start += (length as usize);
-                                    <$col_type>::decode(col_slice)
-                                } else {
-                                    <$col_type>::decode(&[])
-                                }
-                            },
-                        )*
-                    };
-                    Some(row_struct.into())
-                } else {
-                    None
-                }
-            }
-        }
+        rows!(@common_iter $rows$(<$($t),+>)?, $row {$( $col_field: $col_type),*}, $row_into);
     };
 }
