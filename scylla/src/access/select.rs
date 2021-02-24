@@ -38,7 +38,7 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     ///     Self: Select<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(Self::SELECT_STATEMENT)
+    ///         .statement(&Self::statement(self))
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();
@@ -55,7 +55,7 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     ///     Self: Select<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(Self::SELECT_ID)
+    ///         .id(&Select::get_prepared_hash(self))
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();

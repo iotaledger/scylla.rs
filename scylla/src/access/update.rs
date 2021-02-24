@@ -38,7 +38,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Update<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(Self::UPDATE_STATEMENT)
+    ///         .statement(&Self::STATEMENT)
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(value.val1.to_string())
     ///         .value(value.val2.to_string())
@@ -57,7 +57,7 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Update<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(Self::UPDATE_ID)
+    ///         .id(&Self::ID)
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(value.val1.to_string())
     ///         .value(value.val2.to_string())

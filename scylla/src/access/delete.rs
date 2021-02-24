@@ -37,7 +37,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(Self::DELETE_STATEMENT)
+    ///         .statement(&Delete::statement(self))
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();
@@ -54,7 +54,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(Self::DELETE_ID)
+    ///         .id(&Delete::get_prepared_hash(self))
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();
