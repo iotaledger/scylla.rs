@@ -38,3 +38,6 @@ pub use prepare::Prepare;
 pub use query::Query;
 pub use rows::{Metadata, Rows};
 pub use std::convert::TryInto;
+
+/// Big Endian 16-length, used for MD5 ID
+const MD5_BE_LENGTH: [u8; 2] = [0, 16];

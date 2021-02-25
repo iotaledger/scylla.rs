@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .delete::<MyValueType>(key) // Get the Delete Request by specifying the Value type
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,12 +16,12 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// Create your delete statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn delete_statement() -> Cow<'static, str> {
     ///     "DELETE FROM keyspace.table WHERE key = ?".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn delete_statement() -> Cow<'static, str> {
     ///     format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
     /// }
@@ -31,15 +31,15 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::delete_statement().as_bytes()))
+    fn delete_id() -> [u8; 16] {
+        md5::compute(Self::delete_statement().as_bytes()).into()
     }
 
     /// Construct your delete query here and use it to create a
     /// `DeleteRequest`.
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType) -> DeleteRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
@@ -56,13 +56,13 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType) -> DeleteRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Delete<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Delete::get_prepared_hash(self))
+    ///         .id(&Self::delete_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();

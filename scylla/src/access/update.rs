@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .update(key, value) // Get the Update Request
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,31 +16,29 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     /// Create your update statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn update_statement() -> Cow<'static, str> {
     ///     "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn update_statement() -> Cow<'static, str> {
     ///     format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
     /// }
     /// ```
     fn update_statement() -> Cow<'static, str>;
-
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::update_statement().as_bytes()))
+    fn update_id() -> [u8; 16] {
+        md5::compute(Self::update_statement().as_bytes()).into()
     }
-
     /// Construct your update query here and use it to create an
     /// `UpdateRequest`.
     ///
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Update<'a, MyKeyType, MyValueType>,
@@ -59,13 +57,13 @@ pub trait Update<'a, K, V>: Keyspace + VoidDecoder {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Update<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Update::get_prepared_hash(self))
+    ///         .id(&Self::update_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(value.val1.to_string())
     ///         .value(value.val2.to_string())

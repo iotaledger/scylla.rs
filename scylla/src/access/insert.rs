@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .insert(key, value) // Get the Insert Request
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,12 +16,12 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     /// Create your insert statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn insert_statement() -> Cow<'static, str> {
     ///     "INSERT INTO keyspace.table (key, val1, val2) VALUES (?,?,?)".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn insert_statement() -> Cow<'static, str> {
     ///     format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
     /// }
@@ -31,16 +31,15 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::insert_statement().as_bytes()))
+    fn insert_id() -> [u8; 16] {
+        md5::compute(Self::insert_statement().as_bytes()).into()
     }
-
     /// Construct your insert query here and use it to create an
     /// `InsertRequest`.
     ///
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Insert<'a, MyKeyType, MyValueType>,
@@ -59,13 +58,14 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Insert<'a, MyKeyType, MyValueType>,
     /// {
+    ///     use scylla::access::*;
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Insert::get_prepared_hash(self))
+    ///         .id(&Self::select_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .value(value.val1.to_string())

@@ -7,7 +7,7 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Example
-/// ```
+/// ```no_compile
 /// let res = keyspace // A Scylla keyspace
 ///     .select::<MyValueType>(key) // Get the Select Request by specifying the return Value type
 ///     .send_local(worker); // Send the request to the Ring
@@ -16,12 +16,12 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     /// Create your select statement here.
     ///
     /// ## Examples
-    /// ```
+    /// ```no_compile
     /// fn select_statement() -> Cow<'static, str> {
     ///     "SELECT * FROM keyspace.table WHERE key = ?".into()
     /// }
     /// ```
-    /// ```
+    /// ```no_compile
     /// fn select_statement() -> Cow<'static, str> {
     ///     format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
     /// }
@@ -31,16 +31,15 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn get_prepared_hash(&'a self) -> String {
-        format!("{:x}", md5::compute(Self::select_statement().as_bytes()))
+    fn select_id() -> [u8; 16] {
+        md5::compute(Self::select_statement().as_bytes()).into()
     }
-
     /// Construct your select query here and use it to create a
     /// `SelectRequest`.
     ///
     /// ## Examples
     /// ### Dynamic query
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType) -> SelectRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Select<'a, MyKeyType, MyValueType>,
@@ -57,13 +56,13 @@ pub trait Select<'a, K, V>: Keyspace + RowsDecoder<K, V> {
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```
+    /// ```no_compile
     /// fn get_request(&'a self, key: &MyKeyType) -> SelectRequest<'a, Self, MyKeyType, MyValueType>
     /// where
     ///     Self: Select<'a, MyKeyType, MyValueType>,
     /// {
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Select::get_prepared_hash(self))
+    ///         .id(&Self::select_id())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .build();

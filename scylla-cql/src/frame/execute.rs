@@ -8,6 +8,7 @@ use super::{
     encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
     opcode::EXECUTE,
     queryflags::*,
+    MD5_BE_LENGTH,
 };
 use crate::compression::{Compression, MyCompression};
 
@@ -58,12 +59,11 @@ impl ExecuteBuilder<ExecuteHeader> {
         }
     }
 }
-
 impl ExecuteBuilder<ExecuteId> {
     /// Set the id in the execute frame.
-    pub fn id(mut self, id: &str) -> ExecuteBuilder<ExecuteConsistency> {
-        self.buffer.extend(&u16::to_be_bytes(id.len() as u16));
-        self.buffer.extend(id.bytes());
+    pub fn id(mut self, id: &[u8; 16]) -> ExecuteBuilder<ExecuteConsistency> {
+        self.buffer.extend(&MD5_BE_LENGTH);
+        self.buffer.extend(id);
         ExecuteBuilder::<ExecuteConsistency> {
             buffer: self.buffer,
             stage: ExecuteConsistency,
@@ -485,7 +485,7 @@ mod tests {
     // note: junk data
     fn simple_query_builder_test() {
         let Execute(_payload) = Execute::new()
-            .id("HASHED_MD5_STATEMENT")
+            .id(&[0; 16])
             .consistency(Consistency::One)
             .value("HASH_VALUE")
             .value("PAYLOAD_VALUE")

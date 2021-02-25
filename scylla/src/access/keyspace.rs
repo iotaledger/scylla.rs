@@ -20,7 +20,8 @@ use crate::worker::Worker;
 pub trait Keyspace: Send + Sized + Sync {
     /// Name of the keyspace
     const NAME: &'static str;
-
+    /// Create new keyspace instance
+    fn new() -> Self;
     /// Get the name of the keyspace as represented in the database
     fn name() -> &'static str {
         Self::NAME
@@ -45,3 +46,9 @@ pub trait Keyspace: Send + Sized + Sync {
     fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
     // TODO replication_refactor, strategy, options,etc.
 }
+
+pub trait StatementsStore {
+    fn init();
+}
+
+pub trait GetStatementsStore {}
