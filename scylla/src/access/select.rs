@@ -131,18 +131,12 @@ impl<'a, S: Select<'a, K, V>, K, V> SelectRequest<'a, S, K, V> {
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
         self.keyspace.send_local(self.token, self.inner, worker);
-        DecodeResult {
-            inner: DecodeRows { _marker: PhantomData },
-            request_type: RequestType::Select,
-        }
+        DecodeResult::select()
     }
 
     /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
         self.keyspace.send_global(self.token, self.inner, worker);
-        DecodeResult {
-            inner: DecodeRows { _marker: PhantomData },
-            request_type: RequestType::Select,
-        }
+        DecodeResult::select()
     }
 }
