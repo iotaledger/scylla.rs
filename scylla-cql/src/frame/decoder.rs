@@ -607,6 +607,19 @@ pub fn bytes(slice: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Get the `short_bytes` from a u8 slice.
+#[allow(unused)]
+pub fn short_bytes(slice: &[u8]) -> Vec<u8> {
+    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
+    slice[2..][..length].into()
+}
+
+/// Get the `prepared_id` from a u8 slice.
+pub fn prepared_id(slice: &[u8]) -> [u8; 16] {
+    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
+    slice[2..][..length].try_into().unwrap()
+}
+
 /// Get hashmap of string to string vector from slice.
 pub fn string_multimap(slice: &[u8]) -> HashMap<String, Vec<String>> {
     let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;

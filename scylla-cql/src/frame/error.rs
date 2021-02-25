@@ -375,12 +375,12 @@ impl From<&[u8]> for AlreadyExists {
 /// The addtional error information, `Unprepared`, stucture.
 pub struct Unprepared {
     /// The unprepared id.
-    pub id: String,
+    pub id: [u8; 16],
 }
 
 impl From<&[u8]> for Unprepared {
     fn from(slice: &[u8]) -> Self {
-        let id = decoder::string(slice);
+        let id = decoder::prepared_id(slice);
         Self { id }
     }
 }
