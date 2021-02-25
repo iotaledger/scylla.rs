@@ -12,9 +12,13 @@ impl<H: ScyllaScope> Starter<H> for ScyllaBuilder<H> {
     type Input = Scylla<H>;
     async fn starter(mut self, handle: H, _input: Option<Self::Input>) -> Result<Self::Ok, Self::Error> {
         // create the listener
-        let tcp_listener = TcpListener::bind(self.listen_address.clone().expect("Expected dashboard listen address"))
-            .await
-            .map_err(|_| "Unable to bind to dashboard listen address")?;
+        let tcp_listener = TcpListener::bind(
+            self.listen_address
+                .clone()
+                .ok_or("Expected dashboard listen address but none was provided!")?,
+        )
+        .await
+        .map_err(|e| format!("Unable to bind to dashboard listen address: {}", e))?;
         let listener = ListenerBuilder::new().tcp_listener(tcp_listener).build();
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         let listener_handle = ListenerHandle::new(abort_handle);
