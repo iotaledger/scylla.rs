@@ -15,4 +15,4 @@ pub mod websocket;
 pub mod worker;
 
 /// API of the crate
-pub use worker::Worker;
+pub use worker::{Worker, WorkerError};

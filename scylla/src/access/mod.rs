@@ -22,7 +22,7 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-pub use super::Worker;
+pub use super::{Worker, WorkerError};
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
 pub use insert::{GetInsertRequest, Insert, InsertRequest};
 pub use keyspace::Keyspace;
@@ -32,7 +32,7 @@ pub use update::{GetUpdateRequest, Update, UpdateRequest};
 /// alias the ring (in case it's needed)
 pub use crate::ring::Ring;
 /// alias the reporter event (in case it's needed)
-pub use crate::stage::ReporterEvent;
+pub use crate::stage::{ReporterEvent, ReporterHandle};
 /// alias to cql traits and types
 pub use scylla_cql::{Consistency, CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
 
