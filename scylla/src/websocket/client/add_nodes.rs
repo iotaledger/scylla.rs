@@ -19,13 +19,16 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                 ws_stream.send(m).await.unwrap();
                 // await till the node is added
                 if let Some(msg) = ws_stream.next().await {
-                    let event: SocketMsg<Result<Topology, Topology>> =
-                        serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
-                    if let SocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
-                    } else {
-                        // TODO (handle parallel admins) it's possible other admin is managing the cluster in parallel.
-                        ws_stream.close(None).await.unwrap();
-                        return Err("unable to reach scylla node(s)".to_string());
+                    if let Ok(event) =
+                        serde_json::from_str::<SocketMsg<Result<Topology, Topology>>>(msg.unwrap().to_text().unwrap())
+                    {
+                        if let SocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
+                        } else {
+                            // TODO (handle parallel admins) it's possible other admin is managing the cluster in
+                            // parallel.
+                            ws_stream.close(None).await.unwrap();
+                            return Err("unable to reach scylla node(s)".to_string());
+                        }
                     }
                 } else {
                     ws_stream.close(None).await.unwrap();
