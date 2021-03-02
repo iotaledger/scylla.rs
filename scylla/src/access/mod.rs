@@ -29,8 +29,12 @@ pub use keyspace::Keyspace;
 pub use select::{GetSelectRequest, Select, SelectRequest};
 pub use update::{GetUpdateRequest, Update, UpdateRequest};
 
+/// alias the ring (in case it's needed)
+pub use crate::ring::Ring;
+/// alias the reporter event (in case it's needed)
+pub use crate::stage::ReporterEvent;
 /// alias to cql traits and types
-pub use scylla_cql::{CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
+pub use scylla_cql::{Consistency, CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
 
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 

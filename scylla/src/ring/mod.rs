@@ -93,6 +93,7 @@ thread_local! {
         })
     };
 }
+
 #[allow(unused)]
 impl Ring {
     /// Send request to a given data_center with the given replica_index and token.
