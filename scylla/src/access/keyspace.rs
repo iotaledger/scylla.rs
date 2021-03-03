@@ -78,8 +78,6 @@ impl<T: Keyspace> StatementsStoreBuilder<T> {
     }
 }
 
-static mut MAINNET_STORE: Option<std::collections::HashMap<[u8; 16], String>> = None;
-
 pub struct StatementsStore<T: Keyspace> {
     _keyspace: std::marker::PhantomData<T>,
     store: std::collections::HashMap<[u8; 16], String>,
