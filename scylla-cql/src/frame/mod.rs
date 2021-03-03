@@ -28,7 +28,7 @@ pub(crate) mod supported;
 
 pub use auth_response::{AllowAllAuth, PasswordAuth};
 pub use auth_success::AuthSuccess;
-pub use batch::{Batch, BatchTypes};
+pub use batch::*;
 pub use consistency::Consistency;
 pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
 pub use encoder::ColumnEncoder;

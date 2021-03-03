@@ -1,6 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+pub(crate) mod batch;
 /// Provides the `Delete` trait which can be implemented to
 /// define delete queries for Key / Value pairs and how
 /// they are decoded
@@ -23,6 +24,7 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 pub use super::{Worker, WorkerError};
+pub use batch::Batch;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
 pub use insert::{GetInsertRequest, Insert, InsertRequest};
 pub use keyspace::Keyspace;
@@ -45,6 +47,7 @@ enum RequestType {
     Update = 1,
     Delete = 2,
     Select = 3,
+    Batch = 4,
 }
 
 /// A query type which indicates whether the statement
@@ -136,6 +139,12 @@ impl<S> DecodeResult<DecodeVoid<S>> {
             request_type: RequestType::Delete,
         }
     }
+    fn batch() -> Self {
+        Self {
+            inner: DecodeVoid::<S>::new(),
+            request_type: RequestType::Batch,
+        }
+    }
 }
 
 impl<T> Deref for DecodeResult<T> {
@@ -147,6 +156,8 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
+    use scylla_cql::{compression::UNCOMPRESSED, BatchTypes};
+
     use super::*;
 
     #[derive(Default)]
@@ -338,5 +349,19 @@ mod tests {
     fn test_delete() {
         let worker = TestWorker;
         let res = Mainnet.delete::<f32>(&3).send_local(Box::new(worker));
+    }
+
+    #[allow(dead_code)]
+    fn test_batch() {
+        let worker = TestWorker;
+        let res = Mainnet
+            .batch()
+            .batch_type(BatchTypes::Unlogged)
+            .update_query::<u32, f32>()
+            .insert_prepared::<u32, f32>()
+            .delete_prepared::<u32, i32>()
+            .consistency(Consistency::One)
+            .build(0, UNCOMPRESSED)
+            .send_local(Box::new(worker));
     }
 }
