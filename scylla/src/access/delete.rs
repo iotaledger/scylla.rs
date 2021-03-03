@@ -52,7 +52,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///
     ///     let token = rand::random::<i64>();
     ///
-    ///     DeleteRequest::from_query(query, token, self)
+    ///     self.create_request(query, token)
     /// }
     /// ```
     /// ### Prepared statement
@@ -69,7 +69,7 @@ pub trait Delete<'a, K, V>: Keyspace + VoidDecoder {
     ///
     ///     let token = rand::random::<i64>();
     ///
-    ///     DeleteRequest::from_prepared(prepared_cql, token, self)
+    ///     self.create_request(prepared_cql, token)
     /// }
     /// ```
     fn get_request(&'a self, key: &K) -> DeleteRequest<'a, Self, K, V>
@@ -99,35 +99,23 @@ impl<S: Keyspace, K> GetDeleteRequest<S, K> for S {
 pub struct DeleteRequest<'a, S, K, V> {
     token: i64,
     inner: Vec<u8>,
-    /// The type of query this request contains
-    pub query_type: QueryType,
     keyspace: &'a S,
     _marker: PhantomData<(K, V)>,
 }
 
+impl<'a, K, V, S: Delete<'a, K, V>> CreateRequest<'a, DeleteRequest<'a, S, K, V>> for S {
+    /// Create a new Delete Request from a Query/Execute, token, and the keyspace.
+    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> DeleteRequest<'a, S, K, V> {
+        DeleteRequest::<'a, S, K, V> {
+            token,
+            inner: query.into(),
+            keyspace: self,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<'a, S: Delete<'a, K, V>, K, V> DeleteRequest<'a, S, K, V> {
-    /// Create a new Delete Request from a Query, token, and the keyspace.
-    pub fn from_query(query: Query, token: i64, keyspace: &'a S) -> Self {
-        Self {
-            token,
-            inner: query.0,
-            query_type: QueryType::Dynamic,
-            keyspace,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Create a new Delete Request from a Query, token, and the keyspace.
-    pub fn from_prepared(pcql: Execute, token: i64, keyspace: &'a S) -> Self {
-        Self {
-            token,
-            inner: pcql.0,
-            query_type: QueryType::Prepared,
-            keyspace,
-            _marker: PhantomData,
-        }
-    }
-
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         self.keyspace.send_local(self.token, self.inner, worker);

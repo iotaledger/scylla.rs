@@ -99,35 +99,23 @@ impl<S: Keyspace, K> GetSelectRequest<S, K> for S {
 pub struct SelectRequest<'a, S, K, V> {
     token: i64,
     inner: Vec<u8>,
-    /// The type of query this request contains
-    pub query_type: QueryType,
     keyspace: &'a S,
     _marker: PhantomData<(K, V)>,
 }
 
+impl<'a, K, V, S: Select<'a, K, V>> CreateRequest<'a, SelectRequest<'a, S, K, V>> for S {
+    /// Create a new Select Request from a Query/Execute, token, and the keyspace.
+    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> SelectRequest<'a, S, K, V> {
+        SelectRequest::<'a, S, K, V> {
+            token,
+            inner: query.into(),
+            keyspace: self,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<'a, S: Select<'a, K, V>, K, V> SelectRequest<'a, S, K, V> {
-    /// Create a new Select Request from a Query, token, and the keyspace.
-    pub fn from_query(query: Query, token: i64, keyspace: &'a S) -> Self {
-        Self {
-            token,
-            inner: query.0,
-            query_type: QueryType::Dynamic,
-            keyspace,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Create a new Select Request from a Query, token, and the keyspace.
-    pub fn from_prepared(pcql: Execute, token: i64, keyspace: &'a S) -> Self {
-        Self {
-            token,
-            inner: pcql.0,
-            query_type: QueryType::Prepared,
-            keyspace,
-            _marker: PhantomData,
-        }
-    }
-
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
         self.keyspace.send_local(self.token, self.inner, worker);

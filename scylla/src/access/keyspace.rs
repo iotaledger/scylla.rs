@@ -26,6 +26,7 @@ pub trait Keyspace: Send + Sized + Sync {
     fn name() -> &'static str {
         Self::NAME
     }
+    /// Get the cql_statement of the prepared_id from the StatementsStore
     fn get_statement(id: &[u8; 16]) -> Option<&String>;
     /// Decode void result
     fn decode_void(decoder: scylla_cql::Decoder) -> Result<(), scylla_cql::CqlError>
@@ -48,22 +49,28 @@ pub trait Keyspace: Send + Sized + Sync {
     // TODO replication_refactor, strategy, options,etc.
 }
 
+/// Statements store builder
 pub struct StatementsStoreBuilder<T: Keyspace> {
     _keyspace: std::marker::PhantomData<T>,
     cqls: Vec<String>,
 }
 
 impl<T: Keyspace> StatementsStoreBuilder<T> {
+    /// Create empty statements store builder for T: keyspace.
     pub fn new() -> Self {
         StatementsStoreBuilder::<T> {
             _keyspace: std::marker::PhantomData::<T>,
             cqls: Vec::new(),
         }
     }
+    /// Add cql to the statement store builder.
+    /// NOTE: Have keyspace as "{}"
     pub fn add_cql(mut self, cql: String) -> Self {
+        assert!(cql.contains("{}"));
         self.cqls.push(cql);
         self
     }
+    /// Build the StatementsStore for T: Keyspace.
     pub fn build(self) -> StatementsStore<T> {
         let mut store = std::collections::HashMap::new();
         for cql in self.cqls {
