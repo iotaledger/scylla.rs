@@ -16,12 +16,18 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                         ScyllaChild::Listener(microservice) => {
                             self.service.update_microservice(microservice.get_name(), microservice);
                             // tell all the active applications about status_change
-                            my_sup.status_change(self.service.clone());
+                            let socket_msg = SocketMsg::Scylla(self.service.clone());
+                            self.response_to_sockets(&socket_msg).await;
+                            let SocketMsg::Scylla(service) = socket_msg;
+                            my_sup.status_change(service);
                         }
                         ScyllaChild::Cluster(microservice) => {
                             self.service.update_microservice(microservice.get_name(), microservice);
                             // tell all the active applications about status_change
-                            my_sup.status_change(self.service.clone());
+                            let socket_msg = SocketMsg::Scylla(self.service.clone());
+                            self.response_to_sockets(&socket_msg).await;
+                            let SocketMsg::Scylla(service) = socket_msg;
+                            my_sup.status_change(service);
                         }
                         ScyllaChild::Websocket(microservice, opt_ws_tx) => {
                             if microservice.is_initializing() {
@@ -38,7 +44,7 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                 }
                 ScyllaEvent::Result(socket_msg) => {
                     // TODO add logs based on the socket_msg
-                    self.response_to_sockets(socket_msg).await;
+                    self.response_to_sockets(&socket_msg).await;
                 }
                 ScyllaEvent::Passthrough(apps_events) => {
                     match apps_events.try_get_my_event() {
@@ -96,7 +102,7 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
 }
 
 impl<H: ScyllaScope> Scylla<H> {
-    async fn response_to_sockets(&mut self, msg: SocketMsg<Result<Topology, Topology>>) {
+    async fn response_to_sockets<T: Serialize>(&mut self, msg: &SocketMsg<T>) {
         for socket in self.websockets.values_mut() {
             let j = serde_json::to_string(&msg).unwrap();
             let m = Message::text(j);

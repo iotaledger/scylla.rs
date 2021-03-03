@@ -22,15 +22,19 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-pub use super::Worker;
+pub use super::{Worker, WorkerError};
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
 pub use insert::{GetInsertRequest, Insert, InsertRequest};
 pub use keyspace::Keyspace;
 pub use select::{GetSelectRequest, Select, SelectRequest};
 pub use update::{GetUpdateRequest, Update, UpdateRequest};
 
+/// alias the ring (in case it's needed)
+pub use crate::ring::Ring;
+/// alias the reporter event (in case it's needed)
+pub use crate::stage::{ReporterEvent, ReporterHandle};
 /// alias to cql traits and types
-pub use scylla_cql::{CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
+pub use scylla_cql::{Consistency, CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
 
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
@@ -61,6 +65,12 @@ pub struct DecodeRows<S, K, V> {
     _marker: PhantomData<(S, K, V)>,
 }
 
+impl<S, K, V> DecodeRows<S, K, V> {
+    fn new() -> Self {
+        Self { _marker: PhantomData }
+    }
+}
+
 impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
@@ -71,9 +81,15 @@ impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
 /// A marker struct which holds the keyspace type
 /// so that it may be decoded (checked for errors)
 /// via `VoidDecoder` later
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone)]
 pub struct DecodeVoid<S> {
     _marker: PhantomData<S>,
+}
+
+impl<S> DecodeVoid<S> {
+    fn new() -> Self {
+        Self { _marker: PhantomData }
+    }
 }
 
 impl<S: VoidDecoder> DecodeVoid<S> {
@@ -91,6 +107,35 @@ impl<S: VoidDecoder> DecodeVoid<S> {
 pub struct DecodeResult<T> {
     inner: T,
     request_type: RequestType,
+}
+impl<S, K, V> DecodeResult<DecodeRows<S, K, V>> {
+    fn select() -> Self {
+        Self {
+            inner: DecodeRows::<S, K, V>::new(),
+            request_type: RequestType::Select,
+        }
+    }
+}
+
+impl<S> DecodeResult<DecodeVoid<S>> {
+    fn insert() -> Self {
+        Self {
+            inner: DecodeVoid::<S>::new(),
+            request_type: RequestType::Insert,
+        }
+    }
+    fn update() -> Self {
+        Self {
+            inner: DecodeVoid::<S>::new(),
+            request_type: RequestType::Update,
+        }
+    }
+    fn delete() -> Self {
+        Self {
+            inner: DecodeVoid::<S>::new(),
+            request_type: RequestType::Delete,
+        }
+    }
 }
 
 impl<T> Deref for DecodeResult<T> {

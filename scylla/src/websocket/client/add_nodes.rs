@@ -18,19 +18,21 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                 let m = Message::text(j);
                 ws_stream.send(m).await.unwrap();
                 // await till the node is added
-                if let Some(msg) = ws_stream.next().await {
-                    let event: SocketMsg<Result<Topology, Topology>> =
-                        serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
-                    if let SocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
-                    } else {
-                        // TODO (handle parallel admins) it's possible other admin is managing the cluster in parallel.
-                        ws_stream.close(None).await.unwrap();
-                        return Err("unable to reach scylla node(s)".to_string());
+                while let Some(msg) = ws_stream.next().await {
+                    if let Ok(event) =
+                        serde_json::from_str::<SocketMsg<Result<Topology, Topology>>>(msg.unwrap().to_text().unwrap())
+                    {
+                        if let SocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
+                            info!("Added scylla node: {}", address);
+                            break;
+                        } else {
+                            // TODO (handle parallel admins) it's possible other admin is managing the cluster in
+                            // parallel.
+                            ws_stream.close(None).await.unwrap();
+                            return Err("unable to reach scylla node(s)".to_string());
+                        }
                     }
-                } else {
-                    ws_stream.close(None).await.unwrap();
-                    return Err("unable to reach the websocket server".to_string());
-                };
+                }
             }
             // build the ring
             let msg = SocketMsg::Scylla(ScyllaThrough::Topology(Topology::BuildRing(uniform_rf)));
@@ -38,19 +40,30 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
             let m = Message::text(j);
             ws_stream.send(m).await.unwrap();
             // await till the ring is built
-            if let Some(msg) = ws_stream.next().await {
-                if let SocketMsg::<Result<Topology, Topology>>::Scylla(result) =
-                    serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap()
+            while let Some(msg) = ws_stream.next().await {
+                if let Ok(event) =
+                    serde_json::from_str::<SocketMsg<Result<Topology, Topology>>>(msg.unwrap().to_text().unwrap())
                 {
-                    match result {
-                        Ok(Topology::BuildRing(_)) => info!("Succesfully Added Nodes and built cluster topology"),
-                        Err(Topology::BuildRing(_)) => error!("Unable to build cluster topology, please try again"),
-                        _ => error!("Currently we don't support concurrent admins managing the cluster simultaneously"),
+                    if let SocketMsg::<Result<Topology, Topology>>::Scylla(result) = event {
+                        match result {
+                            Ok(Topology::BuildRing(_)) => {
+                                info!("Succesfully Added Nodes and built cluster topology");
+                                break;
+                            }
+                            Err(Topology::BuildRing(_)) => {
+                                error!("Unable to build cluster topology, please try again");
+                                break;
+                            }
+                            _ => {
+                                error!(
+                                    "Currently we don't support concurrent admins managing the cluster simultaneously"
+                                );
+                                break;
+                            }
+                        }
                     }
-                } else {
-                    error!("AddNodes Client received invalid SocketMsg");
-                };
-            };
+                }
+            }
             // close socket and return true.
             let _ = ws_stream.close(None).await;
             Ok(())

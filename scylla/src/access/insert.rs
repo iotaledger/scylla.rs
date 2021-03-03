@@ -109,7 +109,7 @@ pub struct InsertRequest<'a, S, K, V> {
     _marker: PhantomData<(K, V)>,
 }
 
-impl<'a, S: Insert<'a, K, V> + Default, K, V> InsertRequest<'a, S, K, V> {
+impl<'a, S: Insert<'a, K, V>, K, V> InsertRequest<'a, S, K, V> {
     /// Create a new Insert Request from a Query, token, and the keyspace.
     pub fn from_query(query: Query, token: i64, keyspace: &'a S) -> Self {
         Self {
@@ -135,18 +135,12 @@ impl<'a, S: Insert<'a, K, V> + Default, K, V> InsertRequest<'a, S, K, V> {
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         self.keyspace.send_local(self.token, self.inner, worker);
-        DecodeResult {
-            inner: DecodeVoid::default(),
-            request_type: RequestType::Insert,
-        }
+        DecodeResult::insert()
     }
 
     /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         self.keyspace.send_global(self.token, self.inner, worker);
-        DecodeResult {
-            inner: DecodeVoid::default(),
-            request_type: RequestType::Insert,
-        }
+        DecodeResult::insert()
     }
 }
