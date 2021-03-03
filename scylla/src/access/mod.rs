@@ -354,14 +354,23 @@ mod tests {
     #[allow(dead_code)]
     fn test_batch() {
         let worker = TestWorker;
-        let res = Mainnet
+        let req = Mainnet
             .batch()
             .batch_type(BatchTypes::Unlogged)
             .update_query::<u32, f32>()
             .insert_prepared::<u32, f32>()
             .delete_prepared::<u32, i32>()
             .consistency(Consistency::One)
-            .build(0, UNCOMPRESSED)
-            .send_local(Box::new(worker));
+            .build(0, UNCOMPRESSED);
+        let res = req.send_local(Box::new(worker));
+
+        // Later, after getting an unprepared error:
+        let unprepared_id = <Mainnet as Update<u32, f32>>::update_id();
+        let unprepared_statement = req.get_cql(&unprepared_id).expect("How could this happen to me?");
+        // Do something to prepare the statement...
+        //   try_prepare(unprepared_statement)
+        // Then, resend the request
+        let worker = TestWorker;
+        let res = req.send_local(Box::new(worker));
     }
 }
