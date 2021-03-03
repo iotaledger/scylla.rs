@@ -476,6 +476,12 @@ impl Execute {
     }
 }
 
+impl Into<Vec<u8>> for Execute {
+    fn into(self) -> Vec<u8> {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
