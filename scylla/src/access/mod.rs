@@ -25,7 +25,7 @@ pub(crate) mod update;
 pub use super::{Worker, WorkerError};
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
 pub use insert::{GetInsertRequest, Insert, InsertRequest};
-pub use keyspace::Keyspace;
+pub use keyspace::{Keyspace, StatementsStore, StatementsStoreBuilder};
 pub use select::{GetSelectRequest, Select, SelectRequest};
 pub use update::{GetUpdateRequest, Update, UpdateRequest};
 
@@ -151,11 +151,20 @@ mod tests {
 
     #[derive(Default)]
     struct Mainnet;
-
+    static mut MAINNET_STORE: Option<StatementsStore<Mainnet>> = None;
     impl Keyspace for Mainnet {
         const NAME: &'static str = "Mainnet";
         fn new() -> Self {
             Mainnet
+        }
+        fn get_statement(id: &[u8; 16]) -> Option<&String> {
+            unsafe {
+                if let Some(store) = MAINNET_STORE.as_ref() {
+                    store.get_statement(id)
+                } else {
+                    None
+                }
+            }
         }
         fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
             todo!()

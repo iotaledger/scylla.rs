@@ -26,6 +26,7 @@ pub trait Keyspace: Send + Sized + Sync {
     fn name() -> &'static str {
         Self::NAME
     }
+    fn get_statement(id: &[u8; 16]) -> Option<&String>;
     /// Decode void result
     fn decode_void(decoder: scylla_cql::Decoder) -> Result<(), scylla_cql::CqlError>
     where
@@ -47,8 +48,45 @@ pub trait Keyspace: Send + Sized + Sync {
     // TODO replication_refactor, strategy, options,etc.
 }
 
-pub trait StatementsStore {
-    fn init();
+pub struct StatementsStoreBuilder<T: Keyspace> {
+    _keyspace: std::marker::PhantomData<T>,
+    cqls: Vec<String>,
 }
 
-pub trait GetStatementsStore {}
+impl<T: Keyspace> StatementsStoreBuilder<T> {
+    pub fn new() -> Self {
+        StatementsStoreBuilder::<T> {
+            _keyspace: std::marker::PhantomData::<T>,
+            cqls: Vec::new(),
+        }
+    }
+    pub fn add_cql(mut self, cql: String) -> Self {
+        self.cqls.push(cql);
+        self
+    }
+    pub fn build(self) -> StatementsStore<T> {
+        let mut store = std::collections::HashMap::new();
+        for cql in self.cqls {
+            let cql_with_keyspace_name = cql.replace("{}", T::name());
+            let id = md5::compute(&cql_with_keyspace_name).0;
+            store.insert(id, cql_with_keyspace_name);
+        }
+        StatementsStore::<T> {
+            _keyspace: std::marker::PhantomData::<T>,
+            store,
+        }
+    }
+}
+
+static mut MAINNET_STORE: Option<std::collections::HashMap<[u8; 16], String>> = None;
+
+pub struct StatementsStore<T: Keyspace> {
+    _keyspace: std::marker::PhantomData<T>,
+    store: std::collections::HashMap<[u8; 16], String>,
+}
+
+impl<T: Keyspace> StatementsStore<T> {
+    pub fn get_statement(&self, id: &[u8; 16]) -> Option<&String> {
+        self.store.get(id)
+    }
+}
