@@ -88,7 +88,7 @@ pub trait GetUpdateRequest<S, K, V> {
         S: Update<'a, K, V>;
 }
 
-impl<S, K, V> GetUpdateRequest<S, K, V> for S {
+impl<S: Keyspace, K, V> GetUpdateRequest<S, K, V> for S {
     fn update<'a>(&'a self, key: &K, value: &V) -> UpdateRequest<S, K, V>
     where
         S: Update<'a, K, V>,

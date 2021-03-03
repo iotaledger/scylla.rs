@@ -90,7 +90,7 @@ pub trait GetInsertRequest<S, K, V> {
         S: Insert<'a, K, V>;
 }
 
-impl<S, K, V> GetInsertRequest<S, K, V> for S {
+impl<S: Keyspace, K, V> GetInsertRequest<S, K, V> for S {
     fn insert<'a>(&'a self, key: &K, value: &V) -> InsertRequest<S, K, V>
     where
         S: Insert<'a, K, V>,
