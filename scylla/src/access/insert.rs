@@ -77,9 +77,7 @@ pub trait Insert<K, V>: Keyspace + VoidDecoder {
     ///     self.create_request(prepared_cql, token)
     /// }
     /// ```
-    fn get_request(&self, key: &K, value: &V) -> InsertRequest<Self, K, V>
-    where
-        Self: Insert<K, V>;
+    fn get_request(&self, key: &K, value: &V) -> InsertRequest<Self, K, V>;
 }
 
 /// Wrapper for the `Insert` trait which provides the `insert` function

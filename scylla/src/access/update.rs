@@ -75,9 +75,7 @@ pub trait Update<K, V>: Keyspace + VoidDecoder {
     ///     self.create_request(prepared_cql, token)
     /// }
     /// ```
-    fn get_request(&self, key: &K, value: &V) -> UpdateRequest<Self, K, V>
-    where
-        Self: Update<K, V>;
+    fn get_request(&self, key: &K, value: &V) -> UpdateRequest<Self, K, V>;
 }
 
 /// Wrapper for the `Update` trait which provides the `update` function

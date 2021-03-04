@@ -24,7 +24,7 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 pub use super::{Worker, WorkerError};
-pub use batch::Batch;
+pub use batch::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
 pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
 pub use keyspace::Keyspace;
@@ -36,7 +36,10 @@ pub use crate::ring::Ring;
 /// alias the reporter event (in case it's needed)
 pub use crate::stage::{ReporterEvent, ReporterHandle};
 /// alias to cql traits and types
-pub use scylla_cql::{Consistency, CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
+pub use scylla_cql::{
+    BatchTypeCounter, BatchTypeLogged, BatchTypeUnlogged, Consistency, CqlError, Decoder, Execute, Query, RowsDecoder,
+    VoidDecoder,
+};
 
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
@@ -165,7 +168,7 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
-    use scylla_cql::{compression::UNCOMPRESSED, BatchTypes};
+    use scylla_cql::compression::UNCOMPRESSED;
 
     use super::*;
 
@@ -231,6 +234,19 @@ mod tests {
         }
     }
 
+    impl InsertBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn push_insert(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+            value: &f32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder
+                .value(key.to_string())
+                .value(value.to_string())
+                .value(value.to_string())
+        }
+    }
+
     impl Update<u32, f32> for Mainnet {
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
@@ -246,6 +262,19 @@ mod tests {
                 .build();
             let token = rand::random::<i64>();
             self.create_request(query, token)
+        }
+    }
+
+    impl UpdateBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn push_update(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+            value: &f32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder
+                .value(value.to_string())
+                .value(value.to_string())
+                .value(key.to_string())
         }
     }
 
@@ -281,6 +310,24 @@ mod tests {
                 .build();
             let token = rand::random::<i64>();
             self.create_request(prepared_cql, token)
+        }
+    }
+
+    impl DeleteBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn push_delete(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder.value(key.to_string())
+        }
+    }
+
+    impl DeleteBatch<u32, i32, BatchTypeLogged> for Mainnet {
+        fn push_delete(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder.value(key.to_string())
         }
     }
 
@@ -353,10 +400,10 @@ mod tests {
         let keyspace = Mainnet { name: "mainnet".into() };
         let req = keyspace
             .batch()
-            .batch_type(BatchTypes::Unlogged)
-            .update_query::<u32, f32>()
-            .insert_prepared::<u32, f32>()
-            .delete_prepared::<u32, i32>()
+            .batch_type(BatchTypeLogged)
+            .update_query(&3, &8.0)
+            .insert_prepared(&3, &8.0)
+            .delete_prepared::<_, f32>(&3)
             .consistency(Consistency::One)
             .build(0, UNCOMPRESSED);
         let res = req.clone().send_local(Box::new(worker));

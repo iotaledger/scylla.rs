@@ -72,9 +72,7 @@ pub trait Delete<K, V>: Keyspace + VoidDecoder {
     ///     self.create_request(prepared_cql, token)
     /// }
     /// ```
-    fn get_request(&self, key: &K) -> DeleteRequest<Self, K, V>
-    where
-        Self: Delete<K, V>;
+    fn get_request(&self, key: &K) -> DeleteRequest<Self, K, V>;
 }
 
 /// Defines a helper method to specify the Value type
