@@ -41,6 +41,7 @@ pub use scylla_cql::{
     VoidDecoder,
 };
 
+use scylla_cql::*;
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
 #[repr(u8)]
@@ -235,6 +236,9 @@ mod tests {
     }
 
     impl InsertBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id::<u32, f32>())
+        }
         fn push_insert(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
             key: &u32,
@@ -266,6 +270,9 @@ mod tests {
     }
 
     impl UpdateBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id::<u32, f32>())
+        }
         fn push_update(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
             key: &u32,
@@ -314,6 +321,9 @@ mod tests {
     }
 
     impl DeleteBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id())
+        }
         fn push_delete(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
             key: &u32,
@@ -323,6 +333,9 @@ mod tests {
     }
 
     impl DeleteBatch<u32, i32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id())
+        }
         fn push_delete(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
             key: &u32,
@@ -400,12 +413,13 @@ mod tests {
         let keyspace = Mainnet { name: "mainnet".into() };
         let req = keyspace
             .batch()
-            .batch_type(BatchTypeLogged)
+            .logged() // or .batch_type(BatchTypeLogged)
+            .insert_recommended(&3, &9.0)
             .update_query(&3, &8.0)
             .insert_prepared(&3, &8.0)
             .delete_prepared::<_, f32>(&3)
             .consistency(Consistency::One)
-            .build(0, UNCOMPRESSED);
+            .build(0);
         let res = req.clone().send_local(Box::new(worker));
 
         // Later, after getting an unprepared error:

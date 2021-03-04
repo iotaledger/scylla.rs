@@ -1,3 +1,6 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use scylla_cql::{
     compression::Compression, BatchBuild, BatchBuilder, BatchFlags, BatchStatementOrId, BatchTimestamp, BatchType,
@@ -6,14 +9,17 @@ use scylla_cql::{
 use std::collections::HashMap;
 
 pub trait InsertBatch<K, V, T: Copy + Into<u8>>: Insert<K, V> {
+    fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues>;
     fn push_insert(builder: BatchBuilder<T, BatchValues>, key: &K, value: &V) -> BatchBuilder<T, BatchValues>;
 }
 
 pub trait UpdateBatch<K, V, T: Copy + Into<u8>>: Update<K, V> {
+    fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues>;
     fn push_update(builder: BatchBuilder<T, BatchValues>, key: &K, value: &V) -> BatchBuilder<T, BatchValues>;
 }
 
 pub trait DeleteBatch<K, V, T: Copy + Into<u8>>: Delete<K, V> {
+    fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues>;
     fn push_delete(builder: BatchBuilder<T, BatchValues>, key: &K) -> BatchBuilder<T, BatchValues>;
 }
 
@@ -94,6 +100,12 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
 }
 
 impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchStatementOrId> {
+    pub fn insert_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: InsertBatch<K, V, Type>,
+    {
+        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+    }
     pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
@@ -105,7 +117,6 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         );
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
     }
-
     pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
@@ -114,6 +125,13 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         self.map.insert(id, self.keyspace.insert_statement());
         let res = Self::step(self.builder.id(&id), self.map, self.keyspace);
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
+    }
+
+    pub fn update_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: UpdateBatch<K, V, Type>,
+    {
+        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
     }
 
     pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
@@ -136,6 +154,13 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         self.map.insert(id, self.keyspace.update_statement());
         let res = Self::step(self.builder.id(&id), self.map, self.keyspace);
         Self::step(S::push_update(res.builder, key, value), res.map, res.keyspace)
+    }
+
+    pub fn delete_recommended<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: DeleteBatch<K, V, Type>,
+    {
+        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
     }
 
     pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
@@ -162,6 +187,13 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
 }
 
 impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchValues> {
+    pub fn insert_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: InsertBatch<K, V, Type>,
+    {
+        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+    }
+
     pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
@@ -184,6 +216,13 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
     }
 
+    pub fn update_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: UpdateBatch<K, V, Type>,
+    {
+        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+    }
+
     pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
@@ -204,6 +243,13 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         self.map.insert(id, self.keyspace.update_statement());
         let res = Self::step(self.builder.id(&id), self.map, self.keyspace);
         Self::step(S::push_update(res.builder, key, value), res.map, res.keyspace)
+    }
+
+    pub fn delete_recommended<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: DeleteBatch<K, V, Type>,
+    {
+        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
     }
 
     pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
@@ -249,11 +295,11 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self, token: i64, compression: impl Compression) -> BatchRequest<'a, S> {
+    pub fn build(self, token: i64) -> BatchRequest<'a, S> {
         BatchRequest {
             token,
             map: self.map,
-            inner: self.builder.build(compression).0.into(),
+            inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
             _data: PhantomData,
         }
@@ -268,7 +314,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         BatchRequest {
             token,
             map: self.map,
-            inner: self.builder.build(compression).0.into(),
+            inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
             _data: PhantomData,
         }
@@ -276,11 +322,11 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
 }
 
 impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBuild> {
-    pub fn build(self, token: i64, compression: impl Compression) -> BatchRequest<'a, S> {
+    pub fn build(self, token: i64) -> BatchRequest<'a, S> {
         BatchRequest {
             token,
             map: self.map,
-            inner: self.builder.build(compression).0.into(),
+            inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
             _data: PhantomData,
         }
