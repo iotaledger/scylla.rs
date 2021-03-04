@@ -54,6 +54,11 @@ enum RequestType {
     Batch = 4,
 }
 
+pub trait ComputeToken<K>: Keyspace {
+    /// Compute the token from the provided partition_key by using murmur3 hash function
+    fn token(key: &K) -> i64;
+}
+
 /// Create request from cql frame
 pub trait CreateRequest<'a, T>: Keyspace {
     /// Create request of Type T
@@ -216,7 +221,11 @@ mod tests {
             self.create_request(prepared_cql, token)
         }
     }
-
+    impl ComputeToken<u32> for Mainnet {
+        fn token(_key: &u32) -> i64 {
+            rand::random()
+        }
+    }
     impl Insert<u32, f32> for Mainnet {
         fn statement(&self) -> Cow<'static, str> {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
@@ -230,7 +239,7 @@ mod tests {
                 .value(value.to_string())
                 .value(value.to_string())
                 .build();
-            let token = rand::random::<i64>();
+            let token = Self::token(key);
             self.create_request(query, token)
         }
     }
@@ -419,7 +428,8 @@ mod tests {
             .insert_prepared(&3, &8.0)
             .delete_prepared::<_, f32>(&3)
             .consistency(Consistency::One)
-            .build(0);
+            .build()
+            .compute_token(&3);
         let res = req.clone().send_local(Box::new(worker));
 
         // Later, after getting an unprepared error:

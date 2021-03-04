@@ -33,6 +33,15 @@ pub struct BatchRequest<'a, S> {
 }
 
 impl<'a, S: Keyspace> BatchRequest<'a, S> {
+    /// Compute the murmur3 token from the provided K
+    pub fn compute_token<K>(mut self, key: &K) -> Self
+    where
+        S: ComputeToken<K>,
+    {
+        self.token = S::token(key);
+        self
+    }
+
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         send_local(
@@ -295,9 +304,9 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self, token: i64) -> BatchRequest<'a, S> {
+    pub fn build(self) -> BatchRequest<'a, S> {
         BatchRequest {
-            token,
+            token: rand::random::<i64>(),
             map: self.map,
             inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
@@ -310,9 +319,9 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self, token: i64, compression: impl Compression) -> BatchRequest<'a, S> {
+    pub fn build(self) -> BatchRequest<'a, S> {
         BatchRequest {
-            token,
+            token: rand::random::<i64>(),
             map: self.map,
             inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
@@ -322,9 +331,9 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
 }
 
 impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBuild> {
-    pub fn build(self, token: i64) -> BatchRequest<'a, S> {
+    pub fn build(self) -> BatchRequest<'a, S> {
         BatchRequest {
-            token,
+            token: rand::random::<i64>(),
             map: self.map,
             inner: self.builder.build().0.into(),
             keyspace: self.keyspace,

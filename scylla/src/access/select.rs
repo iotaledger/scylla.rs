@@ -12,7 +12,7 @@ use super::*;
 ///     .select::<MyValueType>(key) // Get the Select Request by specifying the return Value type
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
-pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> {
+pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
     /// Create your select statement here.
     ///
     /// ## Examples

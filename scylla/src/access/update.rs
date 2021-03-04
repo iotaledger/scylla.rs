@@ -12,7 +12,7 @@ use super::*;
 ///     .update(key, value) // Get the Update Request
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
-pub trait Update<K, V>: Keyspace + VoidDecoder {
+pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Create your update statement here.
     ///
     /// ## Examples

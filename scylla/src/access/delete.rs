@@ -12,7 +12,7 @@ use super::*;
 ///     .delete::<MyValueType>(key) // Get the Delete Request by specifying the Value type
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
-pub trait Delete<K, V>: Keyspace + VoidDecoder {
+pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Create your delete statement here.
     ///
     /// ## Examples
