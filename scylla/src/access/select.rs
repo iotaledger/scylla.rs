@@ -123,47 +123,58 @@ impl<S: Keyspace> GetSelectStatement<S> for S {
 }
 
 /// A request to select a record which can be sent to the ring
+#[derive(Clone)]
 pub struct SelectRequest<'a, S, K, V> {
     token: i64,
     inner: Vec<u8>,
     /// The type of query this request contains
     pub query_type: QueryType,
-    keyspace: Cow<'a, str>,
+    keyspace: &'a S,
     _marker: PhantomData<(S, K, V)>,
 }
 
 impl<'a, S: Select<K, V>, K, V> SelectRequest<'a, S, K, V> {
     /// Create a new Select Request from a Query, token, and the keyspace.
-    pub fn from_query(query: Query, token: i64, keyspace: &Cow<'a, str>) -> Self {
+    pub fn from_query(query: Query, token: i64, keyspace: &'a S) -> Self {
         Self {
             token,
             inner: query.0,
             query_type: QueryType::Dynamic,
-            keyspace: keyspace.to_owned(),
+            keyspace,
             _marker: PhantomData,
         }
     }
 
     /// Create a new Select Request from a Query, token, and the keyspace.
-    pub fn from_prepared(pcql: Execute, token: i64, keyspace: &Cow<'a, str>) -> Self {
+    pub fn from_prepared(pcql: Execute, token: i64, keyspace: &'a S) -> Self {
         Self {
             token,
             inner: pcql.0,
             query_type: QueryType::Prepared,
-            keyspace: keyspace.to_owned(),
+            keyspace,
             _marker: PhantomData,
         }
     }
 
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
-        send_local(self.token, self.inner, worker, self.keyspace.to_string());
+        send_local(
+            self.token,
+            self.inner,
+            worker,
+            self.keyspace.name().clone().into_owned(),
+        );
         DecodeResult::select()
     }
 
     /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
-        send_global(self.token, self.inner, worker, self.keyspace.to_string());
+        send_global(
+            self.token,
+            self.inner,
+            worker,
+            self.keyspace.name().clone().into_owned(),
+        );
         DecodeResult::select()
     }
 }

@@ -5,24 +5,35 @@ use scylla_cql::{
 };
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct BatchRequest<'a, S> {
     token: i64,
     inner: Vec<u8>,
     map: HashMap<[u8; 16], std::borrow::Cow<'static, str>>,
-    keyspace: Cow<'a, str>,
+    keyspace: &'a S,
     _data: PhantomData<S>,
 }
 
 impl<'a, S: Keyspace> BatchRequest<'a, S> {
     /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(&self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
-        send_local(self.token, self.inner.clone(), worker, self.keyspace.to_string());
+    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
+        send_local(
+            self.token,
+            self.inner,
+            worker,
+            self.keyspace.name().clone().into_owned(),
+        );
         DecodeResult::batch()
     }
 
     /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(&self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
-        send_global(self.token, self.inner.clone(), worker, self.keyspace.to_string());
+    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
+        send_global(
+            self.token,
+            self.inner,
+            worker,
+            self.keyspace.name().clone().into_owned(),
+        );
         DecodeResult::batch()
     }
 
@@ -215,8 +226,8 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchFlags> {
         BatchRequest {
             token,
             map: self.map,
-            inner: self.builder.build(compression).0,
-            keyspace: self.keyspace.name().to_owned(),
+            inner: self.builder.build(compression).0.into(),
+            keyspace: self.keyspace,
             _data: PhantomData,
         }
     }
@@ -230,8 +241,8 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchTimestamp> {
         BatchRequest {
             token,
             map: self.map,
-            inner: self.builder.build(compression).0,
-            keyspace: self.keyspace.name().to_owned(),
+            inner: self.builder.build(compression).0.into(),
+            keyspace: self.keyspace,
             _data: PhantomData,
         }
     }
@@ -242,8 +253,8 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchBuild> {
         BatchRequest {
             token,
             map: self.map,
-            inner: self.builder.build(compression).0,
-            keyspace: self.keyspace.name().to_owned(),
+            inner: self.builder.build(compression).0.into(),
+            keyspace: self.keyspace,
             _data: PhantomData,
         }
     }

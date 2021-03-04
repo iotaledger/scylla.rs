@@ -198,7 +198,7 @@ mod tests {
                 .build();
             let token = rand::random::<i64>();
 
-            SelectRequest::from_query(query, token, self.name())
+            SelectRequest::from_query(query, token, self)
         }
     }
 
@@ -214,7 +214,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            SelectRequest::from_prepared(prepared_cql, token, self.name())
+            SelectRequest::from_prepared(prepared_cql, token, self)
         }
     }
 
@@ -232,7 +232,7 @@ mod tests {
                 .value(value.to_string())
                 .build();
             let token = rand::random::<i64>();
-            InsertRequest::from_query(query, token, self.name())
+            InsertRequest::from_query(query, token, self)
         }
     }
 
@@ -250,7 +250,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            UpdateRequest::from_query(query, token, self.name())
+            UpdateRequest::from_query(query, token, self)
         }
     }
 
@@ -266,7 +266,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            DeleteRequest::from_query(query, token, self.name())
+            DeleteRequest::from_query(query, token, self)
         }
     }
 
@@ -285,7 +285,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            DeleteRequest::from_prepared(prepared_cql, token, self.name())
+            DeleteRequest::from_prepared(prepared_cql, token, self)
         }
     }
 
@@ -326,6 +326,7 @@ mod tests {
         let keyspace = Mainnet { name: "mainnet".into() };
         let req1 = keyspace.select::<f32>(&3);
         let req2 = keyspace.select::<i32>(&3);
+        let res = req1.clone().send_local(Box::new(worker.clone()));
         let res = req1.send_local(Box::new(worker.clone()));
         let res = req2.send_local(Box::new(worker));
     }
@@ -363,7 +364,7 @@ mod tests {
             .delete_prepared::<u32, i32>()
             .consistency(Consistency::One)
             .build(0, UNCOMPRESSED);
-        let res = req.send_local(Box::new(worker));
+        let res = req.clone().send_local(Box::new(worker));
 
         // Later, after getting an unprepared error:
         let unprepared_id = keyspace.update_id();
