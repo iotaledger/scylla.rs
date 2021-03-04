@@ -12,40 +12,40 @@ use super::*;
 ///     .insert(key, value) // Get the Insert Request
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
-pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
+pub trait Insert<K, V>: Keyspace + VoidDecoder {
     /// Create your insert statement here.
     ///
     /// ## Examples
-    /// ```no_compile
+    /// ```no_run
     /// fn insert_statement() -> Cow<'static, str> {
     ///     "INSERT INTO keyspace.table (key, val1, val2) VALUES (?,?,?)".into()
     /// }
     /// ```
-    /// ```no_compile
+    /// ```no_run
     /// fn insert_statement() -> Cow<'static, str> {
-    ///     format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
+    ///     format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     /// }
     /// ```
-    fn insert_statement() -> Cow<'static, str>;
+    fn statement(&self) -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn insert_id() -> [u8; 16] {
-        md5::compute(Self::insert_statement().as_bytes()).into()
+    fn id(&self) -> [u8; 16] {
+        md5::compute(self.insert_statement().as_bytes()).into()
     }
     /// Construct your insert query here and use it to create an
     /// `InsertRequest`.
     ///
     /// ## Examples
     /// ### Dynamic query
-    /// ```no_compile
-    /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<'a, Self, MyKeyType, MyValueType>
+    /// ```no_run
+    /// fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<Self, MyKeyType, MyValueType>
     /// where
-    ///     Self: Insert<'a, MyKeyType, MyValueType>,
+    ///     Self: Insert<MyKeyType, MyValueType>,
     /// {
     ///     let query = Query::new()
-    ///         .statement(&Self::insert_statement())
+    ///         .statement(&self.insert_statement::<MyKeyType, MyValueType>())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .value(value.val1.to_string())
@@ -54,18 +54,18 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     ///
     ///     let token = rand::random::<i64>();
     ///
-    ///     InsertRequest::from_query(query, token, self)
+    ///     InsertRequest::from_query(query, token, self.name())
     /// }
     /// ```
     /// ### Prepared statement
-    /// ```no_compile
-    /// fn get_request(&'a self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<'a, Self, MyKeyType, MyValueType>
+    /// ```no_run
+    /// fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<Self, MyKeyType, MyValueType>
     /// where
-    ///     Self: Insert<'a, MyKeyType, MyValueType>,
+    ///     Self: Insert<MyKeyType, MyValueType>,
     /// {
     ///     use scylla::access::*;
     ///     let prepared_cql = Execute::new()
-    ///         .id(&Self::select_id())
+    ///         .id(&self.select_id::<MyKeyType, MyValueType>())
     ///         .consistency(scylla_cql::Consistency::One)
     ///         .value(key.to_string())
     ///         .value(value.val1.to_string())
@@ -74,28 +74,57 @@ pub trait Insert<'a, K, V>: Keyspace + VoidDecoder {
     ///
     ///     let token = rand::random::<i64>();
     ///
-    ///     InsertRequest::from_prepared(prepared_cql, token, self)
+    ///     InsertRequest::from_prepared(prepared_cql, token, self.name())
     /// }
     /// ```
-    fn get_request(&'a self, key: &K, value: &V) -> InsertRequest<'a, Self, K, V>
+    fn get_request(&self, key: &K, value: &V) -> InsertRequest<Self, K, V>
     where
-        Self: Insert<'a, K, V>;
+        Self: Insert<K, V>;
 }
 
 /// Wrapper for the `Insert` trait which provides the `insert` function
 pub trait GetInsertRequest<S, K, V> {
     /// Calls the appropriate `Insert` implementation for this Key/Value pair
-    fn insert<'a>(&'a self, key: &K, value: &V) -> InsertRequest<S, K, V>
+    fn insert(&self, key: &K, value: &V) -> InsertRequest<S, K, V>
     where
-        S: Insert<'a, K, V>;
+        S: Insert<K, V>;
 }
 
 impl<S: Keyspace, K, V> GetInsertRequest<S, K, V> for S {
-    fn insert<'a>(&'a self, key: &K, value: &V) -> InsertRequest<S, K, V>
+    fn insert(&self, key: &K, value: &V) -> InsertRequest<S, K, V>
     where
-        S: Insert<'a, K, V>,
+        S: Insert<K, V>,
     {
         S::get_request(self, key, value)
+    }
+}
+
+/// Defines two helper methods to specify statement / id
+pub trait GetInsertStatement<S> {
+    /// Specifies the Key and Value type for an insert statement
+    fn insert_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        S: Insert<K, V>;
+
+    /// Specifies the Key and Value type for a prepared insert statement id
+    fn insert_id<K, V>(&self) -> [u8; 16]
+    where
+        S: Insert<K, V>;
+}
+
+impl<S: Keyspace> GetInsertStatement<S> for S {
+    fn insert_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        S: Insert<K, V>,
+    {
+        S::statement(self)
+    }
+
+    fn insert_id<K, V>(&self) -> [u8; 16]
+    where
+        S: Insert<K, V>,
+    {
+        S::id(self)
     }
 }
 
@@ -105,42 +134,42 @@ pub struct InsertRequest<'a, S, K, V> {
     inner: Vec<u8>,
     /// The type of query this request contains
     pub query_type: QueryType,
-    keyspace: &'a S,
-    _marker: PhantomData<(K, V)>,
+    keyspace: Cow<'a, str>,
+    _marker: PhantomData<(S, K, V)>,
 }
 
-impl<'a, S: Insert<'a, K, V>, K, V> InsertRequest<'a, S, K, V> {
+impl<'a, S: Insert<K, V>, K, V> InsertRequest<'a, S, K, V> {
     /// Create a new Insert Request from a Query, token, and the keyspace.
-    pub fn from_query(query: Query, token: i64, keyspace: &'a S) -> Self {
+    pub fn from_query(query: Query, token: i64, keyspace: &Cow<'a, str>) -> Self {
         Self {
             token,
             inner: query.0,
             query_type: QueryType::Dynamic,
-            keyspace,
+            keyspace: keyspace.to_owned(),
             _marker: PhantomData,
         }
     }
 
     /// Create a new Insert Request from a Query, token, and the keyspace.
-    pub fn from_prepared(pcql: Execute, token: i64, keyspace: &'a S) -> Self {
+    pub fn from_prepared(pcql: Execute, token: i64, keyspace: &Cow<'a, str>) -> Self {
         Self {
             token,
             inner: pcql.0,
             query_type: QueryType::Prepared,
-            keyspace,
+            keyspace: keyspace.to_owned(),
             _marker: PhantomData,
         }
     }
 
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
-        self.keyspace.send_local(self.token, self.inner, worker);
+        send_local(self.token, self.inner, worker, self.keyspace.to_string());
         DecodeResult::insert()
     }
 
     /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
-        self.keyspace.send_global(self.token, self.inner, worker);
+        send_global(self.token, self.inner, worker, self.keyspace.to_string());
         DecodeResult::insert()
     }
 }

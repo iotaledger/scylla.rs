@@ -25,11 +25,11 @@ pub(crate) mod update;
 
 pub use super::{Worker, WorkerError};
 pub use batch::Batch;
-pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
-pub use insert::{GetInsertRequest, Insert, InsertRequest};
+pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
+pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
 pub use keyspace::Keyspace;
-pub use select::{GetSelectRequest, Select, SelectRequest};
-pub use update::{GetUpdateRequest, Update, UpdateRequest};
+pub use select::{GetSelectRequest, GetSelectStatement, Select, SelectRequest};
+pub use update::{GetUpdateRequest, GetUpdateStatement, Update, UpdateRequest};
 
 /// alias the ring (in case it's needed)
 pub use crate::ring::Ring;
@@ -147,6 +147,20 @@ impl<S> DecodeResult<DecodeVoid<S>> {
     }
 }
 
+/// Send a local request to the Ring
+pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>, _keyspace: String) {
+    let request = ReporterEvent::Request { worker, payload };
+
+    Ring::send_local_random_replica(token, request);
+}
+
+/// Send a global request to the Ring
+pub fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>, _keyspace: String) {
+    let request = ReporterEvent::Request { worker, payload };
+
+    Ring::send_global_random_replica(token, request);
+}
+
 impl<T> Deref for DecodeResult<T> {
     type Target = T;
 
@@ -160,139 +174,118 @@ mod tests {
 
     use super::*;
 
-    #[derive(Default)]
-    struct Mainnet;
+    #[derive(Default, Clone)]
+    struct Mainnet {
+        name: Cow<'static, str>,
+    }
 
     impl Keyspace for Mainnet {
-        const NAME: &'static str = "Mainnet";
-        fn new() -> Self {
-            Mainnet
-        }
-        fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
-            todo!()
-        }
-
-        fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
-            todo!()
+        fn name(&self) -> &Cow<'static, str> {
+            &self.name
         }
     }
 
-    impl<'a> Select<'a, u32, f32> for Mainnet {
-        fn select_statement() -> Cow<'static, str> {
+    impl Select<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
             "SELECT * FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32>
-        where
-            Self: Select<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32) -> SelectRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::select_statement())
+                .statement(&self.select_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
 
-            SelectRequest::from_query(query, token, self)
+            SelectRequest::from_query(query, token, self.name())
         }
     }
 
-    impl<'a> Select<'a, u32, i32> for Mainnet {
-        fn select_statement() -> Cow<'static, str> {
-            format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
+    impl Select<u32, i32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("SELECT * FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32>
-        where
-            Self: Select<'a, u32, i32>,
-        {
+        fn get_request(&self, key: &u32) -> SelectRequest<Self, u32, i32> {
             let prepared_cql = Execute::new()
-                .id(&Self::select_id())
+                .id(&self.select_id::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            SelectRequest::from_prepared(prepared_cql, token, self)
+            SelectRequest::from_prepared(prepared_cql, token, self.name())
         }
     }
 
-    impl<'a> Insert<'a, u32, f32> for Mainnet {
-        fn insert_statement() -> Cow<'static, str> {
-            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
+    impl Insert<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32, value: &f32) -> InsertRequest<'a, Self, u32, f32>
-        where
-            Self: Insert<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32, value: &f32) -> InsertRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::insert_statement())
+                .statement(&self.insert_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .value(value.to_string())
                 .value(value.to_string())
                 .build();
             let token = rand::random::<i64>();
-            InsertRequest::from_query(query, token, self)
+            InsertRequest::from_query(query, token, self.name())
         }
     }
 
-    impl<'a> Update<'a, u32, f32> for Mainnet {
-        fn update_statement() -> Cow<'static, str> {
-            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
+    impl Update<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32, value: &f32) -> UpdateRequest<'a, Self, u32, f32>
-        where
-            Self: Update<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32, value: &f32) -> UpdateRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::update_statement())
+                .statement(&self.update_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
                 .value(value.to_string())
                 .value(value.to_string())
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            UpdateRequest::from_query(query, token, self)
+            UpdateRequest::from_query(query, token, self.name())
         }
     }
 
-    impl<'a> Delete<'a, u32, f32> for Mainnet {
-        fn delete_statement() -> Cow<'static, str> {
+    impl Delete<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, f32>
-        where
-            Self: Delete<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::delete_statement())
+                .statement(&self.delete_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            DeleteRequest::from_query(query, token, self)
+            DeleteRequest::from_query(query, token, self.name())
         }
     }
 
-    impl<'a> Delete<'a, u32, i32> for Mainnet {
-        fn delete_statement() -> Cow<'static, str> {
-            format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
+    impl Delete<u32, i32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, i32>
+        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, i32>
         where
-            Self: Delete<'a, u32, i32>,
+            Self: Delete<u32, i32>,
         {
             let prepared_cql = Execute::new()
-                .id(&Self::delete_id())
+                .id(&self.delete_id::<u32, i32>())
                 .consistency(scylla_cql::Consistency::One)
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            DeleteRequest::from_prepared(prepared_cql, token, self)
+            DeleteRequest::from_prepared(prepared_cql, token, self.name())
         }
     }
 
@@ -310,7 +303,7 @@ mod tests {
 
     impl VoidDecoder for Mainnet {}
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestWorker;
 
     impl Worker for TestWorker {
@@ -330,31 +323,39 @@ mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let worker = TestWorker;
-        let res = Mainnet.select::<f32>(&3).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let req1 = keyspace.select::<f32>(&3);
+        let req2 = keyspace.select::<i32>(&3);
+        let res = req1.send_local(Box::new(worker.clone()));
+        let res = req2.send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let worker = TestWorker;
-        let res = Mainnet.insert(&3, &8.0).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let res = keyspace.insert(&3, &8.0).send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_update() {
         let worker = TestWorker;
-        let res = Mainnet.update(&3, &8.0).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let res = keyspace.update(&3, &8.0).send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_delete() {
         let worker = TestWorker;
-        let res = Mainnet.delete::<f32>(&3).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let res = keyspace.delete::<f32>(&3).send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_batch() {
         let worker = TestWorker;
-        let req = Mainnet
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let req = keyspace
             .batch()
             .batch_type(BatchTypes::Unlogged)
             .update_query::<u32, f32>()
@@ -365,7 +366,7 @@ mod tests {
         let res = req.send_local(Box::new(worker));
 
         // Later, after getting an unprepared error:
-        let unprepared_id = <Mainnet as Update<u32, f32>>::update_id();
+        let unprepared_id = keyspace.update_id();
         let unprepared_statement = req.get_cql(&unprepared_id).expect("How could this happen to me?");
         // Do something to prepare the statement...
         //   try_prepare(unprepared_statement)

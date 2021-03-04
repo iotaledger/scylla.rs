@@ -1,31 +1,28 @@
-use std::collections::HashMap;
-
+use super::*;
 use scylla_cql::{
     compression::Compression, BatchBuild, BatchBuilder, BatchFlags, BatchStatementOrId, BatchTimestamp, BatchType,
     BatchTypes, BatchValues, ColumnEncoder, Consistency,
 };
-
-use crate::Worker;
-
-use super::{DecodeResult, DecodeVoid, Delete, Insert, Keyspace, Update};
+use std::collections::HashMap;
 
 pub struct BatchRequest<'a, S> {
     token: i64,
     inner: Vec<u8>,
     map: HashMap<[u8; 16], std::borrow::Cow<'static, str>>,
-    keyspace: &'a S,
+    keyspace: Cow<'a, str>,
+    _data: PhantomData<S>,
 }
 
-impl<'a, S: 'a + Keyspace> BatchRequest<'a, S> {
+impl<'a, S: Keyspace> BatchRequest<'a, S> {
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(&self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
-        self.keyspace.send_local(self.token, self.inner.clone(), worker);
+        send_local(self.token, self.inner.clone(), worker, self.keyspace.to_string());
         DecodeResult::batch()
     }
 
     /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(&self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
-        self.keyspace.send_global(self.token, self.inner.clone(), worker);
+        send_global(self.token, self.inner.clone(), worker, self.keyspace.to_string());
         DecodeResult::batch()
     }
 
@@ -73,10 +70,10 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchType> {
 impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchStatementOrId> {
     pub fn insert_query<K, V>(self) -> BatchCollector<'a, S, BatchValues>
     where
-        S: Insert<'a, K, V>,
+        S: Insert<K, V>,
     {
         Self::step(
-            self.builder.statement(S::insert_statement().as_ref()),
+            self.builder.statement(self.keyspace.insert_statement().as_ref()),
             self.map,
             self.keyspace,
         )
@@ -84,19 +81,19 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchStatementOrId> {
 
     pub fn insert_prepared<K, V>(mut self) -> BatchCollector<'a, S, BatchValues>
     where
-        S: Insert<'a, K, V>,
+        S: Insert<K, V>,
     {
-        let id = S::insert_id();
-        self.map.insert(id, S::insert_statement());
+        let id = self.keyspace.insert_id();
+        self.map.insert(id, self.keyspace.insert_statement());
         Self::step(self.builder.id(&id), self.map, self.keyspace)
     }
 
     pub fn update_query<K, V>(self) -> BatchCollector<'a, S, BatchValues>
     where
-        S: Update<'a, K, V>,
+        S: Update<K, V>,
     {
         Self::step(
-            self.builder.statement(S::update_statement().as_ref()),
+            self.builder.statement(self.keyspace.update_statement().as_ref()),
             self.map,
             self.keyspace,
         )
@@ -104,19 +101,19 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchStatementOrId> {
 
     pub fn update_prepared<K, V>(mut self) -> BatchCollector<'a, S, BatchValues>
     where
-        S: Update<'a, K, V>,
+        S: Update<K, V>,
     {
-        let id = S::update_id();
-        self.map.insert(id, S::update_statement());
+        let id = self.keyspace.update_id();
+        self.map.insert(id, self.keyspace.update_statement());
         Self::step(self.builder.id(&id), self.map, self.keyspace)
     }
 
     pub fn delete_query<K, V>(self) -> BatchCollector<'a, S, BatchValues>
     where
-        S: Delete<'a, K, V>,
+        S: Delete<K, V>,
     {
         Self::step(
-            self.builder.statement(S::delete_statement().as_ref()),
+            self.builder.statement(self.keyspace.delete_statement().as_ref()),
             self.map,
             self.keyspace,
         )
@@ -124,10 +121,10 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchStatementOrId> {
 
     pub fn delete_prepared<K, V>(mut self) -> BatchCollector<'a, S, BatchValues>
     where
-        S: Delete<'a, K, V>,
+        S: Delete<K, V>,
     {
-        let id = S::delete_id();
-        self.map.insert(id, S::delete_statement());
+        let id = self.keyspace.delete_id();
+        self.map.insert(id, self.keyspace.delete_statement());
         Self::step(self.builder.id(&id), self.map, self.keyspace)
     }
 }
@@ -135,10 +132,10 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchStatementOrId> {
 impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchValues> {
     pub fn insert_query<K, V>(self) -> Self
     where
-        S: Insert<'a, K, V>,
+        S: Insert<K, V>,
     {
         Self::step(
-            self.builder.statement(S::insert_statement().as_ref()),
+            self.builder.statement(self.keyspace.insert_statement().as_ref()),
             self.map,
             self.keyspace,
         )
@@ -146,19 +143,19 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchValues> {
 
     pub fn insert_prepared<K, V>(mut self) -> Self
     where
-        S: Insert<'a, K, V>,
+        S: Insert<K, V>,
     {
-        let id = S::insert_id();
-        self.map.insert(id, S::insert_statement());
+        let id = self.keyspace.insert_id();
+        self.map.insert(id, self.keyspace.insert_statement());
         Self::step(self.builder.id(&id), self.map, self.keyspace)
     }
 
     pub fn update_query<K, V>(self) -> Self
     where
-        S: Update<'a, K, V>,
+        S: Update<K, V>,
     {
         Self::step(
-            self.builder.statement(S::update_statement().as_ref()),
+            self.builder.statement(self.keyspace.update_statement().as_ref()),
             self.map,
             self.keyspace,
         )
@@ -166,19 +163,19 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchValues> {
 
     pub fn update_prepared<K, V>(mut self) -> Self
     where
-        S: Update<'a, K, V>,
+        S: Update<K, V>,
     {
-        let id = S::update_id();
-        self.map.insert(id, S::update_statement());
+        let id = self.keyspace.update_id();
+        self.map.insert(id, self.keyspace.update_statement());
         Self::step(self.builder.id(&id), self.map, self.keyspace)
     }
 
     pub fn delete_query<K, V>(self) -> Self
     where
-        S: Delete<'a, K, V>,
+        S: Delete<K, V>,
     {
         Self::step(
-            self.builder.statement(S::delete_statement().as_ref()),
+            self.builder.statement(self.keyspace.delete_statement().as_ref()),
             self.map,
             self.keyspace,
         )
@@ -186,10 +183,10 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchValues> {
 
     pub fn delete_prepared<K, V>(mut self) -> Self
     where
-        S: Delete<'a, K, V>,
+        S: Delete<K, V>,
     {
-        let id = S::delete_id();
-        self.map.insert(id, S::delete_statement());
+        let id = self.keyspace.delete_id();
+        self.map.insert(id, self.keyspace.delete_statement());
         Self::step(self.builder.id(&id), self.map, self.keyspace)
     }
 
@@ -219,7 +216,8 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchFlags> {
             token,
             map: self.map,
             inner: self.builder.build(compression).0,
-            keyspace: self.keyspace,
+            keyspace: self.keyspace.name().to_owned(),
+            _data: PhantomData,
         }
     }
 }
@@ -233,7 +231,8 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchTimestamp> {
             token,
             map: self.map,
             inner: self.builder.build(compression).0,
-            keyspace: self.keyspace,
+            keyspace: self.keyspace.name().to_owned(),
+            _data: PhantomData,
         }
     }
 }
@@ -244,7 +243,8 @@ impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchBuild> {
             token,
             map: self.map,
             inner: self.builder.build(compression).0,
-            keyspace: self.keyspace,
+            keyspace: self.keyspace.name().to_owned(),
+            _data: PhantomData,
         }
     }
 }
@@ -259,7 +259,11 @@ impl<'a, T, S: 'a + Keyspace> BatchCollector<'a, S, T> {
     }
 }
 
+/// Defines a helper method to allow keyspaces to begin constructing a batch
 pub trait Batch<'a> {
+    /// Start building a batch.
+    /// This function will borrow the keyspace until the batch is fully built in order
+    /// to access its trait definitions.
     fn batch(&'a self) -> BatchCollector<'a, Self, BatchType>
     where
         Self: Sized + Keyspace,
