@@ -50,15 +50,10 @@ enum RequestType {
     Batch = 4,
 }
 
-/// A query type which indicates whether the statement
-/// should be used dynamically or via its MD5 hash
-#[repr(u8)]
-#[derive(Copy, Clone)]
-pub enum QueryType {
-    /// A dynamic statement
-    Dynamic = 0,
-    /// A prepared statement
-    Prepared = 1,
+/// Create request from cql frame
+pub trait CreateRequest<'a, T>: Keyspace {
+    /// Create request of Type T
+    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> T;
 }
 
 /// A marker struct which holds types used for a query
@@ -198,7 +193,7 @@ mod tests {
                 .build();
             let token = rand::random::<i64>();
 
-            SelectRequest::from_query(query, token, self)
+            self.create_request(query, token)
         }
     }
 
@@ -214,7 +209,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            SelectRequest::from_prepared(prepared_cql, token, self)
+            self.create_request(prepared_cql, token)
         }
     }
 
@@ -232,7 +227,7 @@ mod tests {
                 .value(value.to_string())
                 .build();
             let token = rand::random::<i64>();
-            InsertRequest::from_query(query, token, self)
+            self.create_request(query, token)
         }
     }
 
@@ -250,7 +245,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            UpdateRequest::from_query(query, token, self)
+            self.create_request(query, token)
         }
     }
 
@@ -266,7 +261,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            DeleteRequest::from_query(query, token, self)
+            self.create_request(query, token)
         }
     }
 
@@ -285,7 +280,7 @@ mod tests {
                 .value(key.to_string())
                 .build();
             let token = rand::random::<i64>();
-            DeleteRequest::from_prepared(prepared_cql, token, self)
+            self.create_request(prepared_cql, token)
         }
     }
 

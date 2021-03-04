@@ -477,6 +477,11 @@ impl Query {
     }
 }
 
+impl Into<Vec<u8>> for Query {
+    fn into(self) -> Vec<u8> {
+        self.0
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
