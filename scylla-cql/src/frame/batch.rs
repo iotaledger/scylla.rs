@@ -97,6 +97,32 @@ impl BatchBuilder<BatchTypeUnset, BatchHeader> {
     }
 }
 
+pub trait QueryOrPrepared {
+    type BatchType: Copy + Into<u8>;
+    fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues>;
+    fn prepared(self, id: &[u8; 16]) -> BatchBuilder<Self::BatchType, BatchValues>;
+}
+
+impl<Type: Copy + Into<u8>> QueryOrPrepared for BatchBuilder<Type, BatchStatementOrId> {
+    type BatchType = Type;
+    fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues> {
+        self.statement(statement)
+    }
+    fn prepared(self, id: &[u8; 16]) -> BatchBuilder<Self::BatchType, BatchValues> {
+        self.id(id)
+    }
+}
+
+impl<Type: Copy + Into<u8>> QueryOrPrepared for BatchBuilder<Type, BatchValues> {
+    type BatchType = Type;
+    fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues> {
+        self.statement(statement)
+    }
+    fn prepared(self, id: &[u8; 16]) -> BatchBuilder<Self::BatchType, BatchValues> {
+        self.id(id)
+    }
+}
+
 impl BatchBuilder<BatchTypeUnset, BatchType> {
     /// Set the batch type in the Batch frame.
     pub fn batch_type<Type: Copy + Into<u8>>(mut self, batch_type: Type) -> BatchBuilder<Type, BatchStatementOrId> {
@@ -279,14 +305,14 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchFlags> {
         }
     }
     /// Build a Batch frame.
-    pub fn build(mut self, compression: impl Compression) -> Batch {
+    pub fn build(mut self) -> Batch {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // add noflags byte for batch flags
         self.buffer.push(NOFLAGS);
         // adjust the querycount
         self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = compression.compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer);
         Batch(self.buffer)
     }
 }
@@ -305,24 +331,24 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchTimestamp> {
         }
     }
     /// Build a Batch frame.
-    pub fn build(mut self, compression: impl Compression) -> Batch {
+    pub fn build(mut self) -> Batch {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // adjust the querycount
         self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = compression.compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer);
         Batch(self.buffer)
     }
 }
 
 impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchBuild> {
     /// Build a Batch frame.
-    pub fn build(mut self, compression: impl Compression) -> Batch {
+    pub fn build(mut self) -> Batch {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // adjust the querycount
         self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = compression.compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer);
         Batch(self.buffer)
     }
 }
@@ -367,6 +393,6 @@ mod tests {
             .id(&[0; 16]) // add second query(prepared one) to the batch
             .value("JUNK_VALUE") // junk value
             .consistency(Consistency::One)
-            .build(UNCOMPRESSED); // build uncompressed batch
+            .build();
     }
 }

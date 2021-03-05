@@ -12,7 +12,7 @@ use super::*;
 ///     .insert(key, value) // Get the Insert Request
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
-pub trait Insert<K, V>: Keyspace + VoidDecoder {
+pub trait Insert<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Create your insert statement here.
     ///
     /// ## Examples
