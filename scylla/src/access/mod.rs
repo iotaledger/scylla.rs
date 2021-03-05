@@ -36,12 +36,8 @@ pub use crate::ring::Ring;
 /// alias the reporter event (in case it's needed)
 pub use crate::stage::{ReporterEvent, ReporterHandle};
 /// alias to cql traits and types
-pub use scylla_cql::{
-    BatchTypeCounter, BatchTypeLogged, BatchTypeUnlogged, Consistency, CqlError, Decoder, Execute, Query, RowsDecoder,
-    VoidDecoder,
-};
+pub use scylla_cql::*;
 
-use scylla_cql::*;
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
 #[repr(u8)]
