@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::worker::Worker;
+use std::borrow::Cow;
 
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.
@@ -18,16 +18,9 @@ use crate::worker::Worker;
 /// - `Insert`
 /// - `Delete`
 pub trait Keyspace: Send + Sized + Sync {
-    /// Name of the keyspace
-    const NAME: &'static str;
-    /// Create new keyspace instance
-    fn new() -> Self;
     /// Get the name of the keyspace as represented in the database
-    fn name() -> &'static str {
-        Self::NAME
-    }
-    /// Get the cql_statement of the prepared_id from the StatementsStore
-    fn get_statement(id: &[u8; 16]) -> Option<&String>;
+    fn name(&self) -> &Cow<'static, str>;
+
     /// Decode void result
     fn decode_void(decoder: scylla_cql::Decoder) -> Result<(), scylla_cql::CqlError>
     where
@@ -42,10 +35,6 @@ pub trait Keyspace: Send + Sized + Sync {
     {
         Self::try_decode(decoder)
     }
-    /// Send query to a random replica in the local datacenter;
-    fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
-    /// Send query to a random replica in any global datacenter;
-    fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>);
     // TODO replication_refactor, strategy, options,etc.
 }
 
@@ -71,10 +60,10 @@ impl<T: Keyspace> StatementsStoreBuilder<T> {
         self
     }
     /// Build the StatementsStore for T: Keyspace.
-    pub fn build(self) -> StatementsStore<T> {
+    pub fn build(self, keyspace: &T) -> StatementsStore<T> {
         let mut store = std::collections::HashMap::new();
         for cql in self.cqls {
-            let cql_with_keyspace_name = cql.replace("{}", T::name());
+            let cql_with_keyspace_name = cql.replace("{}", keyspace.name());
             let id = md5::compute(&cql_with_keyspace_name).0;
             store.insert(id, cql_with_keyspace_name);
         }

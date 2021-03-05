@@ -106,7 +106,7 @@ impl ExecuteBuilder<ExecuteFlags> {
         }
     }
     /// Set the first value in the query frame.
-    pub fn value(mut self, value: impl ColumnEncoder) -> ExecuteBuilder<ExecuteValues> {
+    pub fn value<V: ColumnEncoder>(mut self, value: &V) -> ExecuteBuilder<ExecuteValues> {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -204,7 +204,7 @@ impl ExecuteBuilder<ExecuteFlags> {
 
 impl ExecuteBuilder<ExecuteValues> {
     /// Set the next value in the query frame.
-    pub fn value(mut self, value: impl ColumnEncoder) -> Self {
+    pub fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -486,30 +486,14 @@ impl Into<Vec<u8>> for Execute {
 mod tests {
     use super::*;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
     #[test]
     // note: junk data
     fn simple_query_builder_test() {
         let Execute(_payload) = Execute::new()
             .id(&[0; 16])
             .consistency(Consistency::One)
-            .value("HASH_VALUE")
-            .value("PAYLOAD_VALUE")
-            .value("ADDRESS_VALUE")
-            .value(0 as i64) // tx-value as i64
-            .value("OBSOLETE_TAG_VALUE")
-            .value(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64) // junk timestamp
-            .value(0 as i64) // current-index
-            .value(0 as i64) // last-index
-            .value("BUNDLE_HASH_VALUE")
-            .value("TRUNK_VALUE")
-            .value("BRANCH_VALUE")
-            .value("TAG_VALUE")
-            .value(0 as i64) // attachment_timestamp
-            .value(0 as i64) // attachment_timestamp_lower
-            .value(0 as i64) // attachment_timestamp_upper
-            .value("NONCE_VALUE") // nonce
-            .unset_value() // not-set value for milestone
+            .value(&"HASH_VALUE")
+            .value(&"PAYLOAD_VALUE")
             .build();
     }
 }

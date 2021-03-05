@@ -1,6 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+pub(crate) mod batch;
 /// Provides the `Delete` trait which can be implemented to
 /// define delete queries for Key / Value pairs and how
 /// they are decoded
@@ -23,19 +24,24 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 pub use super::{Worker, WorkerError};
-pub use delete::{Delete, DeleteRequest, GetDeleteRequest};
-pub use insert::{GetInsertRequest, Insert, InsertRequest};
-pub use keyspace::{Keyspace, StatementsStore, StatementsStoreBuilder};
-pub use select::{GetSelectRequest, Select, SelectRequest};
-pub use update::{GetUpdateRequest, Update, UpdateRequest};
+pub use batch::*;
+pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
+pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
+pub use keyspace::Keyspace;
+pub use select::{GetSelectRequest, GetSelectStatement, Select, SelectRequest};
+pub use update::{GetUpdateRequest, GetUpdateStatement, Update, UpdateRequest};
 
 /// alias the ring (in case it's needed)
 pub use crate::ring::Ring;
 /// alias the reporter event (in case it's needed)
 pub use crate::stage::{ReporterEvent, ReporterHandle};
 /// alias to cql traits and types
-pub use scylla_cql::{Consistency, CqlError, Decoder, Execute, Query, RowsDecoder, VoidDecoder};
+pub use scylla_cql::{
+    BatchTypeCounter, BatchTypeLogged, BatchTypeUnlogged, Consistency, CqlError, Decoder, Execute, Query, RowsDecoder,
+    VoidDecoder,
+};
 
+use scylla_cql::*;
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
 #[repr(u8)]
@@ -45,6 +51,12 @@ enum RequestType {
     Update = 1,
     Delete = 2,
     Select = 3,
+    Batch = 4,
+}
+
+pub trait ComputeToken<K>: Keyspace {
+    /// Compute the token from the provided partition_key by using murmur3 hash function
+    fn token(key: &K) -> i64;
 }
 
 /// Create request from cql frame
@@ -131,6 +143,26 @@ impl<S> DecodeResult<DecodeVoid<S>> {
             request_type: RequestType::Delete,
         }
     }
+    fn batch() -> Self {
+        Self {
+            inner: DecodeVoid::<S>::new(),
+            request_type: RequestType::Batch,
+        }
+    }
+}
+
+/// Send a local request to the Ring
+pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>, _keyspace: String) {
+    let request = ReporterEvent::Request { worker, payload };
+
+    Ring::send_local_random_replica(token, request);
+}
+
+/// Send a global request to the Ring
+pub fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>, _keyspace: String) {
+    let request = ReporterEvent::Request { worker, payload };
+
+    Ring::send_global_random_replica(token, request);
 }
 
 impl<T> Deref for DecodeResult<T> {
@@ -142,47 +174,30 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
+
     use super::*;
 
-    #[derive(Default)]
-    struct Mainnet;
-    static mut MAINNET_STORE: Option<StatementsStore<Mainnet>> = None;
-    impl Keyspace for Mainnet {
-        const NAME: &'static str = "Mainnet";
-        fn new() -> Self {
-            Mainnet
-        }
-        fn get_statement(id: &[u8; 16]) -> Option<&String> {
-            unsafe {
-                if let Some(store) = MAINNET_STORE.as_ref() {
-                    store.get_statement(id)
-                } else {
-                    None
-                }
-            }
-        }
-        fn send_local(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
-            todo!()
-        }
+    #[derive(Default, Clone)]
+    struct Mainnet {
+        pub name: Cow<'static, str>,
+    }
 
-        fn send_global(&self, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) {
-            todo!()
+    impl Keyspace for Mainnet {
+        fn name(&self) -> &Cow<'static, str> {
+            &self.name
         }
     }
 
-    impl<'a> Select<'a, u32, f32> for Mainnet {
-        fn select_statement() -> Cow<'static, str> {
+    impl Select<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
             "SELECT * FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, f32>
-        where
-            Self: Select<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32) -> SelectRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::select_statement())
+                .statement(&self.select_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
 
@@ -190,102 +205,144 @@ mod tests {
         }
     }
 
-    impl<'a> Select<'a, u32, i32> for Mainnet {
-        fn select_statement() -> Cow<'static, str> {
-            format!("SELECT * FROM {}.table WHERE key = ?", Self::name()).into()
+    impl Select<u32, i32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("SELECT * FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32) -> SelectRequest<'a, Self, u32, i32>
-        where
-            Self: Select<'a, u32, i32>,
-        {
+        fn get_request(&self, key: &u32) -> SelectRequest<Self, u32, i32> {
             let prepared_cql = Execute::new()
-                .id(&Self::select_id())
+                .id(&self.select_id::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(prepared_cql, token)
         }
     }
-
-    impl<'a> Insert<'a, u32, f32> for Mainnet {
-        fn insert_statement() -> Cow<'static, str> {
-            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", Self::name()).into()
+    impl ComputeToken<u32> for Mainnet {
+        fn token(_key: &u32) -> i64 {
+            rand::random()
+        }
+    }
+    impl Insert<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32, value: &f32) -> InsertRequest<'a, Self, u32, f32>
-        where
-            Self: Insert<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32, value: &f32) -> InsertRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::insert_statement())
+                .statement(&self.insert_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
-                .value(value.to_string())
-                .value(value.to_string())
+                .value(key)
+                .value(value)
+                .value(value)
+                .build();
+            let token = Self::token(key);
+            self.create_request(query, token)
+        }
+    }
+
+    impl InsertBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id::<u32, f32>())
+        }
+        fn push_insert(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+            value: &f32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder.value(key).value(value).value(value)
+        }
+    }
+
+    impl Update<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+        }
+
+        fn get_request(&self, key: &u32, value: &f32) -> UpdateRequest<Self, u32, f32> {
+            let query = Query::new()
+                .statement(&self.update_statement::<u32, f32>())
+                .consistency(scylla_cql::Consistency::One)
+                .value(value)
+                .value(value)
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(query, token)
         }
     }
 
-    impl<'a> Update<'a, u32, f32> for Mainnet {
-        fn update_statement() -> Cow<'static, str> {
-            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
+    impl UpdateBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id::<u32, f32>())
         }
-
-        fn get_request(&'a self, key: &u32, value: &f32) -> UpdateRequest<'a, Self, u32, f32>
-        where
-            Self: Update<'a, u32, f32>,
-        {
-            let query = Query::new()
-                .statement(&Self::update_statement())
-                .consistency(scylla_cql::Consistency::One)
-                .value(value.to_string())
-                .value(value.to_string())
-                .value(key.to_string())
-                .build();
-            let token = rand::random::<i64>();
-            self.create_request(query, token)
+        fn push_update(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+            value: &f32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder.value(value).value(value).value(key)
         }
     }
 
-    impl<'a> Delete<'a, u32, f32> for Mainnet {
-        fn delete_statement() -> Cow<'static, str> {
+    impl Delete<u32, f32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, f32>
-        where
-            Self: Delete<'a, u32, f32>,
-        {
+        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, f32> {
             let query = Query::new()
-                .statement(&Self::delete_statement())
+                .statement(&self.delete_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(query, token)
         }
     }
 
-    impl<'a> Delete<'a, u32, i32> for Mainnet {
-        fn delete_statement() -> Cow<'static, str> {
-            format!("DELETE FROM {}.table WHERE key = ?", Self::name()).into()
+    impl Delete<u32, i32> for Mainnet {
+        fn statement(&self) -> Cow<'static, str> {
+            format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&'a self, key: &u32) -> DeleteRequest<'a, Self, u32, i32>
+        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, i32>
         where
-            Self: Delete<'a, u32, i32>,
+            Self: Delete<u32, i32>,
         {
             let prepared_cql = Execute::new()
-                .id(&Self::delete_id())
+                .id(&self.delete_id::<u32, i32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(prepared_cql, token)
+        }
+    }
+
+    impl DeleteBatch<u32, f32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id())
+        }
+        fn push_delete(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder.value(key)
+        }
+    }
+
+    impl DeleteBatch<u32, i32, BatchTypeLogged> for Mainnet {
+        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
+            builder.prepared(&self.insert_id())
+        }
+        fn push_delete(
+            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+            key: &u32,
+        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+            builder.value(key)
         }
     }
 
@@ -303,7 +360,7 @@ mod tests {
 
     impl VoidDecoder for Mainnet {}
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestWorker;
 
     impl Worker for TestWorker {
@@ -323,24 +380,64 @@ mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let worker = TestWorker;
-        let res = Mainnet.select::<f32>(&3).send_local(Box::new(worker));
+        let mut keyspace = Mainnet { name: "mainnet".into() };
+        let req1 = keyspace.select::<f32>(&3);
+        // Can't do this here
+        // keyspace.name = "testnet".into();
+        let req2 = keyspace.select::<i32>(&3);
+        let res = req1.clone().send_local(Box::new(worker.clone()));
+        let res = req1.send_local(Box::new(worker.clone()));
+        // Or here (or anywhere in between)
+        // keyspace.name = "testnet".into();
+        let res = req2.send_local(Box::new(worker));
+        // But now that we've consumed both requests that reference the keyspace, we can do this again
+        keyspace.name = "testnet".into();
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let worker = TestWorker;
-        let res = Mainnet.insert(&3, &8.0).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let res = keyspace.insert(&3, &8.0).send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_update() {
         let worker = TestWorker;
-        let res = Mainnet.update(&3, &8.0).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let res = keyspace.update(&3, &8.0).send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_delete() {
         let worker = TestWorker;
-        let res = Mainnet.delete::<f32>(&3).send_local(Box::new(worker));
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let res = keyspace.delete::<f32>(&3).send_local(Box::new(worker));
+    }
+
+    #[allow(dead_code)]
+    fn test_batch() {
+        let worker = TestWorker;
+        let keyspace = Mainnet { name: "mainnet".into() };
+        let req = keyspace
+            .batch()
+            .logged() // or .batch_type(BatchTypeLogged)
+            .insert_recommended(&3, &9.0)
+            .update_query(&3, &8.0)
+            .insert_prepared(&3, &8.0)
+            .delete_prepared::<_, f32>(&3)
+            .consistency(Consistency::One)
+            .build()
+            .compute_token(&3);
+        let res = req.clone().send_local(Box::new(worker));
+
+        // Later, after getting an unprepared error:
+        let unprepared_id = keyspace.update_id();
+        let unprepared_statement = req.get_cql(&unprepared_id).expect("How could this happen to me?");
+        // Do something to prepare the statement...
+        //   try_prepare(unprepared_statement)
+        // Then, resend the request
+        let worker = TestWorker;
+        let res = req.send_local(Box::new(worker));
     }
 }
