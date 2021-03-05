@@ -41,13 +41,15 @@ impl<H: ScyllaScope> Starter<H> for ScyllaBuilder<H> {
             .cluster_handle(cluster_handle)
             .build();
         // get handle(supervisor) of the application to start the Children
-        let supervisor = scylla.handle.clone().unwrap();
+        let mut supervisor = scylla.handle.clone().unwrap();
         // start listener in abortable mode
         tokio::spawn(listener.start_abortable(abort_registration, Some(supervisor.clone())));
         // start cluster
         tokio::spawn(cluster.start(Some(supervisor.clone())));
         // start scylla application
         tokio::spawn(scylla.start(Some(handle)));
+        // adjust the supervisor handle to identify it's returned to launcher
+        supervisor.caller = Caller::Launcher;
         Ok(supervisor)
     }
 }
