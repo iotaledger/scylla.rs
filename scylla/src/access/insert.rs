@@ -169,4 +169,9 @@ impl<'a, S: Insert<K, V>, K, V> InsertRequest<'a, S, K, V> {
         );
         DecodeResult::insert()
     }
+
+    /// Get the statement that was used to create this request
+    pub fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.insert_statement::<K, V>()
+    }
 }

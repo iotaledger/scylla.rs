@@ -167,4 +167,9 @@ impl<'a, S: Update<K, V>, K, V> UpdateRequest<'a, S, K, V> {
         );
         DecodeResult::update()
     }
+
+    /// Get the statement that was used to create this request
+    pub fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.update_statement::<K, V>()
+    }
 }

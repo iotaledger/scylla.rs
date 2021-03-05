@@ -165,4 +165,9 @@ impl<'a, S: Delete<K, V>, K, V> DeleteRequest<'a, S, K, V> {
         );
         DecodeResult::delete()
     }
+
+    /// Get the statement that was used to create this request
+    pub fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.delete_statement::<K, V>()
+    }
 }

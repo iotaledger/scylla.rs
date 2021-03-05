@@ -165,4 +165,9 @@ impl<'a, S: Select<K, V>, K, V> SelectRequest<'a, S, K, V> {
         );
         DecodeResult::select()
     }
+
+    /// Get the statement that was used to create this request
+    pub fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.select_statement::<K, V>()
+    }
 }
