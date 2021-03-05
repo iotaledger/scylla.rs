@@ -32,7 +32,7 @@ pub use batch::*;
 pub use consistency::Consistency;
 pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
 pub use encoder::ColumnEncoder;
-pub use error::CqlError;
+pub use error::{CqlError, ErrorCodes};
 pub use execute::Execute;
 pub use prepare::Prepare;
 pub use query::Query;
