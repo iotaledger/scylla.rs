@@ -174,7 +174,7 @@ mod tests {
 
     #[derive(Default, Clone)]
     struct Mainnet {
-        name: Cow<'static, str>,
+        pub name: Cow<'static, str>,
     }
 
     impl Keyspace for Mainnet {
@@ -365,12 +365,18 @@ mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let worker = TestWorker;
-        let keyspace = Mainnet { name: "mainnet".into() };
+        let mut keyspace = Mainnet { name: "mainnet".into() };
         let req1 = keyspace.select::<f32>(&3);
+        // Can't do this here
+        // keyspace.name = "testnet".into();
         let req2 = keyspace.select::<i32>(&3);
         let res = req1.clone().send_local(Box::new(worker.clone()));
         let res = req1.send_local(Box::new(worker.clone()));
+        // Or here (or anywhere in between)
+        // keyspace.name = "testnet".into();
         let res = req2.send_local(Box::new(worker));
+        // But now that we've consumed both requests that reference the keyspace, we can do this again
+        keyspace.name = "testnet".into();
     }
 
     #[allow(dead_code)]
