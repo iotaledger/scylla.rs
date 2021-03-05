@@ -50,8 +50,16 @@ pub enum ScyllaThrough {
     Topology(Topology),
 }
 
+#[repr(u8)]
+#[derive(PartialEq)]
+pub enum Caller {
+    Launcher = 0,
+    Other = 1,
+}
+
 /// ScyllaHandle to be passed to the children (Listener and Cluster)
 pub struct ScyllaHandle<H: ScyllaScope> {
+    pub(crate) caller: Caller,
     tx: tokio::sync::mpsc::UnboundedSender<ScyllaEvent<H::AppsEvents>>,
 }
 /// ScyllaInbox used to recv events
@@ -61,7 +69,10 @@ pub struct ScyllaInbox<H: ScyllaScope> {
 
 impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
     fn clone(&self) -> Self {
-        ScyllaHandle::<H> { tx: self.tx.clone() }
+        ScyllaHandle::<H> {
+            caller: Caller::Other,
+            tx: self.tx.clone(),
+        }
     }
 }
 
@@ -93,6 +104,8 @@ pub enum ScyllaEvent<T> {
     Children(ScyllaChild),
     /// Used by cluster to inform scylla in order to inform the sockets with the result of topology events
     Result(SocketMsg<Result<Topology, Topology>>),
+    /// Abort the scylla app, sent by launcher
+    Abort,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -127,7 +140,10 @@ impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
     type State = Scylla<H>;
     fn build(self) -> Self::State {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let handle = Some(ScyllaHandle { tx });
+        let handle = Some(ScyllaHandle {
+            caller: Caller::Other,
+            tx,
+        });
         let inbox = ScyllaInbox { rx };
         Scylla::<H> {
             service: Service::new(),
@@ -158,6 +174,10 @@ impl<H: ScyllaScope> Shutdown for ScyllaHandle<H> {
     {
         let scylla_shutdown: H::AppsEvents = serde_json::from_str("{\"Scylla\": \"Shutdown\"}").unwrap();
         let _ = self.send(ScyllaEvent::Passthrough(scylla_shutdown));
+        // if the caller is launcher we abort scylla app. better solution will be implemented in future
+        if self.caller == Caller::Launcher {
+            let _ = self.send(ScyllaEvent::Abort);
+        }
         None
     }
 }
