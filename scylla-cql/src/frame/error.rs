@@ -87,8 +87,8 @@ impl From<&[u8]> for CqlError {
 }
 
 impl CqlError {
-    /// Take the prepared_id if the error is Unprepared error
-    pub fn take_prepared_id(&mut self) -> Option<[u8; 16]> {
+    /// Take the unprepared_id if the error is Unprepared error
+    pub fn take_unprepared_id(&mut self) -> Option<[u8; 16]> {
         if let Some(Additional::Unprepared(Unprepared { id })) = self.additional.take() {
             Some(id)
         } else {
