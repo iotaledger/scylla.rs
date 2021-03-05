@@ -206,7 +206,7 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchStatementOrId> {
 
 impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchValues> {
     /// Set the value in the Batch frame.
-    pub fn value(mut self, value: impl ColumnEncoder) -> Self {
+    pub fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
         value.encode(&mut self.buffer);
         self.stage.value_count += 1;
         self
@@ -365,33 +365,17 @@ impl Batch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compression::UNCOMPRESSED;
-    use std::time::{SystemTime, UNIX_EPOCH};
+
     #[test]
     // note: junk data
     fn simple_query_builder_test() {
         let Batch(_payload) = Batch::new()
             .logged()
             .statement("INSERT_TX_QUERY")
-            .value("HASH_VALUE")
-            .value("PAYLOAD_VALUE")
-            .value("ADDRESS_VALUE")
-            .value(0 as i64) // tx-value as i64
-            .value("OBSOLETE_TAG_VALUE")
-            .value(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64) // junk timestamp
-            .value(0 as i64) // current-index
-            .value(0 as i64) // last-index
-            .value("BUNDLE_HASH_VALUE")
-            .value("TRUNK_VALUE")
-            .value("BRANCH_VALUE")
-            .value("TAG_VALUE")
-            .value(0 as i64) // attachment_timestamp
-            .value(0 as i64) // attachment_timestamp_lower
-            .value(0 as i64) // attachment_timestamp_upper
-            .value("NONCE_VALUE") // nonce
-            .unset_value() // not-set value for milestone
+            .value(&"HASH_VALUE")
+            .value(&"PAYLOAD_VALUE")
             .id(&[0; 16]) // add second query(prepared one) to the batch
-            .value("JUNK_VALUE") // junk value
+            .value(&"JUNK_VALUE") // junk value
             .consistency(Consistency::One)
             .build();
     }

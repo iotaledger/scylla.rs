@@ -283,7 +283,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_delete(res.builder, key), res.map, res.keyspace)
     }
 
-    pub fn value(self, value: impl ColumnEncoder) -> Self {
+    pub fn value<V: ColumnEncoder>(self, value: &V) -> Self {
         Self::step(self.builder.value(value), self.map, self.keyspace)
     }
     pub fn unset_value(self) -> Self {

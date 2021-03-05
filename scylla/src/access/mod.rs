@@ -174,7 +174,6 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
-    use scylla_cql::compression::UNCOMPRESSED;
 
     use super::*;
 
@@ -198,7 +197,7 @@ mod tests {
             let query = Query::new()
                 .statement(&self.select_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
 
@@ -215,7 +214,7 @@ mod tests {
             let prepared_cql = Execute::new()
                 .id(&self.select_id::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(prepared_cql, token)
@@ -235,9 +234,9 @@ mod tests {
             let query = Query::new()
                 .statement(&self.insert_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
-                .value(value.to_string())
-                .value(value.to_string())
+                .value(key)
+                .value(value)
+                .value(value)
                 .build();
             let token = Self::token(key);
             self.create_request(query, token)
@@ -253,10 +252,7 @@ mod tests {
             key: &u32,
             value: &f32,
         ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
-            builder
-                .value(key.to_string())
-                .value(value.to_string())
-                .value(value.to_string())
+            builder.value(key).value(value).value(value)
         }
     }
 
@@ -269,9 +265,9 @@ mod tests {
             let query = Query::new()
                 .statement(&self.update_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(value.to_string())
-                .value(value.to_string())
-                .value(key.to_string())
+                .value(value)
+                .value(value)
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(query, token)
@@ -287,10 +283,7 @@ mod tests {
             key: &u32,
             value: &f32,
         ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
-            builder
-                .value(value.to_string())
-                .value(value.to_string())
-                .value(key.to_string())
+            builder.value(value).value(value).value(key)
         }
     }
 
@@ -303,7 +296,7 @@ mod tests {
             let query = Query::new()
                 .statement(&self.delete_statement::<u32, f32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(query, token)
@@ -322,7 +315,7 @@ mod tests {
             let prepared_cql = Execute::new()
                 .id(&self.delete_id::<u32, i32>())
                 .consistency(scylla_cql::Consistency::One)
-                .value(key.to_string())
+                .value(key)
                 .build();
             let token = rand::random::<i64>();
             self.create_request(prepared_cql, token)
@@ -337,7 +330,7 @@ mod tests {
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
             key: &u32,
         ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
-            builder.value(key.to_string())
+            builder.value(key)
         }
     }
 
@@ -349,7 +342,7 @@ mod tests {
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
             key: &u32,
         ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
-            builder.value(key.to_string())
+            builder.value(key)
         }
     }
 
