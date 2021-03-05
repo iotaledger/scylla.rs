@@ -8,7 +8,7 @@ pub use crate::stage::ReporterEvent;
 use std::io::Error;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
-pub trait Worker: Send + std::fmt::Debug {
+pub trait Worker: Send {
     /// Reporter will invoke this method to Send the cql response to worker
     fn handle_response(self: Box<Self>, giveload: Vec<u8>);
     /// Reporter will invoke this method to Send the worker error to worker
