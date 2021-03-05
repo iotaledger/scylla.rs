@@ -125,27 +125,42 @@ impl<S: Keyspace> GetUpdateStatement<S> for S {
 }
 
 /// A request to update a record which can be sent to the ring
-#[derive(Clone)]
-pub struct UpdateRequest<'a, S, K, V> {
+#[derive(Clone, Debug)]
+pub struct UpdateRequest<S, K, V> {
     token: i64,
     inner: Vec<u8>,
-    keyspace: &'a S,
+    keyspace: S,
     _marker: PhantomData<(S, K, V)>,
 }
 
-impl<'a, K, V, S: Update<K, V>> CreateRequest<'a, UpdateRequest<'a, S, K, V>> for S {
+impl<K, V, S: Update<K, V> + Clone> CreateRequest<UpdateRequest<S, K, V>> for S {
     /// Create a new Update Request from a Query/Execute, token, and the keyspace.
-    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> UpdateRequest<'a, S, K, V> {
-        UpdateRequest::<'a, S, K, V> {
+    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> UpdateRequest<S, K, V> {
+        UpdateRequest::<S, K, V> {
             token,
             inner: query.into(),
-            keyspace: self,
+            keyspace: self.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<'a, S: Update<K, V>, K, V> UpdateRequest<'a, S, K, V> {
+impl<S, K, V> Request for UpdateRequest<S, K, V>
+where
+    S: Update<K, V> + std::fmt::Debug + Clone,
+    K: Send + std::fmt::Debug + Clone,
+    V: Send + std::fmt::Debug + Clone,
+{
+    fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.update_statement::<K, V>()
+    }
+
+    fn payload(&self) -> &Vec<u8> {
+        &self.inner
+    }
+}
+
+impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         send_local(
@@ -166,10 +181,5 @@ impl<'a, S: Update<K, V>, K, V> UpdateRequest<'a, S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::update()
-    }
-
-    /// Get the statement that was used to create this request
-    pub fn statement(&self) -> Cow<'static, str> {
-        self.keyspace.update_statement::<K, V>()
     }
 }

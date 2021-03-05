@@ -123,27 +123,42 @@ impl<S: Keyspace> GetSelectStatement<S> for S {
 }
 
 /// A request to select a record which can be sent to the ring
-#[derive(Clone)]
-pub struct SelectRequest<'a, S, K, V> {
+#[derive(Clone, Debug)]
+pub struct SelectRequest<S, K, V> {
     token: i64,
     inner: Vec<u8>,
-    keyspace: &'a S,
+    keyspace: S,
     _marker: PhantomData<(S, K, V)>,
 }
 
-impl<'a, K, V, S: Select<K, V>> CreateRequest<'a, SelectRequest<'a, S, K, V>> for S {
+impl<K, V, S: Select<K, V> + Clone> CreateRequest<SelectRequest<S, K, V>> for S {
     /// Create a new Select Request from a Query/Execute, token, and the keyspace.
-    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> SelectRequest<'a, S, K, V> {
-        SelectRequest::<'a, S, K, V> {
+    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> SelectRequest<S, K, V> {
+        SelectRequest::<S, K, V> {
             token,
             inner: query.into(),
-            keyspace: self,
+            keyspace: self.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<'a, S: Select<K, V>, K, V> SelectRequest<'a, S, K, V> {
+impl<S, K, V> Request for SelectRequest<S, K, V>
+where
+    S: Select<K, V> + std::fmt::Debug + Clone,
+    K: Send + std::fmt::Debug + Clone,
+    V: Send + std::fmt::Debug + Clone,
+{
+    fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.select_statement::<K, V>()
+    }
+
+    fn payload(&self) -> &Vec<u8> {
+        &self.inner
+    }
+}
+
+impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
         send_local(
@@ -164,10 +179,5 @@ impl<'a, S: Select<K, V>, K, V> SelectRequest<'a, S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::select()
-    }
-
-    /// Get the statement that was used to create this request
-    pub fn statement(&self) -> Cow<'static, str> {
-        self.keyspace.select_statement::<K, V>()
     }
 }

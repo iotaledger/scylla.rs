@@ -50,15 +50,25 @@ enum RequestType {
     Batch = 4,
 }
 
+/// Defines a computed token for a key type
 pub trait ComputeToken<K>: Keyspace {
     /// Compute the token from the provided partition_key by using murmur3 hash function
     fn token(key: &K) -> i64;
 }
 
 /// Create request from cql frame
-pub trait CreateRequest<'a, T>: Keyspace {
+pub trait CreateRequest<T>: Keyspace {
     /// Create request of Type T
-    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> T;
+    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> T;
+}
+
+/// Unifying trait for requests which defines shared functionality
+pub trait Request: Send + std::fmt::Debug {
+    /// Get the statement that was used to create this request
+    fn statement(&self) -> Cow<'static, str>;
+
+    /// Get the request payload
+    fn payload(&self) -> &Vec<u8>;
 }
 
 /// A marker struct which holds types used for a query
@@ -173,9 +183,15 @@ mod tests {
 
     use super::*;
 
-    #[derive(Default, Clone)]
+    #[derive(Default, Clone, Debug)]
     struct Mainnet {
         pub name: Cow<'static, str>,
+    }
+
+    impl Mainnet {
+        pub fn new() -> Self {
+            Self { name: "mainnet".into() }
+        }
     }
 
     impl Keyspace for Mainnet {
@@ -356,12 +372,14 @@ mod tests {
 
     impl VoidDecoder for Mainnet {}
 
-    #[derive(Debug, Clone)]
-    struct TestWorker;
+    #[derive(Debug)]
+    struct TestWorker {
+        request: Box<dyn Request>,
+    }
 
     impl Worker for TestWorker {
         fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
-            todo!()
+            // Do nothing
         }
 
         fn handle_error(
@@ -369,52 +387,143 @@ mod tests {
             error: crate::worker::WorkerError,
             reporter: &Option<crate::stage::ReporterHandle>,
         ) {
-            todo!()
+            if let WorkerError::Cql(mut cql_error) = error {
+                if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+                    let prepare = Prepare::new().statement(&self.request.statement()).build();
+                    let prepare_worker = PrepareWorker {
+                        retries: 3,
+                        payload: prepare.0.clone(),
+                    };
+                    let prepare_request = ReporterEvent::Request {
+                        worker: Box::new(prepare_worker),
+                        payload: prepare.0,
+                    };
+                    reporter.send(prepare_request).ok();
+                    let payload = self.request.payload().clone();
+                    let retry_request = ReporterEvent::Request { worker: self, payload };
+                    reporter.send(retry_request).ok();
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct BatchWorker<S> {
+        request: BatchRequest<S>,
+    }
+
+    impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
+        fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
+            // Do nothing
+        }
+
+        fn handle_error(
+            self: Box<Self>,
+            error: crate::worker::WorkerError,
+            reporter: &Option<crate::stage::ReporterHandle>,
+        ) {
+            if let WorkerError::Cql(mut cql_error) = error {
+                if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+                    if let Some(statement) = self.request.get_cql(&id) {
+                        let prepare = Prepare::new().statement(&statement).build();
+                        let prepare_worker = PrepareWorker {
+                            retries: 3,
+                            payload: prepare.0.clone(),
+                        };
+                        let prepare_request = ReporterEvent::Request {
+                            worker: Box::new(prepare_worker),
+                            payload: prepare.0,
+                        };
+                        reporter.send(prepare_request).ok();
+                        let payload = self.request.payload().clone();
+                        let retry_request = ReporterEvent::Request { worker: self, payload };
+                        reporter.send(retry_request).ok();
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct PrepareWorker {
+        pub retries: usize,
+        pub payload: Vec<u8>,
+    }
+
+    impl Worker for PrepareWorker {
+        fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
+            // Do nothing
+        }
+
+        fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>) {
+            if self.retries > 0 {
+                let prepare_worker = PrepareWorker {
+                    retries: self.retries - 1,
+                    payload: self.payload.clone(),
+                };
+                let request = ReporterEvent::Request {
+                    worker: Box::new(prepare_worker),
+                    payload: self.payload.clone(),
+                };
+            }
         }
     }
 
     #[allow(dead_code)]
     fn test_select() {
-        let worker = TestWorker;
-        let mut keyspace = Mainnet { name: "mainnet".into() };
+        let keyspace = Mainnet::new();
         let req1 = keyspace.select::<f32>(&3);
-        // Can't do this here
-        // keyspace.name = "testnet".into();
+        let worker1 = TestWorker {
+            request: Box::new(req1.clone()),
+        };
         let req2 = keyspace.select::<i32>(&3);
-        let res = req1.clone().send_local(Box::new(worker.clone()));
-        let res = req1.send_local(Box::new(worker.clone()));
-        // Or here (or anywhere in between)
-        // keyspace.name = "testnet".into();
-        let res = req2.send_local(Box::new(worker));
-        // But now that we've consumed both requests that reference the keyspace, we can do this again
-        keyspace.name = "testnet".into();
+        let worker2 = TestWorker {
+            request: Box::new(req1.clone()),
+        };
+        let worker3 = TestWorker {
+            request: Box::new(req2.clone()),
+        };
+        let res = req1.clone().send_local(Box::new(worker1));
+        let res = req1.send_local(Box::new(worker2));
+        let res = req2.send_local(Box::new(worker3));
     }
 
     #[allow(dead_code)]
     fn test_insert() {
-        let worker = TestWorker;
         let keyspace = Mainnet { name: "mainnet".into() };
-        let res = keyspace.insert(&3, &8.0).send_local(Box::new(worker));
+        let req = keyspace.insert(&3, &8.0);
+        let worker = TestWorker {
+            request: Box::new(req.clone()),
+        };
+
+        let res = req.send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_update() {
-        let worker = TestWorker;
         let keyspace = Mainnet { name: "mainnet".into() };
-        let res = keyspace.update(&3, &8.0).send_local(Box::new(worker));
+        let req = keyspace.update(&3, &8.0);
+        let worker = TestWorker {
+            request: Box::new(req.clone()),
+        };
+
+        let res = req.send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_delete() {
-        let worker = TestWorker;
         let keyspace = Mainnet { name: "mainnet".into() };
-        let res = keyspace.delete::<f32>(&3).send_local(Box::new(worker));
+        let req = keyspace.delete::<f32>(&3);
+        let worker = TestWorker {
+            request: Box::new(req.clone()),
+        };
+
+        let res = req.send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
     fn test_batch() {
-        let worker = TestWorker;
-        let keyspace = Mainnet { name: "mainnet".into() };
+        let keyspace = Mainnet::new();
         let req = keyspace
             .batch()
             .logged() // or .batch_type(BatchTypeLogged)
@@ -425,15 +534,7 @@ mod tests {
             .consistency(Consistency::One)
             .build()
             .compute_token(&3);
+        let worker = BatchWorker { request: req.clone() };
         let res = req.clone().send_local(Box::new(worker));
-
-        // Later, after getting an unprepared error:
-        let unprepared_id = keyspace.update_id();
-        let unprepared_statement = req.get_cql(&unprepared_id).expect("How could this happen to me?");
-        // Do something to prepare the statement...
-        //   try_prepare(unprepared_statement)
-        // Then, resend the request
-        let worker = TestWorker;
-        let res = req.send_local(Box::new(worker));
     }
 }

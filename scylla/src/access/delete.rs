@@ -123,27 +123,42 @@ impl<S: Keyspace> GetDeleteStatement<S> for S {
 }
 
 /// A request to delete a record which can be sent to the ring
-#[derive(Clone)]
-pub struct DeleteRequest<'a, S, K, V> {
+#[derive(Clone, Debug)]
+pub struct DeleteRequest<S, K, V> {
     token: i64,
     inner: Vec<u8>,
-    keyspace: &'a S,
+    keyspace: S,
     _marker: PhantomData<(S, K, V)>,
 }
 
-impl<'a, K, V, S: Delete<K, V>> CreateRequest<'a, DeleteRequest<'a, S, K, V>> for S {
+impl<K, V, S: Delete<K, V> + Clone> CreateRequest<DeleteRequest<S, K, V>> for S {
     /// Create a new Delete Request from a Query/Execute, token, and the keyspace.
-    fn create_request<Q: Into<Vec<u8>>>(&'a self, query: Q, token: i64) -> DeleteRequest<'a, S, K, V> {
-        DeleteRequest::<'a, S, K, V> {
+    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> DeleteRequest<S, K, V> {
+        DeleteRequest::<S, K, V> {
             token,
             inner: query.into(),
-            keyspace: self,
+            keyspace: self.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<'a, S: Delete<K, V>, K, V> DeleteRequest<'a, S, K, V> {
+impl<S, K, V> Request for DeleteRequest<S, K, V>
+where
+    S: Delete<K, V> + std::fmt::Debug + Clone,
+    K: Send + std::fmt::Debug + Clone,
+    V: Send + std::fmt::Debug + Clone,
+{
+    fn statement(&self) -> Cow<'static, str> {
+        self.keyspace.delete_statement::<K, V>()
+    }
+
+    fn payload(&self) -> &Vec<u8> {
+        &self.inner
+    }
+}
+
+impl<S: Delete<K, V>, K, V> DeleteRequest<S, K, V> {
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         send_local(
@@ -164,10 +179,5 @@ impl<'a, S: Delete<K, V>, K, V> DeleteRequest<'a, S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::delete()
-    }
-
-    /// Get the statement that was used to create this request
-    pub fn statement(&self) -> Cow<'static, str> {
-        self.keyspace.delete_statement::<K, V>()
     }
 }

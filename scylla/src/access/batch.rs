@@ -3,8 +3,8 @@
 
 use super::*;
 use scylla_cql::{
-    compression::Compression, BatchBuild, BatchBuilder, BatchFlags, BatchStatementOrId, BatchTimestamp, BatchType,
-    BatchTypeCounter, BatchTypeLogged, BatchTypeUnlogged, BatchTypeUnset, BatchValues, ColumnEncoder, Consistency,
+    BatchBuild, BatchBuilder, BatchFlags, BatchStatementOrId, BatchTimestamp, BatchType, BatchTypeCounter,
+    BatchTypeLogged, BatchTypeUnlogged, BatchTypeUnset, BatchValues, ColumnEncoder, Consistency,
 };
 use std::collections::HashMap;
 
@@ -23,16 +23,16 @@ pub trait DeleteBatch<K, V, T: Copy + Into<u8>>: Delete<K, V> {
     fn push_delete(builder: BatchBuilder<T, BatchValues>, key: &K) -> BatchBuilder<T, BatchValues>;
 }
 
-#[derive(Clone)]
-pub struct BatchRequest<'a, S> {
+#[derive(Clone, Debug)]
+pub struct BatchRequest<S> {
     token: i64,
     inner: Vec<u8>,
     map: HashMap<[u8; 16], std::borrow::Cow<'static, str>>,
-    keyspace: &'a S,
+    keyspace: S,
     _data: PhantomData<S>,
 }
 
-impl<'a, S: Keyspace> BatchRequest<'a, S> {
+impl<S: Keyspace> BatchRequest<S> {
     /// Compute the murmur3 token from the provided K
     pub fn compute_token<K>(mut self, key: &K) -> Self
     where
@@ -67,55 +67,56 @@ impl<'a, S: Keyspace> BatchRequest<'a, S> {
     pub fn get_cql(&self, id: &[u8; 16]) -> Option<&std::borrow::Cow<'static, str>> {
         self.map.get(id)
     }
+
+    pub fn payload(&self) -> &Vec<u8> {
+        &self.inner
+    }
 }
-pub struct BatchCollector<'a, S, Type: Copy + Into<u8>, Stage> {
+pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage> {
     builder: BatchBuilder<Type, Stage>,
     map: HashMap<[u8; 16], std::borrow::Cow<'static, str>>,
-    keyspace: &'a S,
+    keyspace: S,
 }
 
-impl<'a, S: 'a + Keyspace> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
-    pub fn new(keyspace: &'a S) -> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
+impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
+    pub fn new(keyspace: &S) -> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: scylla_cql::Batch::new(),
             map: HashMap::new(),
-            keyspace,
+            keyspace: keyspace.clone(),
         }
     }
 
-    pub fn with_capacity(keyspace: &'a S, capacity: usize) -> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
+    pub fn with_capacity(keyspace: &S, capacity: usize) -> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: scylla_cql::Batch::with_capacity(capacity),
             map: HashMap::new(),
-            keyspace,
+            keyspace: keyspace.clone(),
         }
     }
 
-    pub fn batch_type<Type: Copy + Into<u8>>(
-        self,
-        batch_type: Type,
-    ) -> BatchCollector<'a, S, Type, BatchStatementOrId> {
+    pub fn batch_type<Type: Copy + Into<u8>>(self, batch_type: Type) -> BatchCollector<S, Type, BatchStatementOrId> {
         Self::step(self.builder.batch_type(batch_type), self.map, self.keyspace)
     }
-    pub fn logged(self) -> BatchCollector<'a, S, BatchTypeLogged, BatchStatementOrId> {
+    pub fn logged(self) -> BatchCollector<S, BatchTypeLogged, BatchStatementOrId> {
         Self::step(self.builder.logged(), self.map, self.keyspace)
     }
-    pub fn unlogged(self) -> BatchCollector<'a, S, BatchTypeUnlogged, BatchStatementOrId> {
+    pub fn unlogged(self) -> BatchCollector<S, BatchTypeUnlogged, BatchStatementOrId> {
         Self::step(self.builder.unlogged(), self.map, self.keyspace)
     }
-    pub fn counter(self) -> BatchCollector<'a, S, BatchTypeCounter, BatchStatementOrId> {
+    pub fn counter(self) -> BatchCollector<S, BatchTypeCounter, BatchStatementOrId> {
         Self::step(self.builder.counter(), self.map, self.keyspace)
     }
 }
 
-impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchStatementOrId> {
-    pub fn insert_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementOrId> {
+    pub fn insert_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
-        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+        Self::step(S::recommended(&self.keyspace, self.builder), self.map, self.keyspace)
     }
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
@@ -126,7 +127,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         );
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
     }
-    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
@@ -136,14 +137,14 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn update_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
-        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+        Self::step(S::recommended(&self.keyspace, self.builder), self.map, self.keyspace)
     }
 
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
@@ -155,7 +156,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_update(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
@@ -165,14 +166,14 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_update(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn delete_recommended<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_recommended<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
-        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+        Self::step(S::recommended(&self.keyspace, self.builder), self.map, self.keyspace)
     }
 
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
@@ -184,7 +185,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_delete(res.builder, key), res.map, res.keyspace)
     }
 
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
@@ -195,15 +196,15 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     }
 }
 
-impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchValues> {
-    pub fn insert_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
+    pub fn insert_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
-        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+        Self::step(S::recommended(&self.keyspace, self.builder), self.map, self.keyspace)
     }
 
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
@@ -215,7 +216,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
@@ -225,14 +226,14 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_insert(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn update_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_recommended<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
-        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+        Self::step(S::recommended(&self.keyspace, self.builder), self.map, self.keyspace)
     }
 
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
@@ -244,7 +245,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_update(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
@@ -254,14 +255,14 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_update(res.builder, key, value), res.map, res.keyspace)
     }
 
-    pub fn delete_recommended<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_recommended<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
-        Self::step(S::recommended(self.keyspace, self.builder), self.map, self.keyspace)
+        Self::step(S::recommended(&self.keyspace, self.builder), self.map, self.keyspace)
     }
 
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
@@ -273,7 +274,7 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
         Self::step(S::push_delete(res.builder, key), res.map, res.keyspace)
     }
 
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
@@ -292,19 +293,19 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     pub fn null_value(self) -> Self {
         Self::step(self.builder.null_value(), self.map, self.keyspace)
     }
-    pub fn consistency(self, consistency: Consistency) -> BatchCollector<'a, S, Type, BatchFlags> {
+    pub fn consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchFlags> {
         Self::step(self.builder.consistency(consistency), self.map, self.keyspace)
     }
 }
 
-impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchFlags> {
-    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<'a, S, Type, BatchTimestamp> {
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchFlags> {
+    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchTimestamp> {
         Self::step(self.builder.serial_consistency(consistency), self.map, self.keyspace)
     }
-    pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self) -> BatchRequest<'a, S> {
+    pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
@@ -315,11 +316,11 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     }
 }
 
-impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchTimestamp> {
-    pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchTimestamp> {
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self) -> BatchRequest<'a, S> {
+    pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
@@ -330,8 +331,8 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     }
 }
 
-impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBuild> {
-    pub fn build(self) -> BatchRequest<'a, S> {
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchBuild> {
+    pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
@@ -342,27 +343,27 @@ impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, Ba
     }
 }
 
-impl<'a, S: 'a + Keyspace, Type: Copy + Into<u8>, Stage> BatchCollector<'a, S, Type, Stage> {
+impl<S: Keyspace, Type: Copy + Into<u8>, Stage> BatchCollector<S, Type, Stage> {
     fn step<NextType: Copy + Into<u8>, NextStage>(
         builder: BatchBuilder<NextType, NextStage>,
         map: HashMap<[u8; 16], std::borrow::Cow<'static, str>>,
-        keyspace: &'a S,
-    ) -> BatchCollector<'a, S, NextType, NextStage> {
+        keyspace: S,
+    ) -> BatchCollector<S, NextType, NextStage> {
         BatchCollector { builder, map, keyspace }
     }
 }
 
 /// Defines a helper method to allow keyspaces to begin constructing a batch
-pub trait Batch<'a> {
+pub trait Batch {
     /// Start building a batch.
     /// This function will borrow the keyspace until the batch is fully built in order
     /// to access its trait definitions.
-    fn batch(&'a self) -> BatchCollector<'a, Self, BatchTypeUnset, BatchType>
+    fn batch(&self) -> BatchCollector<Self, BatchTypeUnset, BatchType>
     where
-        Self: Sized + Keyspace,
+        Self: Keyspace + Clone,
     {
         BatchCollector::new(self)
     }
 }
 
-impl<'a, S: 'a + Keyspace> Batch<'a> for S {}
+impl<S: Keyspace + Clone> Batch for S {}
