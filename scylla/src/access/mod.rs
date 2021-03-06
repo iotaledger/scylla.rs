@@ -70,6 +70,10 @@ pub trait Request: Send + std::fmt::Debug {
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
 }
+// iterate through
+pub trait IterCqls<S>: Sized {
+    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String>;
+}
 
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
@@ -256,8 +260,8 @@ mod tests {
     }
 
     impl InsertBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
-            builder.prepared(&self.insert_id::<u32, f32>())
+        fn recommended() -> BatchQueryType {
+            BatchQueryType::Prepared
         }
         fn push_insert(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
@@ -287,8 +291,8 @@ mod tests {
     }
 
     impl UpdateBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
-            builder.prepared(&self.insert_id::<u32, f32>())
+        fn recommended() -> BatchQueryType {
+            BatchQueryType::Query
         }
         fn push_update(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
@@ -335,8 +339,8 @@ mod tests {
     }
 
     impl DeleteBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
-            builder.prepared(&self.insert_id())
+        fn recommended() -> BatchQueryType {
+            BatchQueryType::Prepared
         }
         fn push_delete(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
@@ -347,8 +351,8 @@ mod tests {
     }
 
     impl DeleteBatch<u32, i32, BatchTypeLogged> for Mainnet {
-        fn recommended<B: QueryOrPrepared>(&self, builder: B) -> BatchBuilder<B::BatchType, BatchValues> {
-            builder.prepared(&self.insert_id())
+        fn recommended() -> BatchQueryType {
+            BatchQueryType::Query
         }
         fn push_delete(
             builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
@@ -408,11 +412,11 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct BatchWorker<S> {
-        request: BatchRequest<S>,
+    struct BatchWorker<S, C: IterCqls<S>> {
+        request: BatchRequest<S, C>,
     }
 
-    impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
+    impl<C: IterCqls<S> + Send + 'static, S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S, C> {
         fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
             // Do nothing
         }
