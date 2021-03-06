@@ -97,6 +97,17 @@ impl BatchBuilder<BatchTypeUnset, BatchHeader> {
     }
 }
 
+#[repr(u8)]
+pub enum BatchQueryType {
+    Query = 0,
+    Prepared = 1,
+}
+impl Into<u8> for BatchQueryType {
+    fn into(self) -> u8 {
+        unsafe { std::mem::transmute::<BatchQueryType, u8>(self) }
+    }
+}
+
 pub trait QueryOrPrepared {
     type BatchType: Copy + Into<u8>;
     fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues>;
