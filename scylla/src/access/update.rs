@@ -161,6 +161,14 @@ where
 }
 
 impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
+    /// Return cqls marker type
+    pub fn cqls(&self) -> UpdateCql<S, K, V>
+    where
+        UpdateCql<S, K, V>: IterCqls<S>,
+    {
+        UpdateCql::<S, K, V> { _marker: PhantomData }
+    }
+
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         send_local(

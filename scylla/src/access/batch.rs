@@ -44,7 +44,7 @@ pub struct BatchRequest<S, C: IterCqls<S>> {
     _data: PhantomData<S>,
 }
 
-impl<C: IterCqls<S>, S: Keyspace> BatchRequest<S, C> {
+impl<C: IterCqls<S> + Clone, S: Keyspace> BatchRequest<S, C> {
     /// Compute the murmur3 token from the provided K
     pub fn compute_token<K>(mut self, key: &K) -> Self
     where
@@ -52,6 +52,11 @@ impl<C: IterCqls<S>, S: Keyspace> BatchRequest<S, C> {
     {
         self.token = S::token(key);
         self
+    }
+
+    /// Clone the associated itercqls type.
+    pub fn cqls(&self) -> C {
+        self.cqls.clone()
     }
 
     /// Send a local request using the keyspace impl and return a type marker
@@ -77,7 +82,7 @@ impl<C: IterCqls<S>, S: Keyspace> BatchRequest<S, C> {
     }
 
     pub fn get_cql(&self, id: &[u8; 16]) -> Option<String> {
-        self.cqls.cql(&self.keyspace, id)
+        self.cqls.from_id(&self.keyspace, id)
     }
 
     pub fn payload(&self) -> &Vec<u8> {
@@ -93,7 +98,10 @@ pub struct BatchCollector<C: IterCqls<S>, S, Type: Copy + Into<u8>, Stage> {
 #[derive(Clone)]
 pub struct CqlsTypeUnset;
 impl<S> IterCqls<S> for CqlsTypeUnset {
-    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
+    fn from_id(&self, _keyspace: &S, _id: &[u8; 16]) -> Option<String> {
+        None
+    }
+    fn cql(&self, _keyspace: &S) -> Option<String> {
         None
     }
 }
@@ -131,88 +139,7 @@ impl<C: IterCqls<S>, S: Keyspace + Clone> BatchCollector<C, S, BatchTypeUnset, B
         Self::step(self.builder.counter(), CqlsTypeUnset, self.keyspace)
     }
 }
-#[derive(Clone)]
-pub struct InsertCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
-#[derive(Clone)]
-pub struct UpdateCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
-#[derive(Clone)]
-pub struct DeleteCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
-#[derive(Clone)]
-pub struct SelectCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
 
-/// UnknownCqls type
-#[derive(Clone)]
-pub enum UnknownCqls<Old, New> {
-    Old(Old),
-    New(New),
-}
-
-impl<S, Old: IterCqls<S>, New: IterCqls<S>> IterCqls<S> for UnknownCqls<Old, New> {
-    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        match self {
-            UnknownCqls::Old(old) => old.cql(keyspace, id),
-            UnknownCqls::New(new) => new.cql(keyspace, id),
-        }
-    }
-}
-
-impl<S: Insert<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for InsertCqls<S, C, K, V> {
-    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.insert_id::<K, V>() == id {
-            // found it
-            Some(keyspace.insert_statement::<K, V>().to_string())
-        } else {
-            // move to prev operation type
-            self.prev.cql(keyspace, id)
-        }
-    }
-}
-impl<S: Update<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for UpdateCqls<S, C, K, V> {
-    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.update_id::<K, V>() == id {
-            // found it
-            Some(keyspace.update_statement::<K, V>().to_string())
-        } else {
-            // move to prev operation type
-            self.prev.cql(keyspace, id)
-        }
-    }
-}
-impl<S: Delete<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for DeleteCqls<S, C, K, V> {
-    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.delete_id::<K, V>() == id {
-            // found it
-            Some(keyspace.delete_statement::<K, V>().to_string())
-        } else {
-            // move to next operation type
-            self.prev.cql(keyspace, id)
-        }
-    }
-}
-// this not needed for batch, likely to be removed later
-impl<S: Select<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for SelectCqls<S, C, K, V> {
-    fn cql(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.select_id::<K, V>() == id {
-            // found it
-            Some(keyspace.select_statement::<K, V>().to_string())
-        } else {
-            // move to next operation type
-            self.prev.cql(keyspace, id)
-        }
-    }
-}
 impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<C, S, Type, BatchStatementOrId> {
     pub fn insert_recommended<K, V>(
         self,

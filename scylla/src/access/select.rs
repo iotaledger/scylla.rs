@@ -159,6 +159,19 @@ where
 }
 
 impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
+    /// Return cqls marker type
+    pub fn cqls(&self) -> SelectCql<S, K, V>
+    where
+        SelectCql<S, K, V>: IterCqls<S>,
+    {
+        SelectCql::<S, K, V> { _marker: PhantomData }
+    }
+
+    /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
+    /// decoder in order to decode the response inside handle_response method.
+    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<S, K, V>> {
+        DecodeResult::select()
+    }
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
         send_local(
