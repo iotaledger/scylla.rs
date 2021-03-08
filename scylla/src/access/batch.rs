@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use dyn_clone::DynClone;
 use scylla_cql::{
     BatchBuild, BatchBuilder, BatchFlags, BatchStatementOrId, BatchTimestamp, BatchType, BatchTypeCounter,
     BatchTypeLogged, BatchTypeUnlogged, BatchTypeUnset, BatchValues, ColumnEncoder, Consistency,
 };
-use std::{collections::HashMap, marker::PhantomData};
+use std::{any::Any, collections::HashMap, fmt::Debug, marker::PhantomData};
 
 pub trait InsertBatch<K, V, T: Copy + Into<u8>>: Insert<K, V> {
     fn recommended() -> BatchQueryType;
@@ -35,16 +36,86 @@ pub trait DeleteBatch<K, V, T: Copy + Into<u8>>: Delete<K, V> {
     fn push_delete(builder: BatchBuilder<T, BatchValues>, key: &K) -> BatchBuilder<T, BatchValues>;
 }
 
-#[derive(Clone, Debug)]
-pub struct BatchRequest<S, C: IterCqls<S>> {
+pub trait AnyStatement<S>: Any + Statement<S> + Send + Debug + DynClone {}
+
+dyn_clone::clone_trait_object!(<S> AnyStatement<S>);
+
+#[derive(Debug, Clone)]
+pub struct BatchRequest<S> {
     token: i64,
     inner: Vec<u8>,
-    cqls: C,
+    map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
     keyspace: S,
-    _data: PhantomData<S>,
 }
 
-impl<C: IterCqls<S> + Clone, S: Keyspace> BatchRequest<S, C> {
+/// A marker trait which holds dynamic types for a statement
+/// to be retrieved from a keyspace
+pub trait Statement<S> {
+    /// Get the statement defined by this keyspace
+    fn statement(&self, keyspace: &S) -> Cow<'static, str>;
+}
+
+/// A marker specifically for Insert statements
+#[derive(Debug, Clone)]
+pub struct InsertStatement<S, K, V> {
+    _data: PhantomData<(S, K, V)>,
+}
+
+impl<S: Insert<K, V>, K, V> Statement<S> for InsertStatement<S, K, V> {
+    fn statement(&self, keyspace: &S) -> Cow<'static, str> {
+        keyspace.insert_statement::<K, V>()
+    }
+}
+
+impl<S, K, V> AnyStatement<S> for InsertStatement<S, K, V>
+where
+    S: 'static + Insert<K, V> + Debug + Clone,
+    K: 'static + Debug + Clone + Send,
+    V: 'static + Debug + Clone + Send,
+{
+}
+
+/// A marker specifically for Update statements
+#[derive(Debug, Clone)]
+pub struct UpdateStatement<S, K, V> {
+    _data: PhantomData<(S, K, V)>,
+}
+
+impl<S: Update<K, V>, K, V> Statement<S> for UpdateStatement<S, K, V> {
+    fn statement(&self, keyspace: &S) -> Cow<'static, str> {
+        keyspace.update_statement::<K, V>()
+    }
+}
+
+impl<S, K, V> AnyStatement<S> for UpdateStatement<S, K, V>
+where
+    S: 'static + Update<K, V> + Debug + Clone,
+    K: 'static + Debug + Clone + Send,
+    V: 'static + Debug + Clone + Send,
+{
+}
+
+/// A marker specifically for Delete statements
+#[derive(Debug, Clone)]
+pub struct DeleteStatement<S, K, V> {
+    _data: PhantomData<(S, K, V)>,
+}
+
+impl<S: Delete<K, V>, K, V> Statement<S> for DeleteStatement<S, K, V> {
+    fn statement(&self, keyspace: &S) -> Cow<'static, str> {
+        keyspace.delete_statement::<K, V>()
+    }
+}
+
+impl<S, K, V> AnyStatement<S> for DeleteStatement<S, K, V>
+where
+    S: 'static + Delete<K, V> + Debug + Clone,
+    K: 'static + Debug + Clone + Send,
+    V: 'static + Debug + Clone + Send,
+{
+}
+
+impl<S: Keyspace> BatchRequest<S> {
     /// Compute the murmur3 token from the provided K
     pub fn compute_token<K>(mut self, key: &K) -> Self
     where
@@ -54,9 +125,14 @@ impl<C: IterCqls<S> + Clone, S: Keyspace> BatchRequest<S, C> {
         self
     }
 
-    /// Clone the associated itercqls type.
-    pub fn cqls(&self) -> C {
-        self.cqls.clone()
+    /// Clone the cql map
+    pub fn clone_map(&self) -> HashMap<[u8; 16], Box<dyn AnyStatement<S>>> {
+        self.map.clone()
+    }
+
+    /// Take the cql map, leaving an empty map in the request
+    pub fn take_map(&mut self) -> HashMap<[u8; 16], Box<dyn AnyStatement<S>>> {
+        std::mem::take(&mut self.map)
     }
 
     /// Send a local request using the keyspace impl and return a type marker
@@ -81,512 +157,491 @@ impl<C: IterCqls<S> + Clone, S: Keyspace> BatchRequest<S, C> {
         DecodeResult::batch()
     }
 
-    pub fn get_cql(&self, id: &[u8; 16]) -> Option<String> {
-        self.cqls.from_id(&self.keyspace, id)
+    /// Get a statement given an id from the request's map
+    pub fn get_statement(&self, id: &[u8; 16]) -> Option<Cow<'static, str>> {
+        self.map.get(id).and_then(|res| Some(res.statement(&self.keyspace)))
     }
 
+    /// Get the request payload
     pub fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
 }
-pub struct BatchCollector<C: IterCqls<S>, S, Type: Copy + Into<u8>, Stage> {
+pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage> {
     builder: BatchBuilder<Type, Stage>,
-    cqls: C,
+    map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
     keyspace: S,
 }
 
-#[derive(Clone)]
-pub struct CqlsTypeUnset;
-impl<S> IterCqls<S> for CqlsTypeUnset {
-    fn from_id(&self, _keyspace: &S, _id: &[u8; 16]) -> Option<String> {
-        None
-    }
-    fn cql(&self, _keyspace: &S) -> Option<String> {
-        None
-    }
-}
-
-impl<C: IterCqls<S>, S: Keyspace + Clone> BatchCollector<C, S, BatchTypeUnset, BatchType> {
-    pub fn new(keyspace: &S) -> BatchCollector<CqlsTypeUnset, S, BatchTypeUnset, BatchType> {
+impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
+    pub fn new(keyspace: &S) -> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: scylla_cql::Batch::new(),
-            cqls: CqlsTypeUnset,
+            map: HashMap::new(),
             keyspace: keyspace.clone(),
         }
     }
 
-    pub fn with_capacity(keyspace: &S, capacity: usize) -> BatchCollector<CqlsTypeUnset, S, BatchTypeUnset, BatchType> {
+    pub fn with_capacity(keyspace: &S, capacity: usize) -> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: scylla_cql::Batch::with_capacity(capacity),
-            cqls: CqlsTypeUnset,
+            map: HashMap::new(),
             keyspace: keyspace.clone(),
         }
     }
 
-    pub fn batch_type<Type: Copy + Into<u8>>(
-        self,
-        batch_type: Type,
-    ) -> BatchCollector<CqlsTypeUnset, S, Type, BatchStatementOrId> {
-        Self::step(self.builder.batch_type(batch_type), CqlsTypeUnset, self.keyspace)
+    pub fn batch_type<Type: Copy + Into<u8>>(self, batch_type: Type) -> BatchCollector<S, Type, BatchStatementOrId> {
+        Self::step(self.builder.batch_type(batch_type), self.map, self.keyspace)
     }
-    pub fn logged(self) -> BatchCollector<CqlsTypeUnset, S, BatchTypeLogged, BatchStatementOrId> {
-        Self::step(self.builder.logged(), CqlsTypeUnset, self.keyspace)
+    pub fn logged(self) -> BatchCollector<S, BatchTypeLogged, BatchStatementOrId> {
+        Self::step(self.builder.logged(), self.map, self.keyspace)
     }
-    pub fn unlogged(self) -> BatchCollector<CqlsTypeUnset, S, BatchTypeUnlogged, BatchStatementOrId> {
-        Self::step(self.builder.unlogged(), CqlsTypeUnset, self.keyspace)
+    pub fn unlogged(self) -> BatchCollector<S, BatchTypeUnlogged, BatchStatementOrId> {
+        Self::step(self.builder.unlogged(), self.map, self.keyspace)
     }
-    pub fn counter(self) -> BatchCollector<CqlsTypeUnset, S, BatchTypeCounter, BatchStatementOrId> {
-        Self::step(self.builder.counter(), CqlsTypeUnset, self.keyspace)
+    pub fn counter(self) -> BatchCollector<S, BatchTypeCounter, BatchStatementOrId> {
+        Self::step(self.builder.counter(), self.map, self.keyspace)
     }
 }
 
-impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<C, S, Type, BatchStatementOrId> {
-    pub fn insert_recommended<K, V>(
-        self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<UnknownCqls<C, InsertCqls<S, C, K, V>>, S, Type, BatchValues>
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementOrId> {
+    pub fn insert_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: InsertBatch<K, V, Type>,
+        S: 'static + InsertBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
         match S::recommended() {
-            BatchQueryType::Query => {
-                let unknown = UnknownCqls::Old(self.cqls);
-                Self::step(
-                    S::push_insert(
-                        self.builder.statement(self.keyspace.insert_statement().as_ref()),
-                        key,
-                        value,
-                    ),
-                    unknown,
-                    self.keyspace,
-                )
-            }
+            BatchQueryType::Query => Self::step(
+                S::push_insert(
+                    self.builder.statement(self.keyspace.insert_statement().as_ref()),
+                    key,
+                    value,
+                ),
+                self.map,
+                self.keyspace,
+            ),
             BatchQueryType::Prepared => {
-                let new_cqls = InsertCqls {
-                    _marker: PhantomData,
-                    prev: self.cqls,
-                };
-                let unknown = UnknownCqls::New(new_cqls);
+                let id = self.keyspace.insert_id();
+                self.map.insert(
+                    id,
+                    Box::new(InsertStatement {
+                        _data: PhantomData::<(S, K, V)>,
+                    }),
+                );
                 Self::step(
-                    S::push_insert(self.builder.id(&self.keyspace.insert_id()), key, value),
-                    unknown,
+                    S::push_insert(self.builder.id(&id), key, value),
+                    self.map,
                     self.keyspace,
                 )
             }
         }
     }
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<C, S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
-        // no need to update cqls type for query
-        let res = Self::step(
-            self.builder.statement(self.keyspace.insert_statement().as_ref()),
-            self.cqls,
+        Self::step(
+            S::push_insert(
+                self.builder.statement(self.keyspace.insert_statement().as_ref()),
+                key,
+                value,
+            ),
+            self.map,
             self.keyspace,
-        );
-        Self::step(S::push_insert(res.builder, key, value), res.cqls, res.keyspace)
+        )
     }
-    pub fn insert_prepared<K, V>(
-        mut self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<InsertCqls<S, C, K, V>, S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: InsertBatch<K, V, Type>,
+        S: 'static + InsertBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
-        let new_cqls = InsertCqls {
-            _marker: PhantomData,
-            prev: self.cqls,
-        };
-
         let id = self.keyspace.insert_id();
-        let res = Self::step(self.builder.id(&id), new_cqls, self.keyspace);
-        Self::step(S::push_insert(res.builder, key, value), res.cqls, res.keyspace)
+        self.map.insert(
+            id,
+            Box::new(InsertStatement {
+                _data: PhantomData::<(S, K, V)>,
+            }),
+        );
+        Self::step(
+            S::push_insert(self.builder.id(&id), key, value),
+            self.map,
+            self.keyspace,
+        )
     }
 
-    pub fn update_recommended<K, V>(
-        self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<UnknownCqls<C, UpdateCqls<S, C, K, V>>, S, Type, BatchValues>
+    pub fn update_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: UpdateBatch<K, V, Type>,
+        S: 'static + UpdateBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
         match S::recommended() {
-            BatchQueryType::Query => {
-                let unknown = UnknownCqls::Old(self.cqls);
-                Self::step(
-                    S::push_update(
-                        self.builder.statement(self.keyspace.update_statement().as_ref()),
-                        key,
-                        value,
-                    ),
-                    unknown,
-                    self.keyspace,
-                )
-            }
+            BatchQueryType::Query => Self::step(
+                S::push_update(
+                    self.builder.statement(self.keyspace.update_statement().as_ref()),
+                    key,
+                    value,
+                ),
+                self.map,
+                self.keyspace,
+            ),
             BatchQueryType::Prepared => {
-                let new_cqls = UpdateCqls {
-                    _marker: PhantomData,
-                    prev: self.cqls,
-                };
-                let unknown = UnknownCqls::New(new_cqls);
+                let id = self.keyspace.update_id();
+                self.map.insert(
+                    id,
+                    Box::new(UpdateStatement {
+                        _data: PhantomData::<(S, K, V)>,
+                    }),
+                );
                 Self::step(
-                    S::push_update(self.builder.id(&self.keyspace.update_id()), key, value),
-                    unknown,
+                    S::push_update(self.builder.id(&id), key, value),
+                    self.map,
                     self.keyspace,
                 )
             }
         }
     }
 
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<C, S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
-        let res = Self::step(
-            self.builder.statement(self.keyspace.update_statement().as_ref()),
-            self.cqls,
+        Self::step(
+            S::push_update(
+                self.builder.statement(self.keyspace.update_statement().as_ref()),
+                key,
+                value,
+            ),
+            self.map,
             self.keyspace,
-        );
-        Self::step(S::push_update(res.builder, key, value), res.cqls, res.keyspace)
+        )
     }
 
-    pub fn update_prepared<K, V>(
-        mut self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<UpdateCqls<S, C, K, V>, S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: UpdateBatch<K, V, Type>,
+        S: 'static + UpdateBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
-        let new_cqls = UpdateCqls {
-            _marker: PhantomData,
-            prev: self.cqls,
-        };
         let id = self.keyspace.update_id();
-        let res = Self::step(self.builder.id(&id), new_cqls, self.keyspace);
-        Self::step(S::push_update(res.builder, key, value), res.cqls, res.keyspace)
+        self.map.insert(
+            id,
+            Box::new(UpdateStatement {
+                _data: PhantomData::<(S, K, V)>,
+            }),
+        );
+        Self::step(
+            S::push_update(self.builder.id(&id), key, value),
+            self.map,
+            self.keyspace,
+        )
     }
 
-    pub fn delete_recommended<K, V>(
-        self,
-        key: &K,
-    ) -> BatchCollector<UnknownCqls<C, DeleteCqls<S, C, K, V>>, S, Type, BatchValues>
+    pub fn delete_recommended<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
-        S: DeleteBatch<K, V, Type>,
+        S: 'static + DeleteBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
         match S::recommended() {
-            BatchQueryType::Query => {
-                let unknown = UnknownCqls::Old(self.cqls);
-                Self::step(
-                    S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
-                    unknown,
-                    self.keyspace,
-                )
-            }
+            BatchQueryType::Query => Self::step(
+                S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
+                self.map,
+                self.keyspace,
+            ),
             BatchQueryType::Prepared => {
-                let new_cqls = DeleteCqls {
-                    _marker: PhantomData,
-                    prev: self.cqls,
-                };
-                let unknown = UnknownCqls::New(new_cqls);
-                Self::step(
-                    S::push_delete(self.builder.id(&self.keyspace.delete_id()), key),
-                    unknown,
-                    self.keyspace,
-                )
+                let id = self.keyspace.delete_id();
+                self.map.insert(
+                    id,
+                    Box::new(DeleteStatement {
+                        _data: PhantomData::<(S, K, V)>,
+                    }),
+                );
+                Self::step(S::push_delete(self.builder.id(&id), key), self.map, self.keyspace)
             }
         }
     }
 
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<C, S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
-        let res = Self::step(
-            self.builder.statement(self.keyspace.delete_statement().as_ref()),
-            self.cqls,
+        Self::step(
+            S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
+            self.map,
             self.keyspace,
-        );
-        Self::step(S::push_delete(res.builder, key), res.cqls, res.keyspace)
+        )
     }
 
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<DeleteCqls<S, C, K, V>, S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
-        S: DeleteBatch<K, V, Type>,
+        S: 'static + DeleteBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
-        let new_cqls = DeleteCqls {
-            _marker: PhantomData,
-            prev: self.cqls,
-        };
         let id = self.keyspace.delete_id();
-        let res = Self::step(self.builder.id(&id), new_cqls, self.keyspace);
-        Self::step(S::push_delete(res.builder, key), res.cqls, res.keyspace)
+        self.map.insert(
+            id,
+            Box::new(DeleteStatement {
+                _data: PhantomData::<(S, K, V)>,
+            }),
+        );
+        Self::step(S::push_delete(self.builder.id(&id), key), self.map, self.keyspace)
     }
 }
 
-impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<C, S, Type, BatchValues> {
-    pub fn insert_recommended<K, V>(
-        self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<UnknownCqls<C, InsertCqls<S, C, K, V>>, S, Type, BatchValues>
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
+    pub fn insert_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: InsertBatch<K, V, Type>,
+        S: 'static + InsertBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
         match S::recommended() {
-            BatchQueryType::Query => {
-                let unknown = UnknownCqls::Old(self.cqls);
-                Self::step(
-                    S::push_insert(
-                        self.builder.statement(self.keyspace.insert_statement().as_ref()),
-                        key,
-                        value,
-                    ),
-                    unknown,
-                    self.keyspace,
-                )
-            }
+            BatchQueryType::Query => Self::step(
+                S::push_insert(
+                    self.builder.statement(self.keyspace.insert_statement().as_ref()),
+                    key,
+                    value,
+                ),
+                self.map,
+                self.keyspace,
+            ),
             BatchQueryType::Prepared => {
-                let new_cqls = InsertCqls {
-                    _marker: PhantomData,
-                    prev: self.cqls,
-                };
-                let unknown = UnknownCqls::New(new_cqls);
+                let id = self.keyspace.insert_id();
+                self.map.insert(
+                    id,
+                    Box::new(InsertStatement {
+                        _data: PhantomData::<(S, K, V)>,
+                    }),
+                );
                 Self::step(
-                    S::push_insert(self.builder.id(&self.keyspace.insert_id()), key, value),
-                    unknown,
+                    S::push_insert(self.builder.id(&id), key, value),
+                    self.map,
                     self.keyspace,
                 )
             }
         }
     }
-
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<C, S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
     {
-        // no need to update cqls type for query
-        let res = Self::step(
-            self.builder.statement(self.keyspace.insert_statement().as_ref()),
-            self.cqls,
+        Self::step(
+            S::push_insert(
+                self.builder.statement(self.keyspace.insert_statement().as_ref()),
+                key,
+                value,
+            ),
+            self.map,
             self.keyspace,
-        );
-        Self::step(S::push_insert(res.builder, key, value), res.cqls, res.keyspace)
+        )
     }
-
-    pub fn insert_prepared<K, V>(
-        mut self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<InsertCqls<S, C, K, V>, S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: InsertBatch<K, V, Type>,
+        S: 'static + InsertBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
-        let new_cqls = InsertCqls {
-            _marker: PhantomData,
-            prev: self.cqls,
-        };
-
         let id = self.keyspace.insert_id();
-        let res = Self::step(self.builder.id(&id), new_cqls, self.keyspace);
-        Self::step(S::push_insert(res.builder, key, value), res.cqls, res.keyspace)
+        self.map.insert(
+            id,
+            Box::new(InsertStatement {
+                _data: PhantomData::<(S, K, V)>,
+            }),
+        );
+        Self::step(
+            S::push_insert(self.builder.id(&id), key, value),
+            self.map,
+            self.keyspace,
+        )
     }
 
-    pub fn update_recommended<K, V>(
-        self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<UnknownCqls<C, UpdateCqls<S, C, K, V>>, S, Type, BatchValues>
+    pub fn update_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: UpdateBatch<K, V, Type>,
+        S: 'static + UpdateBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
         match S::recommended() {
-            BatchQueryType::Query => {
-                let unknown = UnknownCqls::Old(self.cqls);
-                Self::step(
-                    S::push_update(
-                        self.builder.statement(self.keyspace.update_statement().as_ref()),
-                        key,
-                        value,
-                    ),
-                    unknown,
-                    self.keyspace,
-                )
-            }
+            BatchQueryType::Query => Self::step(
+                S::push_update(
+                    self.builder.statement(self.keyspace.update_statement().as_ref()),
+                    key,
+                    value,
+                ),
+                self.map,
+                self.keyspace,
+            ),
             BatchQueryType::Prepared => {
-                let new_cqls = UpdateCqls {
-                    _marker: PhantomData,
-                    prev: self.cqls,
-                };
-                let unknown = UnknownCqls::New(new_cqls);
+                let id = self.keyspace.update_id();
+                self.map.insert(
+                    id,
+                    Box::new(UpdateStatement {
+                        _data: PhantomData::<(S, K, V)>,
+                    }),
+                );
                 Self::step(
-                    S::push_update(self.builder.id(&self.keyspace.update_id()), key, value),
-                    unknown,
+                    S::push_update(self.builder.id(&id), key, value),
+                    self.map,
                     self.keyspace,
                 )
             }
         }
     }
 
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<C, S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
     {
-        let res = Self::step(
-            self.builder.statement(self.keyspace.update_statement().as_ref()),
-            self.cqls,
+        Self::step(
+            S::push_update(
+                self.builder.statement(self.keyspace.update_statement().as_ref()),
+                key,
+                value,
+            ),
+            self.map,
             self.keyspace,
-        );
-        Self::step(S::push_update(res.builder, key, value), res.cqls, res.keyspace)
+        )
     }
 
-    pub fn update_prepared<K, V>(
-        mut self,
-        key: &K,
-        value: &V,
-    ) -> BatchCollector<UpdateCqls<S, C, K, V>, S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
-        S: UpdateBatch<K, V, Type>,
+        S: 'static + UpdateBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
-        let new_cqls = UpdateCqls {
-            _marker: PhantomData,
-            prev: self.cqls,
-        };
         let id = self.keyspace.update_id();
-        let res = Self::step(self.builder.id(&id), new_cqls, self.keyspace);
-        Self::step(S::push_update(res.builder, key, value), res.cqls, res.keyspace)
+        self.map.insert(
+            id,
+            Box::new(UpdateStatement {
+                _data: PhantomData::<(S, K, V)>,
+            }),
+        );
+        Self::step(
+            S::push_update(self.builder.id(&id), key, value),
+            self.map,
+            self.keyspace,
+        )
     }
 
-    pub fn delete_recommended<K, V>(
-        self,
-        key: &K,
-    ) -> BatchCollector<UnknownCqls<C, DeleteCqls<S, C, K, V>>, S, Type, BatchValues>
+    pub fn delete_recommended<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
-        S: DeleteBatch<K, V, Type>,
+        S: 'static + DeleteBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
         match S::recommended() {
-            BatchQueryType::Query => {
-                let unknown = UnknownCqls::Old(self.cqls);
-                Self::step(
-                    S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
-                    unknown,
-                    self.keyspace,
-                )
-            }
+            BatchQueryType::Query => Self::step(
+                S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
+                self.map,
+                self.keyspace,
+            ),
             BatchQueryType::Prepared => {
-                let new_cqls = DeleteCqls {
-                    _marker: PhantomData,
-                    prev: self.cqls,
-                };
-                let unknown = UnknownCqls::New(new_cqls);
-                Self::step(
-                    S::push_delete(self.builder.id(&self.keyspace.delete_id()), key),
-                    unknown,
-                    self.keyspace,
-                )
+                let id = self.keyspace.delete_id();
+                self.map.insert(
+                    id,
+                    Box::new(DeleteStatement {
+                        _data: PhantomData::<(S, K, V)>,
+                    }),
+                );
+                Self::step(S::push_delete(self.builder.id(&id), key), self.map, self.keyspace)
             }
         }
     }
 
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<C, S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
     {
-        let res = Self::step(
-            self.builder.statement(self.keyspace.delete_statement().as_ref()),
-            self.cqls,
+        Self::step(
+            S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
+            self.map,
             self.keyspace,
-        );
-        Self::step(S::push_delete(res.builder, key), res.cqls, res.keyspace)
+        )
     }
 
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<DeleteCqls<S, C, K, V>, S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
-        S: DeleteBatch<K, V, Type>,
+        S: 'static + DeleteBatch<K, V, Type>,
+        K: 'static + Debug + Clone + Send,
+        V: 'static + Debug + Clone + Send,
     {
-        let new_cqls = DeleteCqls {
-            _marker: PhantomData,
-            prev: self.cqls,
-        };
         let id = self.keyspace.delete_id();
-        let res = Self::step(self.builder.id(&id), new_cqls, self.keyspace);
-        Self::step(S::push_delete(res.builder, key), res.cqls, res.keyspace)
+        self.map.insert(
+            id,
+            Box::new(DeleteStatement {
+                _data: PhantomData::<(S, K, V)>,
+            }),
+        );
+        Self::step(S::push_delete(self.builder.id(&id), key), self.map, self.keyspace)
     }
 
     pub fn value<V: ColumnEncoder>(self, value: &V) -> Self {
-        Self::step(self.builder.value(value), self.cqls, self.keyspace)
+        Self::step(self.builder.value(value), self.map, self.keyspace)
     }
     pub fn unset_value(self) -> Self {
-        Self::step(self.builder.unset_value(), self.cqls, self.keyspace)
+        Self::step(self.builder.unset_value(), self.map, self.keyspace)
     }
     pub fn null_value(self) -> Self {
-        Self::step(self.builder.null_value(), self.cqls, self.keyspace)
+        Self::step(self.builder.null_value(), self.map, self.keyspace)
     }
-    pub fn consistency(self, consistency: Consistency) -> BatchCollector<C, S, Type, BatchFlags> {
-        Self::step(self.builder.consistency(consistency), self.cqls, self.keyspace)
+    pub fn consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchFlags> {
+        Self::step(self.builder.consistency(consistency), self.map, self.keyspace)
     }
 }
 
-impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<C, S, Type, BatchFlags> {
-    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<C, S, Type, BatchTimestamp> {
-        Self::step(self.builder.serial_consistency(consistency), self.cqls, self.keyspace)
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchFlags> {
+    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchTimestamp> {
+        Self::step(self.builder.serial_consistency(consistency), self.map, self.keyspace)
     }
-    pub fn timestamp(self, timestamp: i64) -> BatchCollector<C, S, Type, BatchBuild> {
-        Self::step(self.builder.timestamp(timestamp), self.cqls, self.keyspace)
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
+        Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self) -> BatchRequest<S, C> {
+    pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
-            cqls: self.cqls,
+            map: self.map,
             inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
-            _data: PhantomData,
         }
     }
 }
 
-impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<C, S, Type, BatchTimestamp> {
-    pub fn timestamp(self, timestamp: i64) -> BatchCollector<C, S, Type, BatchBuild> {
-        Self::step(self.builder.timestamp(timestamp), self.cqls, self.keyspace)
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchTimestamp> {
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
+        Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
-    pub fn build(self) -> BatchRequest<S, C> {
+    pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
-            cqls: self.cqls,
+            map: self.map,
             inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
-            _data: PhantomData,
         }
     }
 }
 
-impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<C, S, Type, BatchBuild> {
-    pub fn build(self) -> BatchRequest<S, C> {
+impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchBuild> {
+    pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
-            cqls: self.cqls,
+            map: self.map,
             inner: self.builder.build().0.into(),
             keyspace: self.keyspace,
-            _data: PhantomData,
         }
     }
 }
 
-impl<C: IterCqls<S>, S: Keyspace, Type: Copy + Into<u8>, Stage> BatchCollector<C, S, Type, Stage> {
-    fn step<NextCqls: IterCqls<S>, NextType: Copy + Into<u8>, NextStage>(
+impl<S: Keyspace, Type: Copy + Into<u8>, Stage> BatchCollector<S, Type, Stage> {
+    fn step<NextType: Copy + Into<u8>, NextStage>(
         builder: BatchBuilder<NextType, NextStage>,
-        cqls: NextCqls,
+        map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
         keyspace: S,
-    ) -> BatchCollector<NextCqls, S, NextType, NextStage> {
-        BatchCollector {
-            builder,
-            cqls,
-            keyspace,
-        }
+    ) -> BatchCollector<S, NextType, NextStage> {
+        BatchCollector { builder, map, keyspace }
     }
 }
 
@@ -595,11 +650,11 @@ pub trait Batch {
     /// Start building a batch.
     /// This function will borrow the keyspace until the batch is fully built in order
     /// to access its trait definitions.
-    fn batch(&self) -> BatchCollector<CqlsTypeUnset, Self, BatchTypeUnset, BatchType>
+    fn batch(&self) -> BatchCollector<Self, BatchTypeUnset, BatchType>
     where
         Self: Keyspace + Clone,
     {
-        BatchCollector::<CqlsTypeUnset, Self, BatchTypeUnset, BatchType>::new(self)
+        BatchCollector::new(self)
     }
 }
 

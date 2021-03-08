@@ -163,13 +163,6 @@ where
 }
 
 impl<S: Insert<K, V>, K, V> InsertRequest<S, K, V> {
-    /// Return cqls marker type
-    pub fn cqls(&self) -> InsertCql<S, K, V>
-    where
-        InsertCql<S, K, V>: IterCqls<S>,
-    {
-        InsertCql::<S, K, V> { _marker: PhantomData }
-    }
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         send_local(

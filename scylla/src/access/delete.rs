@@ -159,14 +159,6 @@ where
 }
 
 impl<S: Delete<K, V>, K, V> DeleteRequest<S, K, V> {
-    /// Return cqls marker type
-    pub fn cqls(&self) -> DeleteCql<S, K, V>
-    where
-        DeleteCql<S, K, V>: IterCqls<S>,
-    {
-        DeleteCql::<S, K, V> { _marker: PhantomData }
-    }
-
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
         send_local(

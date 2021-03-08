@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::borrow::Cow;
+use super::Cow;
 
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.
@@ -17,7 +17,7 @@ use std::borrow::Cow;
 /// - `Update`
 /// - `Insert`
 /// - `Delete`
-pub trait Keyspace: Send + Sized + Sync {
+pub trait Keyspace: Send + Sized + Sync + std::fmt::Debug + Clone {
     /// Get the name of the keyspace as represented in the database
     fn name(&self) -> &Cow<'static, str>;
 

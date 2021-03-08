@@ -70,11 +70,6 @@ pub trait Request: Send + std::fmt::Debug {
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
 }
-// iterate through
-pub trait IterCqls<S>: Sized {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String>;
-    fn cql(&self, keyspace: &S) -> Option<String>;
-}
 
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
@@ -181,159 +176,6 @@ impl<T> Deref for DecodeResult<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
-    }
-}
-
-#[derive(Clone)]
-pub struct InsertCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
-#[derive(Clone)]
-pub struct InsertCql<S, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-}
-#[derive(Clone)]
-pub struct UpdateCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
-#[derive(Clone)]
-pub struct UpdateCql<S, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-}
-#[derive(Clone)]
-pub struct DeleteCqls<S, C: IterCqls<S>, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-    prev: C,
-}
-#[derive(Clone)]
-pub struct DeleteCql<S, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-}
-#[derive(Clone)]
-pub struct SelectCql<S, K, V> {
-    _marker: PhantomData<(S, K, V)>,
-}
-
-/// UnknownCqls type
-#[derive(Clone)]
-pub enum UnknownCqls<Old, New> {
-    Old(Old),
-    New(New),
-}
-
-impl<S, Old: IterCqls<S>, New: IterCqls<S>> IterCqls<S> for UnknownCqls<Old, New> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        match self {
-            UnknownCqls::Old(old) => old.from_id(keyspace, id),
-            UnknownCqls::New(new) => new.from_id(keyspace, id),
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        match self {
-            UnknownCqls::Old(old) => old.cql(keyspace),
-            UnknownCqls::New(new) => new.cql(keyspace),
-        }
-    }
-}
-
-impl<S: Insert<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for InsertCqls<S, C, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.insert_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            // move to prev operation type
-            self.prev.from_id(keyspace, id)
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.insert_statement::<K, V>().to_string())
-    }
-}
-impl<S: Insert<K, V>, K, V> IterCqls<S> for InsertCql<S, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.insert_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            None
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.insert_statement::<K, V>().to_string())
-    }
-}
-
-impl<S: Update<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for UpdateCqls<S, C, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.update_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            // move to prev operation type
-            self.prev.from_id(keyspace, id)
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.update_statement::<K, V>().to_string())
-    }
-}
-impl<S: Update<K, V>, K, V> IterCqls<S> for UpdateCql<S, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.update_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            None
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.update_statement::<K, V>().to_string())
-    }
-}
-
-impl<S: Delete<K, V>, C: IterCqls<S>, K, V> IterCqls<S> for DeleteCqls<S, C, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.delete_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            // move to prev operation type
-            self.prev.from_id(keyspace, id)
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.delete_statement::<K, V>().to_string())
-    }
-}
-impl<S: Delete<K, V>, K, V> IterCqls<S> for DeleteCql<S, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.delete_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            None
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.delete_statement::<K, V>().to_string())
-    }
-}
-
-// this not needed for batch, likely to be removed later
-impl<S: Select<K, V>, K, V> IterCqls<S> for SelectCql<S, K, V> {
-    fn from_id(&self, keyspace: &S, id: &[u8; 16]) -> Option<String> {
-        if &keyspace.select_id::<K, V>() == id {
-            // found it
-            self.cql(keyspace)
-        } else {
-            None
-        }
-    }
-    fn cql(&self, keyspace: &S) -> Option<String> {
-        Some(keyspace.select_statement::<K, V>().to_string())
     }
 }
 
@@ -567,11 +409,11 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct BatchWorker<S, C: IterCqls<S> + Clone> {
-        request: BatchRequest<S, C>,
+    struct BatchWorker<S> {
+        request: BatchRequest<S>,
     }
 
-    impl<C: IterCqls<S> + Clone + Send + 'static, S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S, C> {
+    impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
         fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
             // Do nothing
         }
@@ -583,7 +425,7 @@ mod tests {
         ) {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                    if let Some(statement) = self.request.get_cql(&id) {
+                    if let Some(statement) = self.request.get_statement(&id) {
                         let prepare = Prepare::new().statement(&statement).build();
                         let prepare_worker = PrepareWorker {
                             retries: 3,
@@ -680,6 +522,7 @@ mod tests {
         let res = req.send_local(Box::new(worker));
     }
 
+    #[test]
     #[allow(dead_code)]
     fn test_batch() {
         let keyspace = Mainnet::new();
@@ -693,6 +536,9 @@ mod tests {
             .consistency(Consistency::One)
             .build()
             .compute_token(&3);
+        let id = keyspace.insert_id::<u32, f32>();
+        let statement = req.get_statement(&id).unwrap();
+        assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
         let worker = BatchWorker { request: req.clone() };
         let res = req.clone().send_local(Box::new(worker));
     }
