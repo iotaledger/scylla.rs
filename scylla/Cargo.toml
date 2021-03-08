@@ -23,7 +23,6 @@ rand = "0.8.3"
 url = "2.2.0"
 num_cpus = "1.13.0"
 md5 = "0.7.0"
-anymap = "0.12.1"
 dyn-clone = "1.0.4"
 
 [dev-dependencies]
