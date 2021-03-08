@@ -36,7 +36,7 @@ pub use error::{CqlError, ErrorCodes};
 pub use execute::Execute;
 pub use prepare::Prepare;
 pub use query::Query;
-pub use rows::{Metadata, Rows};
+pub use rows::*;
 pub use std::convert::TryInto;
 
 /// Big Endian 16-length, used for MD5 ID

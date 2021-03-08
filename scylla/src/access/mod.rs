@@ -516,14 +516,15 @@ mod tests {
             builder.value(key)
         }
     }
-
     impl RowsDecoder<u32, f32> for Mainnet {
+        type Row = f32;
         fn try_decode(decoder: Decoder) -> Result<Option<f32>, CqlError> {
             todo!()
         }
     }
 
     impl RowsDecoder<u32, i32> for Mainnet {
+        type Row = i32;
         fn try_decode(decoder: Decoder) -> Result<Option<i32>, CqlError> {
             todo!()
         }
@@ -693,6 +694,9 @@ mod tests {
             .consistency(Consistency::One)
             .build()
             .compute_token(&3);
+        /// Get the cqls type;
+        let cqls = req.cqls();
+        /// later you can use it to get the cql for a given id
         let worker = BatchWorker { request: req.clone() };
         let res = req.clone().send_local(Box::new(worker));
     }
