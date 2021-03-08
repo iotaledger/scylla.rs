@@ -321,10 +321,7 @@ mod tests {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, i32>
-        where
-            Self: Delete<u32, i32>,
-        {
+        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, i32> {
             let prepared_cql = Execute::new()
                 .id(&self.delete_id::<u32, i32>())
                 .consistency(scylla_cql::Consistency::One)

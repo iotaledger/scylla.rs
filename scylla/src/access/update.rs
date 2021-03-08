@@ -3,29 +3,62 @@
 
 use super::*;
 
-/// Update query trait which creates an Update Request
+/// Update query trait which creates an `UpdateRequest`
 /// that can be sent to the `Ring`.
 ///
-/// ## Example
-/// ```no_compile
+/// ## Examples
+/// ### Dynamic query
+/// ```no_run
+/// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+///     fn statement(&self) -> Cow<'static, str> {
+///         "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
+///     }
+///
+///     fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<Self, MyKeyType, MyValueType> {
+///         let query = Query::new()
+///             .statement(&self.update_statement::<MyKeyType, MyValueType>())
+///             .consistency(scylla_cql::Consistency::One)
+///             .value(&value.subvalue1)
+///             .value(&value.subvalue1)
+///             .value(&key.to_string())
+///             .build();
+///
+///         let token = self.token(&key);
+///
+///         self.create_request(query, token)
+///     }
+/// }
+/// ```
+/// ### Prepared statement
+/// ```no_run
+/// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+///     fn statement(&self) -> Cow<'static, str> {
+///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
+///     }
+///
+///     fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<Self, MyKeyType, MyValueType> {
+///         let prepared_cql = Execute::new()
+///             .id(&self.update_id::<MyKeyType, MyValueType>())
+///             .consistency(scylla_cql::Consistency::One)
+///             .value(&value.subvalue1)
+///             .value(&value.subvalue1)
+///             .value(&key.to_string())
+///             .build();
+///
+///         let token = self.token(&key);
+///
+///         self.create_request(prepared_cql, token)
+///     }
+/// }
+/// ```
+/// ### Usage
+/// ```
 /// let res = keyspace // A Scylla keyspace
-///     .update(key, value) // Get the Update Request
-///     .send_local(worker); // Send the request to the Ring
+///     .update(&my_key, &my_value) // Get the Update Request with a key and value
+///     .send_global(worker); // Send the request to the Ring
 /// ```
 pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Create your update statement here.
-    ///
-    /// ## Examples
-    /// ```no_run
-    /// fn update_statement() -> Cow<'static, str> {
-    ///     "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
-    /// }
-    /// ```
-    /// ```no_run
-    /// fn update_statement() -> Cow<'static, str> {
-    ///     format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
-    /// }
-    /// ```
     fn statement(&self) -> Cow<'static, str>;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
@@ -35,46 +68,6 @@ pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     }
     /// Construct your update query here and use it to create an
     /// `UpdateRequest`.
-    ///
-    /// ## Examples
-    /// ### Dynamic query
-    /// ```no_run
-    /// fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<Self, MyKeyType, MyValueType>
-    /// where
-    ///     Self: Update<MyKeyType, MyValueType>,
-    /// {
-    ///     let query = Query::new()
-    ///         .statement(&self.update_statement::<MyKeyType, MyValueType>())
-    ///         .consistency(scylla_cql::Consistency::One)
-    ///         .value(value.val1.to_string())
-    ///         .value(value.val2.to_string())
-    ///         .value(key.to_string())
-    ///         .build();
-    ///
-    ///     let token = rand::random::<i64>();
-    ///
-    ///     self.create_request(query, token)
-    /// }
-    /// ```
-    /// ### Prepared statement
-    /// ```no_run
-    /// fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<Self, MyKeyType, MyValueType>
-    /// where
-    ///     Self: Update<MyKeyType, MyValueType>,
-    /// {
-    ///     let prepared_cql = Execute::new()
-    ///         .id(&self.update_id::<MyKeyType, MyValueType>())
-    ///         .consistency(scylla_cql::Consistency::One)
-    ///         .value(value.val1.to_string())
-    ///         .value(value.val2.to_string())
-    ///         .value(key.to_string())
-    ///         .build();
-    ///
-    ///     let token = rand::random::<i64>();
-    ///
-    ///     self.create_request(prepared_cql, token)
-    /// }
-    /// ```
     fn get_request(&self, key: &K, value: &V) -> UpdateRequest<Self, K, V>;
 }
 

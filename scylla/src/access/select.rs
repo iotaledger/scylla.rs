@@ -3,29 +3,58 @@
 
 use super::*;
 
-/// Select query trait which creates a Select Request
+/// Select query trait which creates an `SelectRequest`
 /// that can be sent to the `Ring`.
 ///
-/// ## Example
-/// ```no_compile
+/// ## Examples
+/// ### Dynamic query
+/// ```no_run
+/// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+///     fn statement(&self) -> Cow<'static, str> {
+///         "SELECT * FROM keyspace.table WHERE key = ?".into()
+///     }
+///
+///     fn get_request(&self, key: &MyKeyType) -> SelectRequest<Self, MyKeyType, MyValueType> {
+///         let query = Query::new()
+///             .statement(&self.select_statement::<MyKeyType, MyValueType>())
+///             .consistency(scylla_cql::Consistency::One)
+///             .value(&key.to_string())
+///             .build();
+///
+///         let token = self.token(&key);
+///
+///         self.create_request(query, token)
+///     }
+/// }
+/// ```
+/// ### Prepared statement
+/// ```no_run
+/// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+///     fn statement(&self) -> Cow<'static, str> {
+///         format!("SELECT * FROM {}.table WHERE key = ?", self.name()).into()
+///     }
+///
+///     fn get_request(&self, key: &MyKeyType) -> SelectRequest<Self, MyKeyType, MyValueType> {
+///         let prepared_cql = Execute::new()
+///             .id(&self.select_id::<MyKeyType, MyValueType>())
+///             .consistency(scylla_cql::Consistency::One)
+///             .value(&key.to_string())
+///             .build();
+///
+///         let token = self.token(&key);
+///
+///         self.create_request(prepared_cql, token)
+///     }
+/// }
+/// ```
+/// ### Usage
+/// ```
 /// let res = keyspace // A Scylla keyspace
-///     .select::<MyValueType>(key) // Get the Select Request by specifying the return Value type
-///     .send_local(worker); // Send the request to the Ring
+///     .select::<MyValueType>(&my_key) // Get the Select Request by specifying the Value type
+///     .send_global(worker); // Send the request to the Ring
 /// ```
 pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
     /// Create your select statement here.
-    ///
-    /// ## Examples
-    /// ```no_run
-    /// fn select_statement() -> Cow<'static, str> {
-    ///     "SELECT * FROM keyspace.table WHERE key = ?".into()
-    /// }
-    /// ```
-    /// ```no_run
-    /// fn select_statement() -> Cow<'static, str> {
-    ///     format!("SELECT * FROM {}.table WHERE key = ?", self.name()).into()
-    /// }
-    /// ```
     fn statement(&self) -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
@@ -36,42 +65,6 @@ pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
     }
     /// Construct your select query here and use it to create a
     /// `SelectRequest`.
-    ///
-    /// ## Examples
-    /// ### Dynamic query
-    /// ```no_run
-    /// fn get_request(&self, key: &MyKeyType) -> SelectRequest<Self, MyKeyType, MyValueType>
-    /// where
-    ///     Self: Select<MyKeyType, MyValueType>,
-    /// {
-    ///     let query = Query::new()
-    ///         .statement(&self.select_statement::<MyKeyType, MyValueType>())
-    ///         .consistency(scylla_cql::Consistency::One)
-    ///         .value(key.to_string())
-    ///         .build();
-    ///
-    ///     let token = rand::random::<i64>();
-    ///
-    ///     self.create_request(query, token)
-    /// }
-    /// ```
-    /// ### Prepared statement
-    /// ```no_run
-    /// fn get_request(&self, key: &MyKeyType) -> SelectRequest<Self, MyKeyType, MyValueType>
-    /// where
-    ///     Self: Select<MyKeyType, MyValueType>,
-    /// {
-    ///     let prepared_cql = Execute::new()
-    ///         .id(&self.select_id::<MyKeyType, MyValueType>())
-    ///         .consistency(scylla_cql::Consistency::One)
-    ///         .value(key.to_string())
-    ///         .build();
-    ///
-    ///     let token = rand::random::<i64>();
-    ///
-    ///     self.create_request(prepared_cql, token)
-    /// }
-    /// ```
     fn get_request(&self, key: &K) -> SelectRequest<Self, K, V>;
 }
 

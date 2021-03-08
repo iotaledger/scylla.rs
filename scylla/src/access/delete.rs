@@ -3,29 +3,58 @@
 
 use super::*;
 
-/// Delete query trait which creates a Delete Request
+/// Delete query trait which creates a `DeleteRequest`
 /// that can be sent to the `Ring`.
 ///
-/// ## Example
-/// ```no_compile
+/// ## Examples
+/// ### Dynamic query
+/// ```no_run
+/// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+///     fn statement(&self) -> Cow<'static, str> {
+///         "DELETE FROM keyspace.table WHERE key = ?".into()
+///     }
+///
+///     fn get_request(&self, key: &MyKeyType) -> DeleteRequest<Self, MyKeyType, MyValueType> {
+///         let query = Query::new()
+///             .statement(&self.delete_statement::<MyKeyType, MyValueType>())
+///             .consistency(scylla_cql::Consistency::One)
+///             .value(&key.to_string())
+///             .build();
+///
+///         let token = self.token(&key);
+///
+///         self.create_request(query, token)
+///     }
+/// }
+/// ```
+/// ### Prepared statement
+/// ```no_run
+/// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+///     fn statement(&self) -> Cow<'static, str> {
+///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+///     }
+///
+///     fn get_request(&self, key: &MyKeyType) -> DeleteRequest<Self, MyKeyType, MyValueType> {
+///         let prepared_cql = Execute::new()
+///             .id(&self.delete_id::<MyKeyType, MyValueType>())
+///             .consistency(scylla_cql::Consistency::One)
+///             .value(&key.to_string())
+///             .build();
+///
+///         let token = self.token(&key);
+///
+///         self.create_request(prepared_cql, token)
+///     }
+/// }
+/// ```
+/// ### Usage
+/// ```
 /// let res = keyspace // A Scylla keyspace
-///     .delete::<MyValueType>(key) // Get the Delete Request by specifying the Value type
+///     .delete::<MyValueType>(&my_key) // Get the Delete Request by specifying the Value type
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
 pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Create your delete statement here.
-    ///
-    /// ## Examples
-    /// ```no_run
-    /// fn statement() -> Cow<'static, str> {
-    ///     "DELETE FROM keyspace.table WHERE key = ?".into()
-    /// }
-    /// ```
-    /// ```no_run
-    /// fn statement() -> Cow<'static, str> {
-    ///     format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
-    /// }
-    /// ```
     fn statement(&self) -> Cow<'static, str>;
 
     /// Get the MD5 hash of this implementation's statement
@@ -37,41 +66,6 @@ pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
 
     /// Construct your delete query here and use it to create a
     /// `DeleteRequest`.
-    /// ## Examples
-    /// ### Dynamic query
-    /// ```no_run
-    /// fn get_request(&self, key: &MyKeyType) -> DeleteRequest<Self, MyKeyType, MyValueType>
-    /// where
-    ///     Self: Delete<MyKeyType, MyValueType>,
-    /// {
-    ///     let query = Query::new()
-    ///         .statement(&self.delete_statement::<MyKeyType, MyValueType>())
-    ///         .consistency(scylla_cql::Consistency::One)
-    ///         .value(key.to_string())
-    ///         .build();
-    ///
-    ///     let token = rand::random::<i64>();
-    ///
-    ///     self.create_request(query, token)
-    /// }
-    /// ```
-    /// ### Prepared statement
-    /// ```no_run
-    /// fn get_request(&self, key: &MyKeyType) -> DeleteRequest<Self, MyKeyType, MyValueType>
-    /// where
-    ///     Self: Delete<MyKeyType, MyValueType>,
-    /// {
-    ///     let prepared_cql = Execute::new()
-    ///         .id(&self.delete_id::<MyKeyType, MyValueType>())
-    ///         .consistency(scylla_cql::Consistency::One)
-    ///         .value(key.to_string())
-    ///         .build();
-    ///
-    ///     let token = rand::random::<i64>();
-    ///
-    ///     self.create_request(prepared_cql, token)
-    /// }
-    /// ```
     fn get_request(&self, key: &K) -> DeleteRequest<Self, K, V>;
 }
 
