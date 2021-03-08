@@ -9,37 +9,125 @@ use scylla_cql::{
 };
 use std::{any::Any, collections::HashMap, fmt::Debug, marker::PhantomData};
 
+/// Specifies that an `Insert<K, V>` access definition can be used as part of
+/// a batch of queries.
+/// ## Example
+///
+/// ```no_run
+/// impl InsertBatch<MyKeyType, MyValueType, BatchTypeLogged> for MyKeyspace {
+///     fn default_type() -> BatchQueryType {
+///         BatchQueryType::Prepared
+///     }
+///     fn push_insert(
+///         builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+///         key: &MyKeyType,
+///         value: &MyValueType,
+///     ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+///         builder.value(key).value(value.subvalue1).value(value.subvalue2)
+///     }
+/// }
+///
+/// let req = keyspace
+///     .batch()
+///     .logged()
+///     // This will create a prepared `Execute` query due to the `default_type` definition
+///     .insert(&my_key, &my_val)
+///     // This will create an unprepared `Query`
+///     .update_query(&my_key, &my_val)
+///     .consistency(Consistency::One)
+///     .build()
+///     .compute_token(&token_key);
+/// ```
 pub trait InsertBatch<K, V, T: Copy + Into<u8>>: Insert<K, V> {
-    fn recommended() -> BatchQueryType;
-    fn query() -> BatchQueryType {
-        BatchQueryType::Query
-    }
-    fn prepared() -> BatchQueryType {
-        BatchQueryType::Prepared
-    }
+    /// Defines the default `BatchQueryType` (Query or Prepared)
+    /// which will be used when calling `insert` on a `BatchCollector`.
+    fn default_type() -> BatchQueryType;
+    /// Use this function to push your values to the query builder.
     fn push_insert(builder: BatchBuilder<T, BatchValues>, key: &K, value: &V) -> BatchBuilder<T, BatchValues>;
 }
 
+/// Specifies that an `Update<K, V>` access definition can be used as part of
+/// a batch of queries.
+/// ## Example
+///
+/// ```no_run
+/// impl UpdateBatch<MyKeyType, MyValueType, BatchTypeLogged> for MyKeyspace {
+///     fn default_type() -> BatchQueryType {
+///         BatchQueryType::Query
+///     }
+///     fn push_update(
+///         builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+///         key: &MyKeyType,
+///         value: &MyValueType,
+///     ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+///         builder.value(key).value(value.subvalue1).value(value.subvalue2)
+///     }
+/// }
+///
+/// let req = keyspace
+///     .batch()
+///     .logged()
+///     // This will create an unprepared `Query` due to the `default_type` definition
+///     .update(&my_key, &my_val)
+///     // This will create a prepared `Execute` query
+///     .update_prepared(&my_key, &my_val)
+///     .consistency(Consistency::One)
+///     .build()
+///     .compute_token(&token_key);
+/// ```
 pub trait UpdateBatch<K, V, T: Copy + Into<u8>>: Update<K, V> {
-    fn recommended() -> BatchQueryType;
-    fn query() -> BatchQueryType {
-        BatchQueryType::Query
-    }
-    fn prepared() -> BatchQueryType {
-        BatchQueryType::Prepared
-    }
+    /// Defines the default `BatchQueryType` (Query or Prepared)
+    /// which will be used when calling `update` on a `BatchCollector`.
+    fn default_type() -> BatchQueryType;
+    /// Use this function to push your values to the query builder.
     fn push_update(builder: BatchBuilder<T, BatchValues>, key: &K, value: &V) -> BatchBuilder<T, BatchValues>;
 }
 
+/// Specifies that a `Delete<K, V>` access definition can be used as part of
+/// a batch of queries.
+/// ## Example
+///
+/// ```no_run
+/// impl DeleteBatch<MyKeyType, MyValueType, BatchTypeLogged> for MyKeyspace {
+///     fn default_type() -> BatchQueryType {
+///         BatchQueryType::Query
+///     }
+///     fn push_delete(
+///         builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
+///         key: &MyKeyType,
+///         value: &MyValueType,
+///     ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+///         builder.value(key).value(value.subvalue1).value(value.subvalue2)
+///     }
+/// }
+///
+/// let req = keyspace
+///     .batch()
+///     .logged()
+///     // This will create an unprepared `Query` due to the `default_type` definition
+///     .delete(&my_key)
+///     // This will create a prepared `Execute` query
+///     .delete_prepared(&my_key)
+///     .consistency(Consistency::One)
+///     .build()
+///     .compute_token(&token_key);
+/// ```
 pub trait DeleteBatch<K, V, T: Copy + Into<u8>>: Delete<K, V> {
-    fn recommended() -> BatchQueryType;
+    /// Defines the default `BatchQueryType` (Query or Prepared)
+    /// which will be used when calling `update` on a `BatchCollector`.
+    fn default_type() -> BatchQueryType;
+    /// Use this function to push your values to the query builder.
     fn push_delete(builder: BatchBuilder<T, BatchValues>, key: &K) -> BatchBuilder<T, BatchValues>;
 }
 
+/// An aggregation trait which defines a statement marker of any type
 pub trait AnyStatement<S>: Any + Statement<S> + Send + Debug + DynClone {}
 
 dyn_clone::clone_trait_object!(<S> AnyStatement<S>);
 
+/// A Batch request, which can be used to send queries to the Ring.
+/// Stores a map of prepared statement IDs that were added to the
+/// batch so that the associated statements can be re-prepared if necessary.
 #[derive(Debug, Clone)]
 pub struct BatchRequest<S> {
     token: i64,
@@ -167,6 +255,24 @@ impl<S: Keyspace> BatchRequest<S> {
         &self.inner
     }
 }
+
+/// A batch collector, used to collect statements and build a `BatchRequest`.
+/// Access queries are defined by access traits ([`Insert`], [`Delete`], [`Update`])
+/// and qualified for use in a Batch via batch traits ([`InsertBatch`], [`DeleteBatch`], [`UpdateBatch`])
+/// ## Example
+/// ```
+/// let req = keyspace
+///     // Creates the `BatchCollector`
+///     .batch()
+///     .logged()
+///     // Add a few pre-defined access queries
+///     .delete(&my_key)
+///     .insert_query(&my_key, &my_val)
+///     .update_prepared(&my_key, &my_val)
+///     .consistency(Consistency::One)
+///     .build()
+///     .compute_token(&token_key);
+/// ```
 pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage> {
     builder: BatchBuilder<Type, Stage>,
     map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
@@ -174,6 +280,10 @@ pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage> {
 }
 
 impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
+    /// Construct a new batch collector with a keyspace definition
+    /// which should implement access and batch traits that will be used
+    /// to build this batch. The keyspace will be cloned here and held by
+    /// the collector.
     pub fn new(keyspace: &S) -> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: scylla_cql::Batch::new(),
@@ -182,6 +292,10 @@ impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
         }
     }
 
+    /// Construct a new batch collector with a provided capacity and a keyspace definition
+    /// which should implement access and batch traits that will be used
+    /// to build this batch. The keyspace will be cloned here and held by
+    /// the collector.
     pub fn with_capacity(keyspace: &S, capacity: usize) -> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: scylla_cql::Batch::with_capacity(capacity),
@@ -190,28 +304,37 @@ impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
         }
     }
 
+    /// Specify the batch type using an enum
     pub fn batch_type<Type: Copy + Into<u8>>(self, batch_type: Type) -> BatchCollector<S, Type, BatchStatementOrId> {
         Self::step(self.builder.batch_type(batch_type), self.map, self.keyspace)
     }
+
+    /// Specify the batch type as Logged
     pub fn logged(self) -> BatchCollector<S, BatchTypeLogged, BatchStatementOrId> {
         Self::step(self.builder.logged(), self.map, self.keyspace)
     }
+
+    /// Specify the batch type as Unlogged
     pub fn unlogged(self) -> BatchCollector<S, BatchTypeUnlogged, BatchStatementOrId> {
         Self::step(self.builder.unlogged(), self.map, self.keyspace)
     }
+
+    /// Specify the batch type as Counter
     pub fn counter(self) -> BatchCollector<S, BatchTypeCounter, BatchStatementOrId> {
         Self::step(self.builder.counter(), self.map, self.keyspace)
     }
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementOrId> {
-    pub fn insert_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    /// Append an insert query using the default query type defined in the `InsertBatch` impl
+    /// and the statement defined in the `Insert` impl.
+    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + InsertBatch<K, V, Type>,
         K: 'static + Debug + Clone + Send,
         V: 'static + Debug + Clone + Send,
     {
-        match S::recommended() {
+        match S::default_type() {
             BatchQueryType::Query => Self::step(
                 S::push_insert(
                     self.builder.statement(self.keyspace.insert_statement().as_ref()),
@@ -237,6 +360,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
             }
         }
     }
+
+    /// Append an unprepared insert query using the statement defined in the `Insert` impl.
     pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
@@ -251,6 +376,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
             self.keyspace,
         )
     }
+
+    /// Append a prepared insert query using the statement defined in the `Insert` impl.
     pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + InsertBatch<K, V, Type>,
@@ -271,13 +398,15 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         )
     }
 
-    pub fn update_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    /// Append an update query using the default query type defined in the `UpdateBatch` impl
+    /// and the statement defined in the `Update` impl.
+    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + UpdateBatch<K, V, Type>,
         K: 'static + Debug + Clone + Send,
         V: 'static + Debug + Clone + Send,
     {
-        match S::recommended() {
+        match S::default_type() {
             BatchQueryType::Query => Self::step(
                 S::push_update(
                     self.builder.statement(self.keyspace.update_statement().as_ref()),
@@ -304,6 +433,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         }
     }
 
+    /// Append an unprepared update query using the statement defined in the `Update` impl.
     pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
@@ -319,6 +449,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         )
     }
 
+    /// Append a prepared update query using the statement defined in the `Update` impl.
     pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + UpdateBatch<K, V, Type>,
@@ -339,13 +470,15 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         )
     }
 
-    pub fn delete_recommended<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    /// Append a delete query using the default query type defined in the `DeleteBatch` impl
+    /// and the statement defined in the `Delete` impl.
+    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + DeleteBatch<K, V, Type>,
         K: 'static + Debug + Clone + Send,
         V: 'static + Debug + Clone + Send,
     {
-        match S::recommended() {
+        match S::default_type() {
             BatchQueryType::Query => Self::step(
                 S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
                 self.map,
@@ -364,6 +497,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         }
     }
 
+    /// Append an unprepared delete query using the statement defined in the `Delete` impl.
     pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
@@ -375,6 +509,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         )
     }
 
+    /// Append a prepared delete query using the statement defined in the `Delete` impl.
     pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + DeleteBatch<K, V, Type>,
@@ -393,13 +528,15 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
-    pub fn insert_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    /// Append an insert query using the default query type defined in the `InsertBatch` impl
+    /// and the statement defined in the `Insert` impl.
+    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + InsertBatch<K, V, Type>,
         K: 'static + Debug + Clone + Send,
         V: 'static + Debug + Clone + Send,
     {
-        match S::recommended() {
+        match S::default_type() {
             BatchQueryType::Query => Self::step(
                 S::push_insert(
                     self.builder.statement(self.keyspace.insert_statement().as_ref()),
@@ -425,6 +562,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
             }
         }
     }
+
+    /// Append an unprepared insert query using the statement defined in the `Insert` impl.
     pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: InsertBatch<K, V, Type>,
@@ -439,6 +578,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
             self.keyspace,
         )
     }
+
+    /// Append a prepared insert query using the statement defined in the `Insert` impl.
     pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + InsertBatch<K, V, Type>,
@@ -459,13 +600,15 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         )
     }
 
-    pub fn update_recommended<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    /// Append an update query using the default query type defined in the `UpdateBatch` impl
+    /// and the statement defined in the `Update` impl.
+    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + UpdateBatch<K, V, Type>,
         K: 'static + Debug + Clone + Send,
         V: 'static + Debug + Clone + Send,
     {
-        match S::recommended() {
+        match S::default_type() {
             BatchQueryType::Query => Self::step(
                 S::push_update(
                     self.builder.statement(self.keyspace.update_statement().as_ref()),
@@ -492,6 +635,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         }
     }
 
+    /// Append an unprepared update query using the statement defined in the `Update` impl.
     pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: UpdateBatch<K, V, Type>,
@@ -507,6 +651,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         )
     }
 
+    /// Append a prepared update query using the statement defined in the `Update` impl.
     pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + UpdateBatch<K, V, Type>,
@@ -527,13 +672,15 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         )
     }
 
-    pub fn delete_recommended<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    /// Append a delete query using the default query type defined in the `DeleteBatch` impl
+    /// and the statement defined in the `Delete` impl.
+    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + DeleteBatch<K, V, Type>,
         K: 'static + Debug + Clone + Send,
         V: 'static + Debug + Clone + Send,
     {
-        match S::recommended() {
+        match S::default_type() {
             BatchQueryType::Query => Self::step(
                 S::push_delete(self.builder.statement(self.keyspace.delete_statement().as_ref()), key),
                 self.map,
@@ -552,6 +699,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         }
     }
 
+    /// Append an unprepared delete query using the statement defined in the `Delete` impl.
     pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: DeleteBatch<K, V, Type>,
@@ -563,6 +711,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         )
     }
 
+    /// Append a prepared delete query using the statement defined in the `Delete` impl.
     pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + DeleteBatch<K, V, Type>,
@@ -579,27 +728,22 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         Self::step(S::push_delete(self.builder.id(&id), key), self.map, self.keyspace)
     }
 
-    pub fn value<V: ColumnEncoder>(self, value: &V) -> Self {
-        Self::step(self.builder.value(value), self.map, self.keyspace)
-    }
-    pub fn unset_value(self) -> Self {
-        Self::step(self.builder.unset_value(), self.map, self.keyspace)
-    }
-    pub fn null_value(self) -> Self {
-        Self::step(self.builder.null_value(), self.map, self.keyspace)
-    }
+    /// Set the consistency for this batch
     pub fn consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchFlags> {
         Self::step(self.builder.consistency(consistency), self.map, self.keyspace)
     }
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchFlags> {
+    /// Set the serial consistency for the batch
     pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchTimestamp> {
         Self::step(self.builder.serial_consistency(consistency), self.map, self.keyspace)
     }
+    /// Set the timestamp for the batch
     pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
+    /// Build the batch request using the current collector
     pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
@@ -611,9 +755,11 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchFlags> {
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchTimestamp> {
+    /// Set the timestamp for the batch
     pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
+    /// Build the batch request using the current collector
     pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),
@@ -625,6 +771,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchTimestamp>
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchBuild> {
+    /// Build the batch request using the current collector
     pub fn build(self) -> BatchRequest<S> {
         BatchRequest {
             token: rand::random::<i64>(),

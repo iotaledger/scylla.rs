@@ -257,7 +257,7 @@ mod tests {
     }
 
     impl InsertBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn recommended() -> BatchQueryType {
+        fn default_type() -> BatchQueryType {
             BatchQueryType::Prepared
         }
         fn push_insert(
@@ -288,7 +288,7 @@ mod tests {
     }
 
     impl UpdateBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn recommended() -> BatchQueryType {
+        fn default_type() -> BatchQueryType {
             BatchQueryType::Query
         }
         fn push_update(
@@ -336,7 +336,7 @@ mod tests {
     }
 
     impl DeleteBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn recommended() -> BatchQueryType {
+        fn default_type() -> BatchQueryType {
             BatchQueryType::Prepared
         }
         fn push_delete(
@@ -348,7 +348,7 @@ mod tests {
     }
 
     impl DeleteBatch<u32, i32, BatchTypeLogged> for Mainnet {
-        fn recommended() -> BatchQueryType {
+        fn default_type() -> BatchQueryType {
             BatchQueryType::Query
         }
         fn push_delete(
@@ -530,7 +530,7 @@ mod tests {
         let req = keyspace
             .batch()
             .logged() // or .batch_type(BatchTypeLogged)
-            .insert_recommended(&3, &9.0)
+            .insert(&3, &9.0)
             .update_query(&3, &8.0)
             .insert_prepared(&3, &8.0)
             .delete_prepared::<_, f32>(&3)
