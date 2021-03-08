@@ -358,14 +358,15 @@ mod tests {
             builder.value(key)
         }
     }
-
     impl RowsDecoder<u32, f32> for Mainnet {
+        type Row = f32;
         fn try_decode(decoder: Decoder) -> Result<Option<f32>, CqlError> {
             todo!()
         }
     }
 
     impl RowsDecoder<u32, i32> for Mainnet {
+        type Row = i32;
         fn try_decode(decoder: Decoder) -> Result<Option<i32>, CqlError> {
             todo!()
         }

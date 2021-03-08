@@ -7,7 +7,10 @@ use super::{
     error, header, opcode, result,
     rows::{ColumnsCount, Flags, Metadata, PagingState},
 };
-use crate::compression::{Compression, MyCompression};
+use crate::{
+    compression::{Compression, MyCompression},
+    frame::rows::Rows,
+};
 use std::{
     collections::HashMap,
     convert::TryInto,
@@ -15,14 +18,17 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str,
 };
-
 /// RowsDecoder trait to decode the rows result from scylla
 pub trait RowsDecoder<K, V> {
+    type Row: super::Row;
     /// Try to decode the provided Decoder with an expected Rows result
     fn try_decode(decoder: Decoder) -> Result<Option<V>, error::CqlError>;
     /// Decode the provided Decoder with deterministic Rows result
     fn decode(decoder: Decoder) -> Option<V> {
         Self::try_decode(decoder).unwrap()
+    }
+    fn rows_iter(decoder: Decoder) -> super::Iter<Self::Row> {
+        super::Iter::<Self::Row>::new(decoder)
     }
 }
 
