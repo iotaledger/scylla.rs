@@ -17,7 +17,7 @@ use super::Cow;
 /// - `Update`
 /// - `Insert`
 /// - `Delete`
-pub trait Keyspace: Send + Sized + Sync + std::fmt::Debug + Clone {
+pub trait Keyspace: Send + Sized + Sync + Clone {
     /// Get the name of the keyspace as represented in the database
     fn name(&self) -> &Cow<'static, str>;
 
