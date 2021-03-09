@@ -141,9 +141,10 @@ impl BatchBuilder<BatchTypeUnset, BatchType> {
     }
 }
 
-impl<Type: Copy + Into<u8>> Statements<BatchBuilder<Type, BatchValues>> for BatchBuilder<Type, BatchStatementOrId> {
+impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchStatementOrId> {
+    type Return = BatchBuilder<Type, BatchValues>;
     /// Set the statement in the Batch frame.
-    fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
+    fn statement(mut self, statement: &str) -> Self::Return {
         // normal query
         self.buffer.push(0);
         self.buffer.extend(&i32::to_be_bytes(statement.len() as i32));
@@ -160,7 +161,7 @@ impl<Type: Copy + Into<u8>> Statements<BatchBuilder<Type, BatchValues>> for Batc
         }
     }
     /// Set the id in the Batch frame.
-    fn id(mut self, id: &[u8; 16]) -> BatchBuilder<Type, BatchValues> {
+    fn id(mut self, id: &[u8; 16]) -> Self::Return {
         // prepared query
         self.buffer.push(1);
         self.buffer.extend(&MD5_BE_LENGTH);
@@ -200,7 +201,8 @@ impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
     }
 }
 
-impl<Type: Copy + Into<u8>> Statements<Self> for BatchBuilder<Type, BatchValues> {
+impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchValues> {
+    type Return = Self;
     /// Set the statement in the Batch frame.
     fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
         // adjust value_count for prev query(if any)

@@ -72,17 +72,17 @@ pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
 }
 
 pub trait DeleteRecommended<S: Delete<K, V>, K, V>: QueryOrPrepared {
-    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R;
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return;
 }
 
 impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for QueryStatement {
-    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
         Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
     }
 }
 
 impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for PreparedStatement {
-    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
         Self::encode_statement(query_or_batch, &keyspace.id())
     }
 }

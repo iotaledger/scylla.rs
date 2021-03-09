@@ -63,7 +63,7 @@ impl QueryBuilder<QueryHeader> {
 }
 
 impl QueryOrPrepared for QueryStatement {
-    fn encode_statement<R, T: Statements<R>>(query_or_batch: T, statement: &[u8]) -> R {
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> T::Return {
         let statement = unsafe { std::str::from_utf8_unchecked(&statement) };
         query_or_batch.statement(statement)
     }
@@ -72,16 +72,17 @@ impl QueryOrPrepared for QueryStatement {
     }
 }
 impl QueryOrPrepared for PreparedStatement {
-    fn encode_statement<R, T: Statements<R>>(query_or_batch: T, statement: &[u8]) -> R {
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> T::Return {
         query_or_batch.id(statement.try_into().unwrap())
     }
     fn is_prepared() -> bool {
         true
     }
 }
-impl<T: QueryOrPrepared> Statements<QueryBuilder<QueryConsistency>> for QueryBuilder<T> {
+impl<T: QueryOrPrepared> Statements for QueryBuilder<T> {
+    type Return = QueryBuilder<QueryConsistency>;
     /// Set the statement in the query frame.
-    fn statement(mut self, statement: &str) -> QueryBuilder<QueryConsistency> {
+    fn statement(mut self, statement: &str) -> Self::Return {
         self.buffer.extend(&i32::to_be_bytes(statement.len() as i32));
         self.buffer.extend(statement.as_bytes());
         QueryBuilder::<QueryConsistency> {
@@ -91,7 +92,7 @@ impl<T: QueryOrPrepared> Statements<QueryBuilder<QueryConsistency>> for QueryBui
     }
     /// Set the id in the query frame.
     /// Note: this will make the Query frame identical to Execute frame.
-    fn id(mut self, id: &[u8; 16]) -> QueryBuilder<QueryConsistency> {
+    fn id(mut self, id: &[u8; 16]) -> Self::Return {
         self.buffer.extend(&super::MD5_BE_LENGTH);
         self.buffer.extend(id);
         QueryBuilder::<QueryConsistency> {

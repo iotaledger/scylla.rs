@@ -46,13 +46,14 @@ const MD5_BE_LENGTH: [u8; 2] = [0, 16];
 
 /// Statement or ID
 pub trait QueryOrPrepared: Sized {
-    fn encode_statement<R, T: Statements<R>>(query_or_batch: T, statement: &[u8]) -> R;
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> T::Return;
     fn is_prepared() -> bool;
 }
 
-pub trait Statements<T> {
-    fn statement(self, statement: &str) -> T;
-    fn id(self, id: &[u8; 16]) -> T;
+pub trait Statements {
+    type Return;
+    fn statement(self, statement: &str) -> Self::Return;
+    fn id(self, id: &[u8; 16]) -> Self::Return;
 }
 
 pub trait Values: Sized {
