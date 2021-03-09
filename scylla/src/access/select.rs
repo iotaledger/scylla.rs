@@ -54,6 +54,9 @@ use super::*;
 ///     .send_global(worker); // Send the request to the Ring
 /// ```
 pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
+    /// Set the query type; `QueryStatement` or `PreparedStatement`
+    type QueryOrPrepared: SelectRecommended<Self, K, V>;
+
     /// Create your select statement here.
     fn statement(&self) -> Cow<'static, str>;
 
@@ -63,26 +66,157 @@ pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
     fn id(&self) -> [u8; 16] {
         md5::compute(self.select_statement().as_bytes()).into()
     }
-    /// Construct your select query here and use it to create a
-    /// `SelectRequest`.
-    fn get_request(&self, key: &K) -> SelectRequest<Self, K, V>;
+    /// Bind the cql values to the builder
+    fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
+}
+
+pub trait SelectRecommended<S: Select<K, V>, K, V>: QueryOrPrepared {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return;
+}
+
+impl<S: Select<K, V>, K, V> SelectRecommended<S, K, V> for QueryStatement {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+        Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
+    }
+}
+
+impl<S: Select<K, V>, K, V> SelectRecommended<S, K, V> for PreparedStatement {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+        Self::encode_statement(query_or_batch, &keyspace.id())
+    }
 }
 
 /// Defines a helper method to specify the Value type
 /// expected by the `Select` trait.
 pub trait GetSelectRequest<S, K> {
     /// Specifies the returned Value type for an upcoming select request
-    fn select<V>(&self, key: &K) -> SelectRequest<S, K, V>
+    fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
 }
 
 impl<S: Keyspace, K> GetSelectRequest<S, K> for S {
-    fn select<V>(&self, key: &K) -> SelectRequest<S, K, V>
+    fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>,
     {
-        S::get_request(self, key)
+        SelectBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
+    }
+}
+
+pub struct SelectBuilder<'a, S, K, V, Stage> {
+    _marker: PhantomData<(&'a S, &'a K, &'a V)>,
+    keyspace: &'a S,
+    key: &'a K,
+    builder: QueryBuilder<Stage>,
+}
+
+impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency> {
+    pub fn consistency(self, consistency: Consistency) -> SelectBuilder<'a, S, K, V, QueryValues> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: S::bind_values(self.builder.consistency(consistency), self.key),
+        }
+    }
+}
+impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryValues> {
+    pub fn page_size(mut self, page_size: i32) -> SelectBuilder<'a, S, K, V, QueryPagingState> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.page_size(page_size),
+        }
+    }
+    /// Set the paging state.
+    pub fn paging_state(
+        mut self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.paging_state(paging_state),
+        }
+    }
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+        }
+    }
+    /// Build the SelectRequest
+    pub fn build(self) -> SelectRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
+    }
+}
+
+impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryBuild> {
+    /// Build the InsertRequest
+    pub fn build(self) -> SelectRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
+    }
+}
+
+impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryPagingState> {
+    /// Set the paging state in the query frame.
+    pub fn paging_state(
+        mut self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.paging_state(paging_state),
+        }
+    }
+
+    /// Set the timestamp of the query frame.
+    pub fn timestamp(mut self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+        }
+    }
+
+    pub fn build(mut self) -> SelectRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
+    }
+}
+impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
+    /// Set the timestamp of the query frame.
+    pub fn timestamp(mut self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+        }
+    }
+
+    pub fn build(mut self) -> SelectRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
     }
 }
 

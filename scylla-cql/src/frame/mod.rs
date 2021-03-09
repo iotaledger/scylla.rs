@@ -36,7 +36,8 @@ pub use error::{CqlError, ErrorCodes};
 pub use execute::Execute;
 pub use prepare::Prepare;
 pub use query::{
-    PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency, QueryFlags, QueryStatement, QueryValues,
+    PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency, QueryFlags, QueryPagingState,
+    QuerySerialConsistency, QueryStatement, QueryValues,
 };
 pub use rows::*;
 pub use std::convert::TryInto;

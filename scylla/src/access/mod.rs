@@ -201,35 +201,23 @@ mod tests {
     }
 
     impl Select<u32, f32> for Mainnet {
+        type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             "SELECT col1 FROM keyspace.table WHERE key = ?".into()
         }
-
-        fn get_request(&self, key: &u32) -> SelectRequest<Self, u32, f32> {
-            let query = Query::new()
-                .statement(&self.select_statement::<u32, f32>())
-                .consistency(scylla_cql::Consistency::One)
-                .value(key)
-                .build();
-            let token = rand::random::<i64>();
-
-            self.create_request(query, token)
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
+            builder.value(key)
         }
     }
 
     impl Select<u32, i32> for Mainnet {
+        type QueryOrPrepared = QueryStatement;
         fn statement(&self) -> Cow<'static, str> {
-            format!("SELECT * FROM {}.table WHERE key = ?", self.name()).into()
+            format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&self, key: &u32) -> SelectRequest<Self, u32, i32> {
-            let prepared_cql = Execute::new()
-                .id(&self.select_id::<u32, f32>())
-                .consistency(scylla_cql::Consistency::One)
-                .value(key)
-                .build();
-            let token = rand::random::<i64>();
-            self.create_request(prepared_cql, token)
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
+            builder.value(key)
         }
     }
 
@@ -255,7 +243,7 @@ mod tests {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
         fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
-            builder.value(value).value(value)
+            builder.value(value).value(value).value(key)
         }
     }
 
@@ -396,11 +384,15 @@ mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = Mainnet::new();
-        let req1 = keyspace.select::<f32>(&3);
+        let req1 = keyspace.select::<f32>(&3).consistency(Consistency::One).build();
         let worker1 = TestWorker {
             request: Box::new(req1.clone()),
         };
-        let req2 = keyspace.select::<i32>(&3);
+        let req2 = keyspace
+            .select::<i32>(&3)
+            .consistency(Consistency::One)
+            .page_size(500)
+            .build();
         let worker2 = TestWorker {
             request: Box::new(req1.clone()),
         };
