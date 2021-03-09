@@ -93,6 +93,12 @@ pub trait GetSelectRequest<S, K> {
     fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
+    fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Select<K, V>;
+    fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Select<K, V>;
 }
 
 impl<S: Keyspace, K> GetSelectRequest<S, K> for S {
@@ -105,6 +111,28 @@ impl<S: Keyspace, K> GetSelectRequest<S, K> for S {
             keyspace: self,
             key,
             builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
+    }
+    fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Select<K, V>,
+    {
+        SelectBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            builder: <QueryStatement as SelectRecommended<S, K, V>>::make(Query::new(), self),
+        }
+    }
+    fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Select<K, V>,
+    {
+        SelectBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            builder: <PreparedStatement as SelectRecommended<S, K, V>>::make(Query::new(), self),
         }
     }
 }
