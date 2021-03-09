@@ -177,6 +177,15 @@ impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryValues> {
     }
 }
 
+impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryBuild> {
+    /// Build the InsertRequest
+    pub fn build(self) -> InsertRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
+    }
+}
+
 /// Defines two helper methods to specify statement / id
 pub trait GetInsertStatement<S> {
     /// Specifies the Key and Value type for an insert statement

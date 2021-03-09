@@ -178,6 +178,15 @@ impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryValues> {
     }
 }
 
+impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryBuild> {
+    /// Build the UpdateRequest
+    pub fn build(self) -> UpdateRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
+    }
+}
+
 /// Defines two helper methods to specify statement / id
 pub trait GetUpdateStatement<S> {
     /// Specifies the Key and Value type for an update statement

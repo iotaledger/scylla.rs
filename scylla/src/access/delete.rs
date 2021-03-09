@@ -172,6 +172,15 @@ impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryValues> {
     }
 }
 
+impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryBuild> {
+    /// Build the DeleteRequest
+    pub fn build(self) -> DeleteRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
+    }
+}
+
 /// Defines two helper methods to specify statement / id
 pub trait GetDeleteStatement<S> {
     /// Specifies the Key and Value type for a delete statement
