@@ -115,7 +115,8 @@ impl QueryBuilder<QueryConsistency> {
     }
 }
 
-impl Values<QueryBuilder<QueryValues>> for QueryBuilder<QueryFlags> {
+impl Values for QueryBuilder<QueryFlags> {
+    type Return = QueryBuilder<QueryValues>;
     /// Set the first value to be null in the query frame.
     fn null_value(mut self) -> QueryBuilder<QueryValues> {
         // push SKIP_METADATA and VALUES query_flag to the buffer
@@ -252,7 +253,8 @@ impl QueryBuilder<QueryFlags> {
         Query(self.buffer)
     }
 }
-impl Values<QueryBuilder<QueryValues>> for QueryBuilder<QueryValues> {
+impl Values for QueryBuilder<QueryValues> {
+    type Return = QueryBuilder<QueryValues>;
     /// Set the next value in the query frame.
     fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
         // increase the value_count

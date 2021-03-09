@@ -55,11 +55,12 @@ pub trait Statements<T> {
     fn id(self, id: &[u8; 16]) -> T;
 }
 
-pub trait Values<T>: Sized {
+pub trait Values: Sized {
+    type Return: Values<Return = Self::Return>;
     /// Value of type V.
-    fn value<V: ColumnEncoder>(self, value: &V) -> T;
+    fn value<V: ColumnEncoder>(self, value: &V) -> Self::Return;
     /// Unset value.
-    fn unset_value(self) -> T;
+    fn unset_value(self) -> Self::Return;
     /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> T;
+    fn null_value(self) -> Self::Return;
 }

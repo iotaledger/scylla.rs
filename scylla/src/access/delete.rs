@@ -68,7 +68,7 @@ pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     }
 
     /// Bind the cql values to the builder
-    fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &K) -> R;
+    fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
 }
 
 pub trait DeleteRecommended<S: Delete<K, V>, K, V>: QueryOrPrepared {

@@ -244,7 +244,7 @@ mod tests {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32, value: &f32) -> R {
+        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
             builder.value(key).value(value).value(value)
         }
     }
@@ -254,7 +254,7 @@ mod tests {
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
-        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32, value: &f32) -> R {
+        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
             builder.value(value).value(value)
         }
     }
@@ -265,7 +265,7 @@ mod tests {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32) -> R {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
             builder.value(key).value(key)
         }
     }
@@ -276,7 +276,7 @@ mod tests {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32) -> R {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
             builder.value(key)
         }
     }

@@ -178,7 +178,8 @@ impl<Type: Copy + Into<u8>> Statements<BatchBuilder<Type, BatchValues>> for Batc
     }
 }
 
-impl<Type: Copy + Into<u8>> Values<BatchBuilder<Type, BatchValues>> for BatchBuilder<Type, BatchValues> {
+impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
+    type Return = BatchBuilder<Type, BatchValues>;
     /// Set the value in the Batch frame.
     fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
         value.encode(&mut self.buffer);

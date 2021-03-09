@@ -70,7 +70,7 @@ pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
         md5::compute(self.update_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &K, value: &V) -> R;
+    fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
 }
 
 pub trait UpdateRecommended<S: Update<K, V>, K, V>: QueryOrPrepared {
