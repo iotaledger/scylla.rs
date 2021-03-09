@@ -239,122 +239,48 @@ mod tests {
         }
     }
     impl Insert<u32, f32> for Mainnet {
+        type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn get_request(&self, key: &u32, value: &f32) -> InsertRequest<Self, u32, f32> {
-            let query = Query::new()
-                .statement(&self.insert_statement::<u32, f32>())
-                .consistency(scylla_cql::Consistency::One)
-                .value(key)
-                .value(value)
-                .value(value)
-                .build();
-            let token = Self::token(key);
-            self.create_request(query, token)
-        }
-    }
-
-    impl InsertBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn default_type() -> BatchQueryType {
-            BatchQueryType::Prepared
-        }
-        fn push_insert(
-            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
-            key: &u32,
-            value: &f32,
-        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32, value: &f32) -> R {
             builder.value(key).value(value).value(value)
         }
     }
 
     impl Update<u32, f32> for Mainnet {
+        type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
-
-        fn get_request(&self, key: &u32, value: &f32) -> UpdateRequest<Self, u32, f32> {
-            let query = Query::new()
-                .statement(&self.update_statement::<u32, f32>())
-                .consistency(scylla_cql::Consistency::One)
-                .value(value)
-                .value(value)
-                .value(key)
-                .build();
-            let token = rand::random::<i64>();
-            self.create_request(query, token)
-        }
-    }
-
-    impl UpdateBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn default_type() -> BatchQueryType {
-            BatchQueryType::Query
-        }
-        fn push_update(
-            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
-            key: &u32,
-            value: &f32,
-        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
-            builder.value(value).value(value).value(key)
+        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32, value: &f32) -> R {
+            builder.value(value).value(value)
         }
     }
 
     impl Delete<u32, f32> for Mainnet {
+        type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, f32> {
-            let query = Query::new()
-                .statement(&self.delete_statement::<u32, f32>())
-                .consistency(scylla_cql::Consistency::One)
-                .value(key)
-                .build();
-            let token = rand::random::<i64>();
-            self.create_request(query, token)
+        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32) -> R {
+            builder.value(key).value(key)
         }
     }
 
     impl Delete<u32, i32> for Mainnet {
+        type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn get_request(&self, key: &u32) -> DeleteRequest<Self, u32, i32> {
-            let prepared_cql = Execute::new()
-                .id(&self.delete_id::<u32, i32>())
-                .consistency(scylla_cql::Consistency::One)
-                .value(key)
-                .build();
-            let token = rand::random::<i64>();
-            self.create_request(prepared_cql, token)
-        }
-    }
-
-    impl DeleteBatch<u32, f32, BatchTypeLogged> for Mainnet {
-        fn default_type() -> BatchQueryType {
-            BatchQueryType::Prepared
-        }
-        fn push_delete(
-            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
-            key: &u32,
-        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
+        fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &u32) -> R {
             builder.value(key)
         }
     }
 
-    impl DeleteBatch<u32, i32, BatchTypeLogged> for Mainnet {
-        fn default_type() -> BatchQueryType {
-            BatchQueryType::Query
-        }
-        fn push_delete(
-            builder: scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues>,
-            key: &u32,
-        ) -> scylla_cql::BatchBuilder<BatchTypeLogged, scylla_cql::BatchValues> {
-            builder.value(key)
-        }
-    }
     impl RowsDecoder<u32, f32> for Mainnet {
         type Row = f32;
         fn try_decode(decoder: Decoder) -> Result<Option<f32>, CqlError> {
@@ -406,7 +332,6 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
     struct BatchWorker<S> {
         request: BatchRequest<S>,
     }
@@ -490,7 +415,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = Mainnet { name: "mainnet".into() };
-        let req = keyspace.insert(&3, &8.0);
+        let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build();
         let worker = TestWorker {
             request: Box::new(req.clone()),
         };
@@ -501,7 +426,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = Mainnet { name: "mainnet".into() };
-        let req = keyspace.update(&3, &8.0);
+        let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build();
         let worker = TestWorker {
             request: Box::new(req.clone()),
         };
@@ -512,7 +437,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_delete() {
         let keyspace = Mainnet { name: "mainnet".into() };
-        let req = keyspace.delete::<f32>(&3);
+        let req = keyspace.delete::<f32>(&3).consistency(Consistency::One).build();
         let worker = TestWorker {
             request: Box::new(req.clone()),
         };

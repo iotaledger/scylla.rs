@@ -8,8 +8,10 @@ use super::{
     encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
     opcode::QUERY,
     queryflags::*,
+    QueryOrPrepared, Statements, Values,
 };
 use crate::compression::{Compression, MyCompression};
+use std::convert::TryInto;
 
 /// Blanket cql frame header for query frame.
 const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
@@ -21,6 +23,7 @@ pub struct QueryBuilder<Stage> {
 
 pub struct QueryHeader;
 pub struct QueryStatement;
+pub struct PreparedStatement;
 pub struct QueryConsistency;
 pub struct QueryFlags {
     index: usize,
@@ -59,11 +62,38 @@ impl QueryBuilder<QueryHeader> {
     }
 }
 
-impl QueryBuilder<QueryStatement> {
+impl QueryOrPrepared for QueryStatement {
+    fn encode_statement<R, T: Statements<R>>(query_or_batch: T, statement: &[u8]) -> R {
+        let statement = unsafe { std::str::from_utf8_unchecked(&statement) };
+        query_or_batch.statement(statement)
+    }
+    fn is_prepared() -> bool {
+        false
+    }
+}
+impl QueryOrPrepared for PreparedStatement {
+    fn encode_statement<R, T: Statements<R>>(query_or_batch: T, statement: &[u8]) -> R {
+        query_or_batch.id(statement.try_into().unwrap())
+    }
+    fn is_prepared() -> bool {
+        true
+    }
+}
+impl<T: QueryOrPrepared> Statements<QueryBuilder<QueryConsistency>> for QueryBuilder<T> {
     /// Set the statement in the query frame.
-    pub fn statement(mut self, statement: &str) -> QueryBuilder<QueryConsistency> {
+    fn statement(mut self, statement: &str) -> QueryBuilder<QueryConsistency> {
         self.buffer.extend(&i32::to_be_bytes(statement.len() as i32));
-        self.buffer.extend(statement.bytes());
+        self.buffer.extend(statement.as_bytes());
+        QueryBuilder::<QueryConsistency> {
+            buffer: self.buffer,
+            stage: QueryConsistency,
+        }
+    }
+    /// Set the id in the query frame.
+    /// Note: this will make the Query frame identical to Execute frame.
+    fn id(mut self, id: &[u8; 16]) -> QueryBuilder<QueryConsistency> {
+        self.buffer.extend(&super::MD5_BE_LENGTH);
+        self.buffer.extend(id);
         QueryBuilder::<QueryConsistency> {
             buffer: self.buffer,
             stage: QueryConsistency,
@@ -85,9 +115,9 @@ impl QueryBuilder<QueryConsistency> {
     }
 }
 
-impl QueryBuilder<QueryFlags> {
+impl Values<QueryBuilder<QueryValues>> for QueryBuilder<QueryFlags> {
     /// Set the first value to be null in the query frame.
-    pub fn null_value(mut self) -> QueryBuilder<QueryValues> {
+    fn null_value(mut self) -> QueryBuilder<QueryValues> {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -105,8 +135,27 @@ impl QueryBuilder<QueryFlags> {
             stage: query_values,
         }
     }
+    /// Set the value to be unset in the query frame.
+    fn unset_value(mut self) -> QueryBuilder<QueryValues> {
+        // push SKIP_METADATA and VALUES query_flag to the buffer
+        self.buffer.push(SKIP_METADATA | VALUES);
+        let value_count = 1;
+        // push value_count
+        self.buffer.extend(&u16::to_be_bytes(value_count));
+        // apply null value
+        self.buffer.extend(&BE_UNSET_BYTES_LEN);
+        // create query_values
+        let query_values = QueryValues {
+            query_flags: self.stage,
+            value_count,
+        };
+        QueryBuilder::<QueryValues> {
+            buffer: self.buffer,
+            stage: query_values,
+        }
+    }
     /// Set the first value in the query frame.
-    pub fn value<V: ColumnEncoder>(mut self, value: &V) -> QueryBuilder<QueryValues> {
+    fn value<V: ColumnEncoder>(mut self, value: &V) -> QueryBuilder<QueryValues> {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -124,6 +173,8 @@ impl QueryBuilder<QueryFlags> {
             stage: query_values,
         }
     }
+}
+impl QueryBuilder<QueryFlags> {
     /// Set the page size in the query frame, without any value.
     pub fn page_size(mut self, page_size: i32) -> QueryBuilder<QueryPagingState> {
         // push SKIP_METADATA and page_size query_flag to the buffer
@@ -201,10 +252,9 @@ impl QueryBuilder<QueryFlags> {
         Query(self.buffer)
     }
 }
-
-impl QueryBuilder<QueryValues> {
+impl Values<QueryBuilder<QueryValues>> for QueryBuilder<QueryValues> {
     /// Set the next value in the query frame.
-    pub fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
+    fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -212,7 +262,7 @@ impl QueryBuilder<QueryValues> {
         self
     }
     /// Set the value to be unset in the query frame.
-    pub fn unset_value(mut self) -> Self {
+    fn unset_value(mut self) -> Self {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -220,14 +270,15 @@ impl QueryBuilder<QueryValues> {
         self
     }
     /// Set the value to be null in the query frame.
-    pub fn null_value(mut self) -> Self {
+    fn null_value(mut self) -> Self {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
         self.buffer.extend(&BE_NULL_BYTES_LEN);
         self
     }
-
+}
+impl QueryBuilder<QueryValues> {
     /// Set the page size in the query frame, with values.
     pub fn page_size(mut self, page_size: i32) -> QueryBuilder<QueryPagingState> {
         // add page_size query_flag to the buffer

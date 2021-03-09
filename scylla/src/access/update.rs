@@ -58,6 +58,9 @@ use super::*;
 ///     .send_global(worker); // Send the request to the Ring
 /// ```
 pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
+    /// Set the query type; `QueryStatement` or `PreparedStatement`
+    type QueryOrPrepared: UpdateRecommended<Self, K, V>;
+
     /// Create your update statement here.
     fn statement(&self) -> Cow<'static, str>;
     /// Get the MD5 hash of this implementation's statement
@@ -66,25 +69,112 @@ pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     fn id(&self) -> [u8; 16] {
         md5::compute(self.update_statement().as_bytes()).into()
     }
-    /// Construct your update query here and use it to create an
-    /// `UpdateRequest`.
-    fn get_request(&self, key: &K, value: &V) -> UpdateRequest<Self, K, V>;
+    /// Bind the cql values to the builder
+    fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &K, value: &V) -> R;
+}
+
+pub trait UpdateRecommended<S: Update<K, V>, K, V>: QueryOrPrepared {
+    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R;
+}
+
+impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for QueryStatement {
+    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R {
+        Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
+    }
+}
+
+impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for PreparedStatement {
+    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R {
+        Self::encode_statement(query_or_batch, &keyspace.id())
+    }
 }
 
 /// Wrapper for the `Update` trait which provides the `update` function
 pub trait GetUpdateRequest<S, K, V> {
-    /// Calls the appropriate `Update` implementation for this Key/Value pair
-    fn update(&self, key: &K, value: &V) -> UpdateRequest<S, K, V>
+    /// Calls the appropriate `Insert` implementation for this Key/Value pair
+    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Update<K, V>;
+    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Update<K, V>;
+    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
 }
 
-impl<S: Keyspace, K, V> GetUpdateRequest<S, K, V> for S {
-    fn update(&self, key: &K, value: &V) -> UpdateRequest<S, K, V>
+impl<S: Update<K, V>, K, V> GetUpdateRequest<S, K, V> for S {
+    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>,
     {
-        S::get_request(self, key, value)
+        UpdateBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            value,
+            builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
+    }
+    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Update<K, V>,
+    {
+        UpdateBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            value,
+            builder: <QueryStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+        }
+    }
+    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Update<K, V>,
+    {
+        UpdateBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            value,
+            builder: <PreparedStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+        }
+    }
+}
+pub struct UpdateBuilder<'a, S, K, V, Stage> {
+    _marker: PhantomData<(&'a S, &'a K, &'a V)>,
+    keyspace: &'a S,
+    key: &'a K,
+    value: &'a V,
+    builder: QueryBuilder<Stage>,
+}
+impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryConsistency> {
+    pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, QueryValues> {
+        UpdateBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            value: self.value,
+            builder: S::bind_values(self.builder.consistency(consistency), self.key, self.value),
+        }
+    }
+}
+
+impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryValues> {
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild> {
+        UpdateBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            value: self.value,
+            builder: self.builder.timestamp(timestamp),
+        }
+    }
+    /// Build the UpdateRequest
+    pub fn build(self) -> UpdateRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
     }
 }
 

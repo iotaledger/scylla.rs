@@ -9,7 +9,6 @@ use std::{
     convert::TryInto,
     hash::Hash,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    str,
 };
 
 /// The column count type.
@@ -79,10 +78,10 @@ impl Metadata {
 pub trait Rows: Iterator {
     /// create new rows decoder struct
     fn new(decoder: super::decoder::Decoder) -> Self;
+    /// Take the paging_state from the Rows result
     fn take_paging_state(&mut self) -> Option<Vec<u8>>;
 }
 
-// TODO impl columns specs for std types
 pub trait Row: Sized {
     /// Define how to decode the row
     fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
@@ -296,7 +295,7 @@ impl Row for String {
     }
 }
 
-impl Row for std::net::IpAddr {
+impl Row for IpAddr {
     fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
     where
         Self: Sized,

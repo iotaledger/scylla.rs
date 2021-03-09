@@ -13,6 +13,7 @@ use crate::frame::{
     rows::Rows,
     startup::Startup,
     supported::Supported,
+    Statements,
 };
 
 use std::{

@@ -8,7 +8,7 @@ use super::{
     consistency::Consistency,
     encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
     opcode::BATCH,
-    MD5_BE_LENGTH,
+    Statements, Values, MD5_BE_LENGTH,
 };
 use crate::compression::{Compression, MyCompression};
 
@@ -97,43 +97,6 @@ impl BatchBuilder<BatchTypeUnset, BatchHeader> {
     }
 }
 
-#[repr(u8)]
-pub enum BatchQueryType {
-    Query = 0,
-    Prepared = 1,
-}
-impl Into<u8> for BatchQueryType {
-    fn into(self) -> u8 {
-        unsafe { std::mem::transmute::<BatchQueryType, u8>(self) }
-    }
-}
-
-pub trait QueryOrPrepared {
-    type BatchType: Copy + Into<u8>;
-    fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues>;
-    fn prepared(self, id: &[u8; 16]) -> BatchBuilder<Self::BatchType, BatchValues>;
-}
-
-impl<Type: Copy + Into<u8>> QueryOrPrepared for BatchBuilder<Type, BatchStatementOrId> {
-    type BatchType = Type;
-    fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues> {
-        self.statement(statement)
-    }
-    fn prepared(self, id: &[u8; 16]) -> BatchBuilder<Self::BatchType, BatchValues> {
-        self.id(id)
-    }
-}
-
-impl<Type: Copy + Into<u8>> QueryOrPrepared for BatchBuilder<Type, BatchValues> {
-    type BatchType = Type;
-    fn query(self, statement: &str) -> BatchBuilder<Self::BatchType, BatchValues> {
-        self.statement(statement)
-    }
-    fn prepared(self, id: &[u8; 16]) -> BatchBuilder<Self::BatchType, BatchValues> {
-        self.id(id)
-    }
-}
-
 impl BatchBuilder<BatchTypeUnset, BatchType> {
     /// Set the batch type in the Batch frame.
     pub fn batch_type<Type: Copy + Into<u8>>(mut self, batch_type: Type) -> BatchBuilder<Type, BatchStatementOrId> {
@@ -178,9 +141,9 @@ impl BatchBuilder<BatchTypeUnset, BatchType> {
     }
 }
 
-impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchStatementOrId> {
+impl<Type: Copy + Into<u8>> Statements<BatchBuilder<Type, BatchValues>> for BatchBuilder<Type, BatchStatementOrId> {
     /// Set the statement in the Batch frame.
-    pub fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
+    fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
         // normal query
         self.buffer.push(0);
         self.buffer.extend(&i32::to_be_bytes(statement.len() as i32));
@@ -197,7 +160,7 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchStatementOrId> {
         }
     }
     /// Set the id in the Batch frame.
-    pub fn id(mut self, id: &[u8; 16]) -> BatchBuilder<Type, BatchValues> {
+    fn id(mut self, id: &[u8; 16]) -> BatchBuilder<Type, BatchValues> {
         // prepared query
         self.buffer.push(1);
         self.buffer.extend(&MD5_BE_LENGTH);
@@ -215,27 +178,30 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchStatementOrId> {
     }
 }
 
-impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchValues> {
+impl<Type: Copy + Into<u8>> Values<BatchBuilder<Type, BatchValues>> for BatchBuilder<Type, BatchValues> {
     /// Set the value in the Batch frame.
-    pub fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
+    fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
         value.encode(&mut self.buffer);
         self.stage.value_count += 1;
         self
     }
     /// Set the value to be unset in the Batch frame.
-    pub fn unset_value(mut self) -> Self {
+    fn unset_value(mut self) -> Self {
         self.buffer.extend(&BE_UNSET_BYTES_LEN);
         self.stage.value_count += 1;
         self
     }
     /// Set the value to be null in the Batch frame.
-    pub fn null_value(mut self) -> Self {
+    fn null_value(mut self) -> Self {
         self.buffer.extend(&BE_NULL_BYTES_LEN);
         self.stage.value_count += 1;
         self
     }
+}
+
+impl<Type: Copy + Into<u8>> Statements<Self> for BatchBuilder<Type, BatchValues> {
     /// Set the statement in the Batch frame.
-    pub fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
+    fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
         // adjust value_count for prev query(if any)
         self.buffer[self.stage.index..(self.stage.index + 2)]
             .copy_from_slice(&u16::to_be_bytes(self.stage.value_count));
@@ -255,7 +221,7 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchValues> {
         }
     }
     /// Set the id in the Batch frame.
-    pub fn id(mut self, id: &[u8; 16]) -> BatchBuilder<Type, BatchValues> {
+    fn id(mut self, id: &[u8; 16]) -> BatchBuilder<Type, BatchValues> {
         // adjust value_count for prev query
         self.buffer[self.stage.index..(self.stage.index + 2)]
             .copy_from_slice(&u16::to_be_bytes(self.stage.value_count));
@@ -274,6 +240,8 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchValues> {
             stage: BatchValues { value_count: 0, index },
         }
     }
+}
+impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchValues> {
     /// Set the consistency of the Batch frame.
     pub fn consistency(mut self, consistency: Consistency) -> BatchBuilder<Type, BatchFlags> {
         // adjust value_count for prev query

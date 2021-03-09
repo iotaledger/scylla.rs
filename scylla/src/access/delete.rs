@@ -54,6 +54,9 @@ use super::*;
 ///     .send_local(worker); // Send the request to the Ring
 /// ```
 pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
+    /// Set the query type; `QueryStatement` or `PreparedStatement`
+    type QueryOrPrepared: DeleteRecommended<Self, K, V>;
+
     /// Create your delete statement here.
     fn statement(&self) -> Cow<'static, str>;
 
@@ -64,26 +67,108 @@ pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
         md5::compute(self.delete_statement().as_bytes()).into()
     }
 
-    /// Construct your delete query here and use it to create a
-    /// `DeleteRequest`.
-    fn get_request(&self, key: &K) -> DeleteRequest<Self, K, V>;
+    /// Bind the cql values to the builder
+    fn bind_values<R: Values<R>, T: Values<R>>(builder: T, key: &K) -> R;
+}
+
+pub trait DeleteRecommended<S: Delete<K, V>, K, V>: QueryOrPrepared {
+    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R;
+}
+
+impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for QueryStatement {
+    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R {
+        Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
+    }
+}
+
+impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for PreparedStatement {
+    fn make<R, T: Statements<R>>(query_or_batch: T, keyspace: &S) -> R {
+        Self::encode_statement(query_or_batch, &keyspace.id())
+    }
 }
 
 /// Defines a helper method to specify the Value type
 /// expected by the `Delete` trait.
 pub trait GetDeleteRequest<S, K> {
     /// Specifies the Value type for an upcoming delete request
-    fn delete<V>(&self, key: &K) -> DeleteRequest<S, K, V>
+    fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Delete<K, V>;
+    fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Delete<K, V>;
+    fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
 }
 
 impl<S: Keyspace, K> GetDeleteRequest<S, K> for S {
-    fn delete<V>(&self, key: &K) -> DeleteRequest<S, K, V>
+    fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>,
     {
-        S::get_request(self, key)
+        DeleteBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
+    }
+    fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Delete<K, V>,
+    {
+        DeleteBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            builder: <QueryStatement as DeleteRecommended<S, K, V>>::make(Query::new(), self),
+        }
+    }
+    fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
+    where
+        S: Delete<K, V>,
+    {
+        DeleteBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            key,
+            builder: <PreparedStatement as DeleteRecommended<S, K, V>>::make(Query::new(), self),
+        }
+    }
+}
+pub struct DeleteBuilder<'a, S, K, V, Stage> {
+    _marker: PhantomData<(&'a S, &'a K, &'a V)>,
+    keyspace: &'a S,
+    key: &'a K,
+    builder: QueryBuilder<Stage>,
+}
+
+impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryConsistency> {
+    pub fn consistency(self, consistency: Consistency) -> DeleteBuilder<'a, S, K, V, QueryValues> {
+        DeleteBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: S::bind_values(self.builder.consistency(consistency), self.key),
+        }
+    }
+}
+
+impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryValues> {
+    pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, QueryBuild> {
+        DeleteBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+        }
+    }
+    /// Build the DeleteRequest
+    pub fn build(self) -> DeleteRequest<S, K, V> {
+        let query = self.builder.build();
+        // create the request
+        self.keyspace.create_request(query, S::token(self.key))
     }
 }
 

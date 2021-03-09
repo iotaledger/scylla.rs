@@ -35,9 +35,31 @@ pub use encoder::ColumnEncoder;
 pub use error::{CqlError, ErrorCodes};
 pub use execute::Execute;
 pub use prepare::Prepare;
-pub use query::Query;
+pub use query::{
+    PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency, QueryFlags, QueryStatement, QueryValues,
+};
 pub use rows::*;
 pub use std::convert::TryInto;
 
 /// Big Endian 16-length, used for MD5 ID
 const MD5_BE_LENGTH: [u8; 2] = [0, 16];
+
+/// Statement or ID
+pub trait QueryOrPrepared: Sized {
+    fn encode_statement<R, T: Statements<R>>(query_or_batch: T, statement: &[u8]) -> R;
+    fn is_prepared() -> bool;
+}
+
+pub trait Statements<T> {
+    fn statement(self, statement: &str) -> T;
+    fn id(self, id: &[u8; 16]) -> T;
+}
+
+pub trait Values<T>: Sized {
+    /// Value of type V.
+    fn value<V: ColumnEncoder>(self, value: &V) -> T;
+    /// Unset value.
+    fn unset_value(self) -> T;
+    /// Set Null value, note: for write queries this will create tombstone for V;
+    fn null_value(self) -> T;
+}
