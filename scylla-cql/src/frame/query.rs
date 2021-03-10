@@ -93,6 +93,8 @@ impl<T: QueryOrPrepared> Statements for QueryBuilder<T> {
     /// Set the id in the query frame.
     /// Note: this will make the Query frame identical to Execute frame.
     fn id(mut self, id: &[u8; 16]) -> Self::Return {
+        // Overwrite opcode
+        self.buffer[4] = super::opcode::EXECUTE;
         self.buffer.extend(&super::MD5_BE_LENGTH);
         self.buffer.extend(id);
         QueryBuilder::<QueryConsistency> {
