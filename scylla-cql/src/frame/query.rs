@@ -6,7 +6,7 @@
 use super::{
     consistency::Consistency,
     encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
-    opcode::QUERY,
+    opcode::{EXECUTE, QUERY},
     queryflags::*,
     QueryOrPrepared, Statements, Values,
 };
@@ -94,7 +94,7 @@ impl<T: QueryOrPrepared> Statements for QueryBuilder<T> {
     /// Note: this will make the Query frame identical to Execute frame.
     fn id(mut self, id: &[u8; 16]) -> Self::Return {
         // Overwrite opcode
-        self.buffer[4] = super::opcode::EXECUTE;
+        self.buffer[4] = EXECUTE;
         self.buffer.extend(&super::MD5_BE_LENGTH);
         self.buffer.extend(id);
         QueryBuilder::<QueryConsistency> {
