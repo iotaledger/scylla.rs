@@ -92,6 +92,22 @@ pub trait Row: Sized {
     where
         Self: Sized;
 }
+/// Row struct
+pub struct Record<T> {
+    inner: T,
+}
+
+impl<T> Record<T> {
+    /// Create new Record
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+    /// Convert into inner T type
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
 pub trait ColumnValue {
     /// Decode the column value of C type;
     fn column_value<C: ColumnDecoder>(&mut self) -> C;
