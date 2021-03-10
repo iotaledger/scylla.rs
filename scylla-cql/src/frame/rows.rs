@@ -83,6 +83,10 @@ pub trait Rows: Iterator {
 }
 
 pub trait Row: Sized {
+    /// Get the rows iterator
+    fn rows_iter(decoder: super::Decoder) -> super::Iter<Self> {
+        super::Iter::new(decoder)
+    }
     /// Define how to decode the row
     fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
     where

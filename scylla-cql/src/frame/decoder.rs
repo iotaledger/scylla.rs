@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     compression::{Compression, MyCompression},
-    frame::rows::Rows,
+    frame::rows::{Row, Rows},
 };
 use std::{
     collections::HashMap,
@@ -27,9 +27,6 @@ pub trait RowsDecoder<K, V> {
     /// Decode the provided Decoder with deterministic Rows result
     fn decode(decoder: Decoder) -> Option<V> {
         Self::try_decode(decoder).unwrap()
-    }
-    fn rows_iter(decoder: Decoder) -> super::Iter<Self::Row> {
-        super::Iter::<Self::Row>::new(decoder)
     }
 }
 
