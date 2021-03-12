@@ -69,6 +69,8 @@ pub trait Request: Send + std::fmt::Debug {
 
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
+    /// Into payload
+    fn into_payload(self) -> Vec<u8>;
 }
 
 /// A marker struct which holds types used for a query

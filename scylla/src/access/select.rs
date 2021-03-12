@@ -311,6 +311,9 @@ where
     fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
+    fn into_payload(self) -> Vec<u8> {
+        self.inner
+    }
 }
 
 impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
