@@ -240,8 +240,8 @@ impl<K, V, S: Update<K, V> + Clone> CreateRequest<UpdateRequest<S, K, V>> for S 
 impl<S, K, V> Request for UpdateRequest<S, K, V>
 where
     S: Update<K, V> + std::fmt::Debug + Clone,
-    K: Send + std::fmt::Debug + Clone,
-    V: Send + std::fmt::Debug + Clone,
+    K: Send,
+    V: Send,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.update_statement::<K, V>()
