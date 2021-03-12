@@ -63,7 +63,7 @@ pub trait CreateRequest<T>: Keyspace {
 }
 
 /// Unifying trait for requests which defines shared functionality
-pub trait Request: Send + std::fmt::Debug {
+pub trait Request: Send {
     /// Get the statement that was used to create this request
     fn statement(&self) -> Cow<'static, str>;
 
@@ -287,7 +287,6 @@ mod tests {
 
     impl VoidDecoder for Mainnet {}
 
-    #[derive(Debug)]
     struct TestWorker {
         request: Box<dyn Request>,
     }
