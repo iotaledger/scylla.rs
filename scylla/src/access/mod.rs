@@ -184,23 +184,25 @@ mod tests {
     use super::*;
 
     #[derive(Default, Clone, Debug)]
-    struct Mainnet {
+    struct MyKeyspace {
         pub name: Cow<'static, str>,
     }
 
-    impl Mainnet {
+    impl MyKeyspace {
         pub fn new() -> Self {
-            Self { name: "mainnet".into() }
+            Self {
+                name: "my_keyspace".into(),
+            }
         }
     }
 
-    impl Keyspace for Mainnet {
+    impl Keyspace for MyKeyspace {
         fn name(&self) -> &Cow<'static, str> {
             &self.name
         }
     }
 
-    impl Select<u32, f32> for Mainnet {
+    impl Select<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             "SELECT col1 FROM keyspace.table WHERE key = ?".into()
@@ -210,7 +212,7 @@ mod tests {
         }
     }
 
-    impl Select<u32, i32> for Mainnet {
+    impl Select<u32, i32> for MyKeyspace {
         type QueryOrPrepared = QueryStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
@@ -221,12 +223,12 @@ mod tests {
         }
     }
 
-    impl ComputeToken<u32> for Mainnet {
+    impl ComputeToken<u32> for MyKeyspace {
         fn token(_key: &u32) -> i64 {
             rand::random()
         }
     }
-    impl Insert<u32, f32> for Mainnet {
+    impl Insert<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
@@ -237,7 +239,7 @@ mod tests {
         }
     }
 
-    impl Update<u32, f32> for Mainnet {
+    impl Update<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
@@ -247,7 +249,7 @@ mod tests {
         }
     }
 
-    impl Delete<u32, f32> for Mainnet {
+    impl Delete<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             "DELETE FROM keyspace.table WHERE key = ?".into()
@@ -258,7 +260,7 @@ mod tests {
         }
     }
 
-    impl Delete<u32, i32> for Mainnet {
+    impl Delete<u32, i32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
@@ -269,21 +271,21 @@ mod tests {
         }
     }
 
-    impl RowsDecoder<u32, f32> for Mainnet {
+    impl RowsDecoder<u32, f32> for MyKeyspace {
         type Row = f32;
         fn try_decode(decoder: Decoder) -> Result<Option<f32>, CqlError> {
             todo!()
         }
     }
 
-    impl RowsDecoder<u32, i32> for Mainnet {
+    impl RowsDecoder<u32, i32> for MyKeyspace {
         type Row = i32;
         fn try_decode(decoder: Decoder) -> Result<Option<i32>, CqlError> {
             todo!()
         }
     }
 
-    impl VoidDecoder for Mainnet {}
+    impl VoidDecoder for MyKeyspace {}
 
     #[derive(Debug)]
     struct TestWorker {
@@ -383,8 +385,9 @@ mod tests {
 
     #[allow(dead_code)]
     fn test_select() {
-        let keyspace = Mainnet::new();
+        let keyspace = MyKeyspace::new();
         let req1 = keyspace.select::<f32>(&3).consistency(Consistency::One).build();
+        assert_eq!(req1.payload().len(), 100);
         let worker1 = TestWorker {
             request: Box::new(req1.clone()),
         };
@@ -406,7 +409,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn test_insert() {
-        let keyspace = Mainnet { name: "mainnet".into() };
+        let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build();
         let worker = TestWorker {
             request: Box::new(req.clone()),
@@ -417,7 +420,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn test_update() {
-        let keyspace = Mainnet { name: "mainnet".into() };
+        let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build();
         let worker = TestWorker {
             request: Box::new(req.clone()),
@@ -428,7 +431,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn test_delete() {
-        let keyspace = Mainnet { name: "mainnet".into() };
+        let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.delete::<f32>(&3).consistency(Consistency::One).build();
         let worker = TestWorker {
             request: Box::new(req.clone()),
@@ -440,7 +443,7 @@ mod tests {
     #[test]
     #[allow(dead_code)]
     fn test_batch() {
-        let keyspace = Mainnet::new();
+        let keyspace = MyKeyspace::new();
         let req = keyspace
             .batch()
             .logged() // or .batch_type(BatchTypeLogged)
