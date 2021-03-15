@@ -25,6 +25,9 @@ where
             value,
         }
     }
+    pub fn boxed(handle: H, keyspace: S, key: K, value: V) -> Box<Self> {
+        Box::new(Self::new(handle, keyspace, key, value))
+    }
 }
 
 impl<H, S, K, V> Worker for InsertWorker<H, S, K, V>

@@ -31,6 +31,9 @@ where
             _marker,
         }
     }
+    pub fn boxed(handle: H, keyspace: S, key: K, _marker: std::marker::PhantomData<V>) -> Box<Self> {
+        Box::new(Self::new(handle, keyspace, key, _marker))
+    }
 }
 
 impl<H, S, K, V> Worker for SelectWorker<H, S, K, V>
@@ -67,5 +70,36 @@ where
             }
         }
         H::handle_error(self, error);
+    }
+}
+
+impl<S, K, V> HandleResponse<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>
+    for UnboundedSender<Result<Decoder, WorkerError>>
+where
+    S: 'static + Send + Select<K, V>,
+    K: 'static + Send,
+    V: 'static + Send,
+{
+    type Response = Decoder;
+    fn handle_response(
+        worker: Box<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>,
+        response: Self::Response,
+    ) {
+        let _ = worker.handle.send(Ok(response));
+    }
+}
+
+impl<S, K, V> HandleError<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>
+    for UnboundedSender<Result<Decoder, WorkerError>>
+where
+    S: 'static + Send + Select<K, V>,
+    K: 'static + Send,
+    V: 'static + Send,
+{
+    fn handle_error(
+        worker: Box<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>,
+        worker_error: WorkerError,
+    ) {
+        let _ = worker.handle.send(Err(worker_error));
     }
 }

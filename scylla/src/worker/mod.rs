@@ -6,6 +6,7 @@ use crate::{access::*, stage::ReporterHandle};
 use log::*;
 use scylla_cql::CqlError;
 use std::io::Error;
+use tokio::sync::mpsc::UnboundedSender;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send {
