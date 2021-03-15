@@ -249,9 +249,6 @@ where
     fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
-    fn into_payload(self) -> Vec<u8> {
-        self.inner
-    }
 }
 
 impl<S: Insert<K, V>, K, V> InsertRequest<S, K, V> {
@@ -275,5 +272,9 @@ impl<S: Insert<K, V>, K, V> InsertRequest<S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::insert()
+    }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }

@@ -311,9 +311,6 @@ where
     fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
-    fn into_payload(self) -> Vec<u8> {
-        self.inner
-    }
 }
 
 impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
@@ -342,5 +339,9 @@ impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::select()
+    }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }

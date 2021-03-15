@@ -244,9 +244,6 @@ where
     fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
-    fn into_payload(self) -> Vec<u8> {
-        self.inner
-    }
 }
 
 impl<S: Delete<K, V>, K, V> DeleteRequest<S, K, V> {
@@ -270,5 +267,9 @@ impl<S: Delete<K, V>, K, V> DeleteRequest<S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::delete()
+    }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }

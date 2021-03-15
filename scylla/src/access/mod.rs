@@ -72,8 +72,6 @@ pub trait Request: Send {
 
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
-    /// Into payload
-    fn into_payload(self) -> Vec<u8>;
 }
 
 /// A marker struct which holds types used for a query
@@ -185,6 +183,8 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 mod tests {
+
+    use crate::worker::InsertWorker;
 
     use super::*;
 
@@ -415,11 +415,9 @@ mod tests {
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build();
-        let worker = TestWorker {
-            request: Box::new(req.clone()),
-        };
+        let worker = InsertWorker::boxed(keyspace, 3, 8.0);
 
-        let res = req.send_local(Box::new(worker));
+        let res = req.send_local(worker);
     }
 
     #[allow(dead_code)]

@@ -250,9 +250,6 @@ where
     fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
-    fn into_payload(self) -> Vec<u8> {
-        self.inner
-    }
 }
 
 impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
@@ -276,5 +273,9 @@ impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
             self.keyspace.name().clone().into_owned(),
         );
         DecodeResult::update()
+    }
+
+    pub fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }
