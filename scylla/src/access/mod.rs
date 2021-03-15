@@ -23,7 +23,10 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-pub use super::{Worker, WorkerError};
+pub use super::{
+    worker::{InsertWorker, PrepareWorker, SelectWorker, ValueWorker},
+    Worker, WorkerError,
+};
 pub use batch::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
 pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};

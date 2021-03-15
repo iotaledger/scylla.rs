@@ -74,5 +74,7 @@ pub mod prepare;
 pub mod select;
 pub mod value;
 
+pub use insert::InsertWorker;
 pub use prepare::PrepareWorker;
 pub use select::SelectWorker;
+pub use value::ValueWorker;
