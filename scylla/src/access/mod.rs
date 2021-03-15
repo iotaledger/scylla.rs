@@ -23,7 +23,10 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-pub use super::{Worker, WorkerError};
+pub use super::{
+    worker::{InsertWorker, PrepareWorker, SelectWorker, ValueWorker},
+    Worker, WorkerError,
+};
 pub use batch::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
 pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
@@ -63,12 +66,14 @@ pub trait CreateRequest<T>: Keyspace {
 }
 
 /// Unifying trait for requests which defines shared functionality
-pub trait Request: Send + std::fmt::Debug {
+pub trait Request: Send {
     /// Get the statement that was used to create this request
     fn statement(&self) -> Cow<'static, str>;
 
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
+    /// Into payload
+    fn into_payload(self) -> Vec<u8>;
 }
 
 /// A marker struct which holds types used for a query
@@ -287,7 +292,6 @@ mod tests {
 
     impl VoidDecoder for MyKeyspace {}
 
-    #[derive(Debug)]
     struct TestWorker {
         request: Box<dyn Request>,
     }

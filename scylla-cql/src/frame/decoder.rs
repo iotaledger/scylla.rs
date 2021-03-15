@@ -9,12 +9,13 @@ use super::{
 };
 use crate::{
     compression::{Compression, MyCompression},
-    frame::rows::Rows,
+    frame::rows::{Row, Rows},
 };
 use std::{
     collections::HashMap,
     convert::TryInto,
     hash::Hash,
+    io::Cursor,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str,
 };
@@ -26,9 +27,6 @@ pub trait RowsDecoder<K, V> {
     /// Decode the provided Decoder with deterministic Rows result
     fn decode(decoder: Decoder) -> Option<V> {
         Self::try_decode(decoder).unwrap()
-    }
-    fn rows_iter(decoder: Decoder) -> super::Iter<Self::Row> {
-        super::Iter::<Self::Row>::new(decoder)
     }
 }
 
@@ -501,6 +499,14 @@ impl ColumnDecoder for Ipv6Addr {
             ((slice[12] as u16) << 8) | slice[13] as u16,
             ((slice[14] as u16) << 8) | slice[15] as u16,
         )
+    }
+}
+
+impl ColumnDecoder for Cursor<Vec<u8>> {
+    fn decode(slice: &[u8]) -> Self {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(slice);
+        Cursor::new(bytes)
     }
 }
 

@@ -14,7 +14,6 @@ pub(crate) mod consistency;
 pub(crate) mod decoder;
 pub(crate) mod encoder;
 pub(crate) mod error;
-pub(crate) mod execute;
 pub(crate) mod header;
 pub(crate) mod opcode;
 pub(crate) mod options;
@@ -33,7 +32,6 @@ pub use consistency::Consistency;
 pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
 pub use encoder::ColumnEncoder;
 pub use error::{CqlError, ErrorCodes};
-pub use execute::Execute;
 pub use prepare::Prepare;
 pub use query::{
     PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency, QueryFlags, QueryPagingState,

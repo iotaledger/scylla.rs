@@ -238,9 +238,9 @@ impl<K, V, S: Insert<K, V> + Clone> CreateRequest<InsertRequest<S, K, V>> for S 
 
 impl<S, K, V> Request for InsertRequest<S, K, V>
 where
-    S: Insert<K, V> + std::fmt::Debug + Clone,
-    K: Send + std::fmt::Debug + Clone,
-    V: Send + std::fmt::Debug + Clone,
+    S: Insert<K, V>,
+    K: Send,
+    V: Send,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.insert_statement::<K, V>()
@@ -248,6 +248,9 @@ where
 
     fn payload(&self) -> &Vec<u8> {
         &self.inner
+    }
+    fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }
 

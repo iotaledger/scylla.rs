@@ -300,9 +300,9 @@ impl<K, V, S: Select<K, V> + Clone> CreateRequest<SelectRequest<S, K, V>> for S 
 
 impl<S, K, V> Request for SelectRequest<S, K, V>
 where
-    S: Select<K, V> + std::fmt::Debug + Clone,
-    K: Send + std::fmt::Debug + Clone,
-    V: Send + std::fmt::Debug + Clone,
+    S: Select<K, V>,
+    K: Send,
+    V: Send,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.select_statement::<K, V>()
@@ -310,6 +310,9 @@ where
 
     fn payload(&self) -> &Vec<u8> {
         &self.inner
+    }
+    fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }
 

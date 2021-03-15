@@ -5,6 +5,7 @@
 
 use std::{
     collections::HashMap,
+    io::Cursor,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
@@ -174,6 +175,14 @@ impl ColumnEncoder for Ipv6Addr {
     fn encode(&self, buffer: &mut Vec<u8>) {
         buffer.extend(&BE_16_BYTES_LEN);
         buffer.extend(&self.octets());
+    }
+}
+
+impl ColumnEncoder for Cursor<Vec<u8>> {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        let inner = self.get_ref();
+        buffer.extend(&i32::to_be_bytes(inner.len() as i32));
+        buffer.extend(inner);
     }
 }
 

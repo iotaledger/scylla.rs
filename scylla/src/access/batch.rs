@@ -668,7 +668,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>, Stage> BatchCollector<S, Type, Stage> {
 }
 
 /// Defines a helper method to allow keyspaces to begin constructing a batch
-pub trait Batch {
+pub trait Batchable {
     /// Start building a batch.
     /// This function will borrow the keyspace until the batch is fully built in order
     /// to access its trait definitions.
@@ -680,4 +680,4 @@ pub trait Batch {
     }
 }
 
-impl<S: Keyspace + Clone> Batch for S {}
+impl<S: Keyspace + Clone> Batchable for S {}

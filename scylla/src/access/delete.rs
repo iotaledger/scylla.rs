@@ -234,8 +234,8 @@ impl<K, V, S: Delete<K, V> + Clone> CreateRequest<DeleteRequest<S, K, V>> for S 
 impl<S, K, V> Request for DeleteRequest<S, K, V>
 where
     S: Delete<K, V> + std::fmt::Debug + Clone,
-    K: Send + std::fmt::Debug + Clone,
-    V: Send + std::fmt::Debug + Clone,
+    K: Send,
+    V: Send,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.delete_statement::<K, V>()
@@ -243,6 +243,9 @@ where
 
     fn payload(&self) -> &Vec<u8> {
         &self.inner
+    }
+    fn into_payload(self) -> Vec<u8> {
+        self.inner
     }
 }
 
