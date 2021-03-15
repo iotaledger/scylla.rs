@@ -5,6 +5,7 @@ pub use crate::stage::ReporterEvent;
 use crate::{access::*, stage::ReporterHandle};
 use log::*;
 use scylla_cql::CqlError;
+use select::handle_unprepared_error;
 use std::io::Error;
 use tokio::sync::mpsc::UnboundedSender;
 
