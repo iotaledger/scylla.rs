@@ -23,7 +23,7 @@ where
     V: 'static + Send,
     H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self>,
 {
-    fn new(handle: H, keyspace: S, key: K, _marker: std::marker::PhantomData<V>) -> Self {
+    pub fn new(handle: H, keyspace: S, key: K, _marker: std::marker::PhantomData<V>) -> Self {
         Self {
             handle,
             keyspace,

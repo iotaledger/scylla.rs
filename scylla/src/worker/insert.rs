@@ -17,7 +17,7 @@ where
     V: 'static + Send,
     H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self>,
 {
-    fn new(handle: H, keyspace: S, key: K, value: V) -> Self {
+    pub fn new(handle: H, keyspace: S, key: K, value: V) -> Self {
         Self {
             handle,
             keyspace,
