@@ -43,6 +43,9 @@ where
     }
 }
 
+/// Handle an unprepared CQL error by sending a prepare
+/// request and resubmitting the original query as an
+/// unprepared statement
 pub fn handle_unprepared_error<W, S, K, V>(
     worker: &Box<W>,
     keyspace: &S,
