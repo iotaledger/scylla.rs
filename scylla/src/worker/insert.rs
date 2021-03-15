@@ -11,7 +11,7 @@ pub struct InsertWorker<S: Insert<K, V>, K, V> {
 
 impl<S: Insert<K, V>, K, V> InsertWorker<S, K, V>
 where
-    S: 'static + Select<K, V>,
+    S: 'static + Insert<K, V>,
     K: 'static + Send,
     V: 'static + Send,
 {
