@@ -55,8 +55,9 @@ where
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter);
             }
+        } else {
+            H::handle_error(self, error);
         }
-        H::handle_error(self, error);
     }
 }
 
