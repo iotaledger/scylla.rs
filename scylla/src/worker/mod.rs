@@ -71,6 +71,7 @@ impl<W: Worker> DecodeResponse<Decoder> for W {
     }
 }
 
+pub mod delete;
 pub mod insert;
 pub mod prepare;
 pub mod select;

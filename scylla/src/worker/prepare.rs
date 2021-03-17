@@ -14,6 +14,9 @@ impl PrepareWorker {
             statement: statement.to_string(),
         }
     }
+    pub fn boxed<T: ToString>(id: [u8; 16], statement: T) -> Box<Self> {
+        Box::new(Self::new(id, statement))
+    }
     pub fn insert<S, K, V>(keyspace: &S) -> Self
     where
         S: Insert<K, V>,
