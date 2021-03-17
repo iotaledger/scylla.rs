@@ -24,7 +24,7 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 pub use super::{
-    worker::{InsertWorker, PrepareWorker, SelectWorker, ValueWorker},
+    worker::{DeleteWorker, InsertWorker, PrepareWorker, SelectWorker, ValueWorker},
     Worker, WorkerError,
 };
 pub use batch::*;
