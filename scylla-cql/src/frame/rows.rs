@@ -108,7 +108,12 @@ pub struct Iter<T: Row> {
     metadata: Metadata,
     _marker: std::marker::PhantomData<T>,
 }
-
+impl<T: Row> Iter<T> {
+    /// Check if the iterator doesn't have any row
+    pub fn is_empty(&self) -> bool {
+        self.rows_count == 0
+    }
+}
 impl<T: Row> Rows for Iter<T> {
     fn new(decoder: super::Decoder) -> Self {
         let metadata = decoder.metadata();
