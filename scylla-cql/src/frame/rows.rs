@@ -13,7 +13,7 @@ use std::{
 
 /// The column count type.
 pub type ColumnsCount = i32;
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 /// The flags for row decoder.
 pub struct Flags {
     global_table_spec: bool,
@@ -35,7 +35,7 @@ impl Flags {
         self.has_more_pages
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// The pageing state of the response.
 pub struct PagingState {
     paging_state: Option<Vec<u8>>,
@@ -47,7 +47,7 @@ impl PagingState {
         PagingState { paging_state, end }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// The meta structure of the row.
 pub struct Metadata {
     flags: Flags,
@@ -99,6 +99,7 @@ pub trait ColumnValue {
 }
 
 #[allow(unused)]
+#[derive(Clone)]
 pub struct Iter<T: Row> {
     decoder: super::Decoder,
     rows_count: usize,
