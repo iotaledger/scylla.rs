@@ -36,7 +36,12 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                 }
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster level?
                 ClusterEvent::AddNode(address) => {
-                    // TODO make sure it doesn't already exist in our cluster
+                    // make sure it doesn't already exist in our cluster
+                    if self.nodes.contains_key(&address) {
+                        let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::AddNode(address))));
+                        let _ = supervisor.as_ref().unwrap().send(event);
+                        continue;
+                    }
                     // to spawn node we first make sure it's online;
                     let cql = CqlBuilder::new()
                         .address(address)
@@ -90,20 +95,25 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                 }
                 ClusterEvent::RemoveNode(address) => {
                     // get and remove node_info
-                    let mut node_info = self.nodes.remove(&address).unwrap();
-                    // update(remove from) registry
-                    for shard_id in 0..node_info.shard_count {
-                        // make node_id to reflect the correct shard_id
-                        node_info.address.set_port(shard_id);
-                        // remove the shard_reporters for "address" node in shard_id from registry
-                        self.registry.remove(&node_info.address);
-                    }
-                    node_info.node_handle.shutdown();
-                    // update waiting for build to true
-                    self.should_build = true;
-                    // note: the node tree will not get shutdown unless we drop the ring
-                    // but we cannot drop the ring unless we build a new one and atomically swap it,
-                    // therefore dashboard admin supposed to BuildRing
+                    if let Some(mut node_info) = self.nodes.remove(&address) {
+                        // update(remove from) registry
+                        for shard_id in 0..node_info.shard_count {
+                            // make node_id to reflect the correct shard_id
+                            node_info.address.set_port(shard_id);
+                            // remove the shard_reporters for "address" node in shard_id from registry
+                            self.registry.remove(&node_info.address);
+                        }
+                        node_info.node_handle.shutdown();
+                        // update waiting for build to true
+                        self.should_build = true;
+                        // note: the node tree will not get shutdown unless we drop the ring
+                        // but we cannot drop the ring unless we build a new one and atomically swap it,
+                        // therefore dashboard admin supposed to BuildRing
+                    } else {
+                        // Cannot remove non-existing node.
+                        let event = ScyllaEvent::Result(SocketMsg::Scylla(Err(Topology::RemoveNode(address))));
+                        let _ = supervisor.as_ref().unwrap().send(event);
+                    };
                 }
                 ClusterEvent::RegisterReporters(microservice, reporters_handles) => {
                     // generate the address of the node we are currently registering its reporters;
