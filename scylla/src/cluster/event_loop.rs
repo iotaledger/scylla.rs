@@ -144,6 +144,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Cluster {
                             // push weak to weak_rings
                             self.weak_rings.push(old_weak_ring);
                         }
+                        Ring::rebuild();
                         // reset should_build state to false becaue we built it and we don't want to rebuild again
                         // incase of another BuildRing event
                         self.should_build = false;
