@@ -35,6 +35,13 @@ impl<H: ScyllaScope> Starter<H> for ScyllaBuilder<H> {
             .build();
         // clone cluster handle
         let cluster_handle = cluster.clone_handle();
+        // check if reporter_count is not zero
+        if self.reporter_count.as_ref().unwrap().eq(&0) {
+            return Err("reporter_count must be greater than zero, ensure your config is correct".to_owned());
+        }
+        if self.local_dc.as_ref().unwrap().eq(&"") {
+            return Err("local_datacenter must be non-empty string, ensure your config is correct".to_owned());
+        }
         // build application
         let scylla = self
             .listener_handle(listener_handle)
