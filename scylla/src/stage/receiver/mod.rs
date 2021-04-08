@@ -24,8 +24,10 @@ builder!(ReceiverBuilder {
 pub struct Receiver {
     service: Service,
     socket: OwnedReadHalf,
+    stream_id: i16,
     total_length: usize,
     current_length: usize,
+    header: bool,
     buffer: Vec<u8>,
     i: usize,
     appends_num: i16,
@@ -41,8 +43,10 @@ impl Builder for ReceiverBuilder {
         Self::State {
             service: Service::new(),
             socket: self.socket.unwrap(),
+            stream_id: 0,
             total_length: 0,
             current_length: 0,
+            header: false,
             buffer: vec![0; self.buffer_size.unwrap()],
             i: 0,
             appends_num: self.appends_num.unwrap(),
