@@ -22,14 +22,12 @@ impl EventLoop<ReportersHandles> for Receiver {
                     if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
                         self.i = self.current_length;
                     } else {
-                        self.handle_frame_header(0).map_err(|e| {
-                            error!("{}", e);
-                            Need::Abort
-                        })?;
-                        self.handle_frame(n, 0, reporter_handles).map_err(|e| {
-                            error!("{}", e);
-                            Need::Abort
-                        })?;
+                        self.handle_frame_header(0)
+                            .and_then(|_| self.handle_frame(n, 0, reporter_handles))
+                            .map_err(|e| {
+                                error!("{}", e);
+                                Need::Abort
+                            })?;
                     }
                 } else {
                     break;
