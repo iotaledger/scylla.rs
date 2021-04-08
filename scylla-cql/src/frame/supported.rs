@@ -13,9 +13,9 @@ pub struct Supported {
 
 impl Supported {
     /// Create a Supported frame from frame decoder.
-    pub fn new(decoder: &Decoder) -> Self {
-        let options = string_multimap(decoder.body());
-        Self { options }
+    pub fn new(decoder: &Decoder) -> anyhow::Result<Self> {
+        let options = string_multimap(decoder.body()?)?;
+        Ok(Self { options })
     }
     /// Get the options in the Supported frame.
     pub fn get_options(&self) -> &HashMap<String, Vec<String>> {

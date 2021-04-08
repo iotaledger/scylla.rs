@@ -3,11 +3,11 @@
 
 use super::*;
 use crate::worker::{Worker, WorkerError};
+use anyhow::anyhow;
 use scylla_cql::{CqlError, Decoder};
 use sender::SenderHandle;
-
 use std::{
-    io::{Error, ErrorKind},
+    convert::TryFrom,
     ops::{Deref, DerefMut},
 };
 
@@ -67,7 +67,7 @@ pub enum ReporterEvent {
         stream_id: i16,
     },
     /// The stream error.
-    Err(Error, i16),
+    Err(anyhow::Error, i16),
     /// The stage session.
     Session(Session),
 }
@@ -94,8 +94,8 @@ pub struct Reporter {
 }
 
 impl Reporter {
-    pub fn clone_handle(&self) -> ReporterHandle {
-        self.handle.as_ref().unwrap().clone()
+    pub fn clone_handle(&self) -> Option<ReporterHandle> {
+        self.handle.clone()
     }
 }
 

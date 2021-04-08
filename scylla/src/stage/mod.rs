@@ -120,8 +120,8 @@ pub struct Stage {
     inbox: StageInbox,
 }
 impl Stage {
-    pub(crate) fn clone_handle(&self) -> StageHandle {
-        self.handle.clone().unwrap()
+    pub(crate) fn clone_handle(&self) -> Option<StageHandle> {
+        self.handle.clone()
     }
 }
 #[derive(Default)]

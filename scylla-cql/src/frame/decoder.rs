@@ -7,13 +7,12 @@ use super::{
     error, header, opcode, result,
     rows::{ColumnsCount, Flags, Metadata, PagingState},
 };
-use crate::{
-    compression::{Compression, MyCompression},
-    frame::rows::{Row, Rows},
-};
+use crate::compression::{Compression, MyCompression};
+use anyhow::{anyhow, ensure};
+use log::error;
 use std::{
     collections::HashMap,
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     hash::Hash,
     io::Cursor,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -23,7 +22,7 @@ use std::{
 pub trait RowsDecoder<K, V> {
     type Row: super::Row;
     /// Try to decode the provided Decoder with an expected Rows result
-    fn try_decode(decoder: Decoder) -> Result<Option<V>, error::CqlError>;
+    fn try_decode(decoder: Decoder) -> anyhow::Result<Option<V>>;
     /// Decode the provided Decoder with deterministic Rows result
     fn decode(decoder: Decoder) -> Option<V> {
         Self::try_decode(decoder).unwrap()
@@ -33,9 +32,12 @@ pub trait RowsDecoder<K, V> {
 /// VoidDecoder trait to decode the VOID result from scylla
 pub trait VoidDecoder {
     /// Try to decode the provided Decoder with an expected Void result
-    fn try_decode(decoder: Decoder) -> Result<(), error::CqlError> {
-        if decoder.is_error() {
-            Err(decoder.get_error())
+    fn try_decode(decoder: Decoder) -> anyhow::Result<()> {
+        if decoder.is_error().or_else(|e| {
+            error!("{}", e);
+            Err(anyhow!(decoder.get_error()?))
+        })? {
+            Err(anyhow!(decoder.get_error()?))
         } else {
             Ok(())
         }
@@ -46,8 +48,10 @@ pub trait VoidDecoder {
     }
 }
 
-impl From<Vec<u8>> for Decoder {
-    fn from(buffer: Vec<u8>) -> Self {
+impl TryFrom<Vec<u8>> for Decoder {
+    type Error = anyhow::Error;
+
+    fn try_from(buffer: Vec<u8>) -> Result<Self, Self::Error> {
         Decoder::new(buffer, MyCompression::get())
     }
 }
@@ -55,85 +59,85 @@ impl From<Vec<u8>> for Decoder {
 /// The CQL frame trait.
 pub trait Frame {
     /// Get the frame version.
-    fn version(&self) -> u8;
+    fn version(&self) -> anyhow::Result<u8>;
     /// G the frame header flags.
     fn flags(&self) -> &HeaderFlags;
     /// Get the stream in the frame header.
-    fn stream(&self) -> i16;
+    fn stream(&self) -> anyhow::Result<i16>;
     /// Get the opcode in the frame header.
-    fn opcode(&self) -> u8;
+    fn opcode(&self) -> anyhow::Result<u8>;
     /// Get the length of the frame body.
-    fn length(&self) -> usize;
+    fn length(&self) -> anyhow::Result<usize>;
     /// Get the frame body.
-    fn body(&self) -> &[u8];
+    fn body(&self) -> anyhow::Result<&[u8]>;
     /// Get the body start of the frame.
     fn body_start(&self, padding: usize) -> usize;
     /// Get the body kind.
-    fn body_kind(&self) -> i32;
+    fn body_kind(&self) -> anyhow::Result<i32>;
     /// Check whether the opcode is `AUTHENTICATE`.
-    fn is_authenticate(&self) -> bool;
+    fn is_authenticate(&self) -> anyhow::Result<bool>;
     /// Check whether the opcode is `AUTH_CHALLENGE`.
-    fn is_auth_challenge(&self) -> bool;
+    fn is_auth_challenge(&self) -> anyhow::Result<bool>;
     /// Check whether the opcode is `AUTH_SUCCESS`.
-    fn is_auth_success(&self) -> bool;
+    fn is_auth_success(&self) -> anyhow::Result<bool>;
     /// Check whether the opcode is `SUPPORTED`.
-    fn is_supported(&self) -> bool;
+    fn is_supported(&self) -> anyhow::Result<bool>;
     /// Check whether the opcode is `READY`.
-    fn is_ready(&self) -> bool;
+    fn is_ready(&self) -> anyhow::Result<bool>;
     /// Check whether the body kind is `VOID`.
-    fn is_void(&self) -> bool;
+    fn is_void(&self) -> anyhow::Result<bool>;
     /// Check whether the body kind is `ROWS`.
-    fn is_rows(&self) -> bool;
+    fn is_rows(&self) -> anyhow::Result<bool>;
     /// Check whether the opcode is `ERROR`.
-    fn is_error(&self) -> bool;
+    fn is_error(&self) -> anyhow::Result<bool>;
     /// Get the `CqlError`.
-    fn get_error(&self) -> error::CqlError;
+    fn get_error(&self) -> anyhow::Result<error::CqlError>;
     /// Get Void `()`
-    fn get_void(&self) -> Result<(), error::CqlError>;
+    fn get_void(&self) -> anyhow::Result<()>;
     /// Check whether the error is `UNPREPARED`.
-    fn is_unprepared(&self) -> bool;
+    fn is_unprepared(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `ALREADY_EXISTS.
-    fn is_already_exists(&self) -> bool;
+    fn is_already_exists(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `CONFIGURE_ERROR.
-    fn is_configure_error(&self) -> bool;
+    fn is_configure_error(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `INVALID.
-    fn is_invalid(&self) -> bool;
+    fn is_invalid(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `UNAUTHORIZED.
-    fn is_unauthorized(&self) -> bool;
+    fn is_unauthorized(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `SYNTAX_ERROR.
-    fn is_syntax_error(&self) -> bool;
+    fn is_syntax_error(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `WRITE_FAILURE.
-    fn is_write_failure(&self) -> bool;
+    fn is_write_failure(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `FUNCTION_FAILURE.
-    fn is_function_failure(&self) -> bool;
+    fn is_function_failure(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `READ_FAILURE.
-    fn is_read_failure(&self) -> bool;
+    fn is_read_failure(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `READ_TIMEOUT.
-    fn is_read_timeout(&self) -> bool;
+    fn is_read_timeout(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `WRITE_TIMEOUT.
-    fn is_write_timeout(&self) -> bool;
+    fn is_write_timeout(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `TRUNCATE_ERROR.
-    fn is_truncate_error(&self) -> bool;
+    fn is_truncate_error(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `IS_BOOSTRAPPING.
-    fn is_boostrapping(&self) -> bool;
+    fn is_boostrapping(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `OVERLOADED.
-    fn is_overloaded(&self) -> bool;
+    fn is_overloaded(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `UNAVAILABLE_EXCEPTION.
-    fn is_unavailable_exception(&self) -> bool;
+    fn is_unavailable_exception(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `AUTHENTICATION_ERROR.
-    fn is_authentication_error(&self) -> bool;
+    fn is_authentication_error(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `PROTOCOL_ERROR.
-    fn is_protocol_error(&self) -> bool;
+    fn is_protocol_error(&self) -> anyhow::Result<bool>;
     /// Check whether the error is `SERVER_ERROR.
-    fn is_server_error(&self) -> bool;
+    fn is_server_error(&self) -> anyhow::Result<bool>;
     /// The the row flags.
-    fn rows_flags(&self) -> Flags;
+    fn rows_flags(&self) -> anyhow::Result<Flags>;
     /// The the column counts.
-    fn columns_count(&self) -> ColumnsCount;
+    fn columns_count(&self) -> anyhow::Result<ColumnsCount>;
     /// The the paging state.
-    fn paging_state(&self, has_more_pages: bool) -> PagingState;
+    fn paging_state(&self, has_more_pages: bool) -> anyhow::Result<PagingState>;
     /// The the metadata.
-    fn metadata(&self) -> Metadata;
+    fn metadata(&self) -> anyhow::Result<Metadata>;
 }
 /// The frame decoder structure.
 #[derive(Clone)]
@@ -143,10 +147,10 @@ pub struct Decoder {
 }
 impl Decoder {
     /// Create a new decoder with an assigned compression type.
-    pub fn new(mut buffer: Vec<u8>, decompressor: impl Compression) -> Self {
-        buffer = decompressor.decompress(buffer);
-        let header_flags = HeaderFlags::new(&mut buffer);
-        Decoder { buffer, header_flags }
+    pub fn new(mut buffer: Vec<u8>, decompressor: impl Compression) -> anyhow::Result<Self> {
+        buffer = decompressor.decompress(buffer)?;
+        let header_flags = HeaderFlags::new(&mut buffer)?;
+        Ok(Decoder { buffer, header_flags })
     }
     /// Get the decoder buffer referennce.
     pub fn buffer_as_ref(&self) -> &Vec<u8> {
@@ -177,7 +181,7 @@ pub struct HeaderFlags {
 #[allow(dead_code)]
 impl HeaderFlags {
     /// Create a new header flags.
-    pub fn new(buffer: &mut Vec<u8>) -> Self {
+    pub fn new(buffer: &mut Vec<u8>) -> anyhow::Result<Self> {
         let mut body_start = 9;
         let flags = buffer[1];
         let compression = flags & header::COMPRESSION == header::COMPRESSION;
@@ -192,7 +196,7 @@ impl HeaderFlags {
             tracing = None;
         }
         let warnings = if flags & header::WARNING == header::WARNING {
-            let string_list = string_list(&buffer[body_start..]);
+            let string_list = string_list(&buffer[body_start..])?;
             // add all [short] length to the body_start
             body_start += 2 * (string_list.len() + 1);
             // add the warning length
@@ -205,13 +209,13 @@ impl HeaderFlags {
             None
         };
         let custom_payload = flags & header::CUSTOM_PAYLOAD == header::CUSTOM_PAYLOAD;
-        Self {
+        Ok(Self {
             compression,
             tracing,
             warnings,
             custom_payload,
             body_start,
-        }
+        })
     }
     /// Get whether the frame is compressed.
     pub fn compression(&self) -> bool {
@@ -228,164 +232,173 @@ impl HeaderFlags {
 }
 
 impl Frame for Decoder {
-    fn version(&self) -> u8 {
-        self.buffer_as_ref()[0]
+    fn version(&self) -> anyhow::Result<u8> {
+        let buffer = self.buffer_as_ref();
+        ensure!(buffer.len() > 0, "Buffer is too small!");
+        Ok(buffer[0])
     }
     fn flags(&self) -> &HeaderFlags {
         &self.header_flags
     }
-    fn stream(&self) -> i16 {
+    fn stream(&self) -> anyhow::Result<i16> {
         todo!()
     }
-    fn opcode(&self) -> u8 {
-        self.buffer_as_ref()[4]
+    fn opcode(&self) -> anyhow::Result<u8> {
+        let buffer = self.buffer_as_ref();
+        ensure!(buffer.len() > 4, "Buffer is too small!");
+        Ok(buffer[4])
     }
-    fn length(&self) -> usize {
-        i32::from_be_bytes(self.buffer_as_ref()[5..9].try_into().unwrap()) as usize
+    fn length(&self) -> anyhow::Result<usize> {
+        let buffer = self.buffer_as_ref();
+        ensure!(buffer.len() >= 9, "Buffer is too small!");
+        Ok(i32::from_be_bytes(buffer[5..9].try_into()?) as usize)
     }
-    fn body(&self) -> &[u8] {
+    fn body(&self) -> anyhow::Result<&[u8]> {
+        let buffer = self.buffer_as_ref();
         let body_start = self.header_flags.body_start;
-        &self.buffer_as_ref()[body_start..]
+        ensure!(buffer.len() >= body_start, "Buffer is too small!");
+        Ok(&buffer[body_start..])
     }
     fn body_start(&self, padding: usize) -> usize {
         self.header_flags.body_start + padding
     }
-    fn body_kind(&self) -> i32 {
-        i32::from_be_bytes(self.body()[0..4].try_into().unwrap())
+    fn body_kind(&self) -> anyhow::Result<i32> {
+        Ok(i32::from_be_bytes(self.body()?[0..4].try_into()?))
     }
-    fn is_authenticate(&self) -> bool {
-        self.opcode() == opcode::AUTHENTICATE
+    fn is_authenticate(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::AUTHENTICATE)
     }
-    fn is_auth_challenge(&self) -> bool {
-        self.opcode() == opcode::AUTH_CHALLENGE
+    fn is_auth_challenge(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::AUTH_CHALLENGE)
     }
-    fn is_auth_success(&self) -> bool {
-        self.opcode() == opcode::AUTH_SUCCESS
+    fn is_auth_success(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::AUTH_SUCCESS)
     }
-    fn is_supported(&self) -> bool {
-        self.opcode() == opcode::SUPPORTED
+    fn is_supported(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::SUPPORTED)
     }
-    fn is_ready(&self) -> bool {
-        self.opcode() == opcode::READY
+    fn is_ready(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::READY)
     }
-    fn is_void(&self) -> bool {
-        (self.opcode() == opcode::RESULT) && (self.body_kind() == result::VOID)
+    fn is_void(&self) -> anyhow::Result<bool> {
+        Ok((self.opcode()? == opcode::RESULT) && (self.body_kind()? == result::VOID))
     }
-    fn is_rows(&self) -> bool {
-        (self.opcode() == opcode::RESULT) && (self.body_kind() == result::ROWS)
+    fn is_rows(&self) -> anyhow::Result<bool> {
+        Ok((self.opcode()? == opcode::RESULT) && (self.body_kind()? == result::ROWS))
     }
-    fn is_error(&self) -> bool {
-        self.opcode() == opcode::ERROR
+    fn is_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR)
     }
-    fn get_error(&self) -> error::CqlError {
+    fn get_error(&self) -> anyhow::Result<error::CqlError> {
         error::CqlError::new(self)
     }
-    fn get_void(&self) -> Result<(), error::CqlError> {
-        if self.is_void() {
+    fn get_void(&self) -> anyhow::Result<()> {
+        if self.is_void().or_else(|e| {
+            error!("{}", e);
+            Err(anyhow!(self.get_error()?))
+        })? {
             Ok(())
         } else {
-            Err(self.get_error())
+            Err(anyhow!(self.get_error()?))
         }
     }
-    fn is_unprepared(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::UNPREPARED
+    fn is_unprepared(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::UNPREPARED)
     }
-    fn is_already_exists(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::ALREADY_EXISTS
+    fn is_already_exists(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::ALREADY_EXISTS)
     }
-    fn is_configure_error(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::CONFIGURE_ERROR
+    fn is_configure_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::CONFIGURE_ERROR)
     }
-    fn is_invalid(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::INVALID
+    fn is_invalid(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::INVALID)
     }
-    fn is_unauthorized(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::UNAUTHORIZED
+    fn is_unauthorized(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::UNAUTHORIZED)
     }
-    fn is_syntax_error(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::SYNTAX_ERROR
+    fn is_syntax_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::SYNTAX_ERROR)
     }
-    fn is_write_failure(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::WRITE_FAILURE
+    fn is_write_failure(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::WRITE_FAILURE)
     }
-    fn is_function_failure(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::FUNCTION_FAILURE
+    fn is_function_failure(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::FUNCTION_FAILURE)
     }
-    fn is_read_failure(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::READ_FAILURE
+    fn is_read_failure(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::READ_FAILURE)
     }
-    fn is_read_timeout(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::READ_TIMEOUT
+    fn is_read_timeout(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::READ_TIMEOUT)
     }
-    fn is_write_timeout(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::WRITE_TIMEOUT
+    fn is_write_timeout(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::WRITE_TIMEOUT)
     }
-    fn is_truncate_error(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::TRUNCATE_ERROR
+    fn is_truncate_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::TRUNCATE_ERROR)
     }
-    fn is_boostrapping(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::IS_BOOSTRAPPING
+    fn is_boostrapping(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::IS_BOOSTRAPPING)
     }
-    fn is_overloaded(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::OVERLOADED
+    fn is_overloaded(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::OVERLOADED)
     }
-    fn is_unavailable_exception(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::UNAVAILABLE_EXCEPTION
+    fn is_unavailable_exception(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::UNAVAILABLE_EXCEPTION)
     }
-    fn is_authentication_error(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::AUTHENTICATION_ERROR
+    fn is_authentication_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::AUTHENTICATION_ERROR)
     }
-    fn is_protocol_error(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::PROTOCOL_ERROR
+    fn is_protocol_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::PROTOCOL_ERROR)
     }
-    fn is_server_error(&self) -> bool {
-        self.opcode() == opcode::ERROR && self.body_kind() == error::SERVER_ERROR
+    fn is_server_error(&self) -> anyhow::Result<bool> {
+        Ok(self.opcode()? == opcode::ERROR && self.body_kind()? == error::SERVER_ERROR)
     }
-    fn rows_flags(&self) -> Flags {
+    fn rows_flags(&self) -> anyhow::Result<Flags> {
         // cql rows specs, flags is [int] and protocol is big-endian
-        let flags = i32::from_be_bytes(
-            self.buffer_as_ref()[self.body_start(4)..self.body_start(8)]
-                .try_into()
-                .unwrap(),
-        );
-        Flags::from_i32(flags)
+        let buffer = self.buffer_as_ref();
+        ensure!(buffer.len() >= self.body_start(8), "Buffer is too small!");
+        let flags = i32::from_be_bytes(buffer[self.body_start(4)..self.body_start(8)].try_into()?);
+        Ok(Flags::from_i32(flags))
     }
-    fn columns_count(&self) -> ColumnsCount {
+    fn columns_count(&self) -> anyhow::Result<ColumnsCount> {
+        let buffer = self.buffer_as_ref();
+        ensure!(buffer.len() >= self.body_start(12), "Buffer is too small!");
         // column count located right after flags, therefore
-        i32::from_be_bytes(
-            self.buffer_as_ref()[self.body_start(8)..self.body_start(12)]
-                .try_into()
-                .unwrap(),
-        )
+        Ok(i32::from_be_bytes(
+            buffer[self.body_start(8)..self.body_start(12)].try_into()?,
+        ))
     }
-    fn paging_state(&self, has_more_pages: bool) -> PagingState {
+    fn paging_state(&self, has_more_pages: bool) -> anyhow::Result<PagingState> {
         let paging_state_bytes_start = self.body_start(12);
-        if has_more_pages {
+        let buffer = self.buffer_as_ref();
+        Ok(if has_more_pages {
             // decode PagingState
             let paging_state_value_start = paging_state_bytes_start + 4;
-            let paging_state_len = i32::from_be_bytes(
-                self.buffer_as_ref()[paging_state_bytes_start..paging_state_value_start]
-                    .try_into()
-                    .unwrap(),
-            );
+            ensure!(buffer.len() >= paging_state_value_start, "Buffer is too small!");
+            let paging_state_len =
+                i32::from_be_bytes(buffer[paging_state_bytes_start..paging_state_value_start].try_into()?);
             if paging_state_len == -1 {
                 PagingState::new(None, paging_state_value_start)
             } else {
                 let paging_state_end: usize = paging_state_value_start + (paging_state_len as usize);
+                ensure!(buffer.len() >= paging_state_end, "Buffer is too small!");
                 PagingState::new(
-                    Some(self.buffer_as_ref()[paging_state_value_start..paging_state_end].to_vec()),
+                    Some(buffer[paging_state_value_start..paging_state_end].to_vec()),
                     paging_state_end,
                 )
             }
         } else {
             PagingState::new(None, paging_state_bytes_start)
-        }
+        })
     }
-    fn metadata(&self) -> Metadata {
-        let flags = self.rows_flags();
-        let columns_count = self.columns_count();
-        let paging_state = self.paging_state(flags.has_more_pages());
-        Metadata::new(flags, columns_count, paging_state)
+    fn metadata(&self) -> anyhow::Result<Metadata> {
+        let flags = self.rows_flags()?;
+        let columns_count = self.columns_count()?;
+        let paging_state = self.paging_state(flags.has_more_pages())?;
+        Ok(Metadata::new(flags, columns_count, paging_state))
     }
 }
 
@@ -394,104 +407,106 @@ impl Frame for Decoder {
 /// The column decoder trait to decode the frame.
 pub trait ColumnDecoder {
     /// Decode the column.
-    fn decode(slice: &[u8]) -> Self;
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self>
+    where
+        Self: Sized;
 }
 
 impl<T: ColumnDecoder> ColumnDecoder for Option<T> {
-    fn decode(slice: &[u8]) -> Self {
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
         if slice.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(T::decode(slice))
+            T::try_decode(slice).map(Into::into)
         }
     }
 }
 
 impl ColumnDecoder for i64 {
-    fn decode(slice: &[u8]) -> i64 {
-        i64::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(i64::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u64 {
-    fn decode(slice: &[u8]) -> u64 {
-        u64::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(u64::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for f64 {
-    fn decode(slice: &[u8]) -> f64 {
-        f64::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(f64::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for i32 {
-    fn decode(slice: &[u8]) -> i32 {
-        i32::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(i32::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u32 {
-    fn decode(slice: &[u8]) -> u32 {
-        u32::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(u32::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for f32 {
-    fn decode(slice: &[u8]) -> f32 {
-        f32::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(f32::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for i16 {
-    fn decode(slice: &[u8]) -> i16 {
-        i16::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(i16::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u16 {
-    fn decode(slice: &[u8]) -> u16 {
-        u16::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(u16::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for i8 {
-    fn decode(slice: &[u8]) -> i8 {
-        i8::from_be_bytes(slice.try_into().unwrap())
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(i8::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u8 {
-    fn decode(slice: &[u8]) -> u8 {
-        slice[0]
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(slice[0])
     }
 }
 
 impl ColumnDecoder for String {
-    fn decode(slice: &[u8]) -> String {
-        String::from_utf8(slice.to_vec()).unwrap()
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(String::from_utf8(slice.to_vec())?)
     }
 }
 
 impl ColumnDecoder for IpAddr {
-    fn decode(slice: &[u8]) -> Self {
-        if slice.len() == 4 {
-            IpAddr::V4(Ipv4Addr::decode(slice))
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(if slice.len() == 4 {
+            IpAddr::V4(Ipv4Addr::try_decode(slice)?)
         } else {
-            IpAddr::V6(Ipv6Addr::decode(slice))
-        }
+            IpAddr::V6(Ipv6Addr::try_decode(slice)?)
+        })
     }
 }
 
 impl ColumnDecoder for Ipv4Addr {
-    fn decode(slice: &[u8]) -> Self {
-        Ipv4Addr::new(slice[0], slice[1], slice[2], slice[3])
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(Ipv4Addr::new(slice[0], slice[1], slice[2], slice[3]))
     }
 }
 
 impl ColumnDecoder for Ipv6Addr {
-    fn decode(slice: &[u8]) -> Self {
-        Ipv6Addr::new(
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(Ipv6Addr::new(
             ((slice[0] as u16) << 8) | slice[1] as u16,
             ((slice[2] as u16) << 8) | slice[3] as u16,
             ((slice[4] as u16) << 8) | slice[5] as u16,
@@ -500,15 +515,15 @@ impl ColumnDecoder for Ipv6Addr {
             ((slice[10] as u16) << 8) | slice[11] as u16,
             ((slice[12] as u16) << 8) | slice[13] as u16,
             ((slice[14] as u16) << 8) | slice[15] as u16,
-        )
+        ))
     }
 }
 
 impl ColumnDecoder for Cursor<Vec<u8>> {
-    fn decode(slice: &[u8]) -> Self {
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(slice);
-        Cursor::new(bytes)
+        Ok(Cursor::new(bytes))
     }
 }
 
@@ -516,27 +531,27 @@ impl<E> ColumnDecoder for Vec<E>
 where
     E: ColumnDecoder,
 {
-    fn decode(slice: &[u8]) -> Vec<E> {
-        let list_len = i32::from_be_bytes(slice[0..4].try_into().unwrap()) as usize;
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        let list_len = i32::from_be_bytes(slice[0..4].try_into()?) as usize;
         let mut list: Vec<E> = Vec::new();
         let mut element_start = 4;
         for _ in 0..list_len {
             // decode element byte_size
             let element_value_start = element_start + 4;
-            let length = i32::from_be_bytes(slice[element_start..element_value_start].try_into().unwrap()) as usize;
+            let length = i32::from_be_bytes(slice[element_start..element_value_start].try_into()?) as usize;
             if length > 0 {
-                let e = E::decode(&slice[element_value_start..(element_value_start + length)]);
+                let e = E::try_decode(&slice[element_value_start..(element_value_start + length)])?;
                 list.push(e);
                 // next element start
                 element_start = element_value_start + length;
             } else {
-                let e = E::decode(&[]);
+                let e = E::try_decode(&[])?;
                 list.push(e);
                 // next element start
                 element_start = element_value_start;
             }
         }
-        list
+        Ok(list)
     }
 }
 
@@ -546,126 +561,127 @@ where
     V: ColumnDecoder,
     S: ::std::hash::BuildHasher + Default,
 {
-    fn decode(slice: &[u8]) -> HashMap<K, V, S> {
-        let map_len = i32::from_be_bytes(slice[0..4].try_into().unwrap()) as usize;
+    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+        let map_len = i32::from_be_bytes(slice[0..4].try_into()?) as usize;
         let mut map: HashMap<K, V, S> = HashMap::default();
         let mut pair_start = 4;
         for _ in 0..map_len {
             let k;
             let v;
             // decode key_byte_size
-            let length = i32::from_be_bytes(slice[pair_start..][..4].try_into().unwrap()) as usize;
+            let length = i32::from_be_bytes(slice[pair_start..][..4].try_into()?) as usize;
             pair_start += 4;
             if length > 0 {
-                k = K::decode(&slice[pair_start..][..length]);
+                k = K::try_decode(&slice[pair_start..][..length])?;
                 // modify pair_start to be the vtype_start
                 pair_start += length;
             } else {
-                k = K::decode(&[]);
+                k = K::try_decode(&[])?;
             }
-            let length = i32::from_be_bytes(slice[pair_start..][..4].try_into().unwrap()) as usize;
+            let length = i32::from_be_bytes(slice[pair_start..][..4].try_into()?) as usize;
             pair_start += 4;
             if length > 0 {
-                v = V::decode(&slice[pair_start..][..length]);
+                v = V::try_decode(&slice[pair_start..][..length])?;
                 pair_start += length;
             } else {
-                v = V::decode(&[]);
+                v = V::try_decode(&[])?;
             }
             // insert key,value
             map.insert(k, v);
         }
-        map
+        Ok(map)
     }
 }
 
 // helper types decoder functions
 /// Get the string list from a u8 slice.
-pub fn string_list(slice: &[u8]) -> Vec<String> {
-    let list_len = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
+pub fn string_list(slice: &[u8]) -> anyhow::Result<Vec<String>> {
+    let list_len = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
     let mut list: Vec<String> = Vec::with_capacity(list_len);
     // current_string_start
     let mut s = 2;
     for _ in 0..list_len {
         // ie first string length is buffer[2..4]
-        let string_len = u16::from_be_bytes(slice[s..(s + 2)].try_into().unwrap()) as usize;
+        let string_len = u16::from_be_bytes(slice[s..(s + 2)].try_into()?) as usize;
         s += 2;
         let e = s + string_len;
         let string = String::from_utf8_lossy(&slice[s..e]);
         list.push(string.to_string());
         s = e;
     }
-    list
+    Ok(list)
 }
 
 /// Get the `String` from a u8 slice.
-pub fn string(slice: &[u8]) -> String {
-    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
-    String::decode(&slice[2..][..length])
+pub fn string(slice: &[u8]) -> anyhow::Result<String> {
+    let length = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
+    String::try_decode(&slice[2..][..length])
 }
 
 /// Get the `&str` from a u8 slice.
-pub fn str(slice: &[u8]) -> &str {
-    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
-    str::from_utf8(&slice[2..(2 + length)]).unwrap()
+pub fn str(slice: &[u8]) -> anyhow::Result<&str> {
+    let length = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
+    str::from_utf8(&slice[2..(2 + length)]).map_err(|e| anyhow!(e))
 }
 
 /// Get the vector from byte slice.
-pub fn bytes(slice: &[u8]) -> Option<Vec<u8>> {
-    let length = i32::from_be_bytes(slice[0..4].try_into().unwrap());
-    if length >= 0 {
+pub fn bytes(slice: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    let length = i32::from_be_bytes(slice[0..4].try_into()?);
+    Ok(if length >= 0 {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&slice[4..(4 + (length as usize))]);
         Some(bytes)
     } else {
         None
-    }
+    })
 }
 
 /// Get the `short_bytes` from a u8 slice.
 #[allow(unused)]
-pub fn short_bytes(slice: &[u8]) -> Vec<u8> {
-    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
-    slice[2..][..length].into()
+pub fn short_bytes(slice: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let length = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
+    Ok(slice[2..][..length].into())
 }
 
 /// Get the `prepared_id` from a u8 slice.
-pub fn prepared_id(slice: &[u8]) -> [u8; 16] {
-    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
-    slice[2..][..length].try_into().unwrap()
+pub fn prepared_id(slice: &[u8]) -> anyhow::Result<[u8; 16]> {
+    let length = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
+    let res: Result<[u8; 16], _> = slice[2..][..length].try_into();
+    res.map_err(|e| anyhow!(e))
 }
 
 /// Get hashmap of string to string vector from slice.
-pub fn string_multimap(slice: &[u8]) -> HashMap<String, Vec<String>> {
-    let length = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
+pub fn string_multimap(slice: &[u8]) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    let length = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
     let mut multimap = HashMap::with_capacity(length);
     let mut i = 2;
     for _ in 0..length {
-        let key = string(&slice[i..]);
+        let key = string(&slice[i..])?;
         // add [short] + string.len()
         i += 2 + key.len();
-        let (list, len) = string_list_with_returned_bytes_length(&slice[i..]);
+        let (list, len) = string_list_with_returned_bytes_length(&slice[i..])?;
         i += len;
         multimap.insert(key, list);
     }
-    multimap
+    Ok(multimap)
 }
 
 // Usefull for multimap.
 /// Get the string list and the byte length from slice.
-pub fn string_list_with_returned_bytes_length(slice: &[u8]) -> (Vec<String>, usize) {
-    let list_len = u16::from_be_bytes(slice[0..2].try_into().unwrap()) as usize;
+pub fn string_list_with_returned_bytes_length(slice: &[u8]) -> anyhow::Result<(Vec<String>, usize)> {
+    let list_len = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
     let mut list: Vec<String> = Vec::with_capacity(list_len);
     // current_string_start
     let mut s = 2;
     for _ in 0..list_len {
         // ie first string length is buffer[2..4]
-        let string_len = u16::from_be_bytes(slice[s..(s + 2)].try_into().unwrap()) as usize;
+        let string_len = u16::from_be_bytes(slice[s..(s + 2)].try_into()?) as usize;
         s += 2;
         let e = s + string_len;
         let string = String::from_utf8_lossy(&slice[s..e]);
         list.push(string.to_string());
         s = e;
     }
-    (list, s)
+    Ok((list, s))
 }
 // todo inet fn (with port).

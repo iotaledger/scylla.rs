@@ -63,17 +63,16 @@ impl QueryBuilder<QueryHeader> {
 }
 
 impl QueryOrPrepared for QueryStatement {
-    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> T::Return {
-        let statement = unsafe { std::str::from_utf8_unchecked(&statement) };
-        query_or_batch.statement(statement)
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> anyhow::Result<T::Return> {
+        Ok(query_or_batch.statement(std::str::from_utf8(&statement)?))
     }
     fn is_prepared() -> bool {
         false
     }
 }
 impl QueryOrPrepared for PreparedStatement {
-    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> T::Return {
-        query_or_batch.id(statement.try_into().unwrap())
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> anyhow::Result<T::Return> {
+        Ok(query_or_batch.id(statement.try_into()?))
     }
     fn is_prepared() -> bool {
         true
@@ -245,15 +244,15 @@ impl QueryBuilder<QueryFlags> {
         }
     }
     /// Build a query frame with an assigned compression type, without any value.
-    pub fn build(mut self) -> Query {
+    pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // push SKIP_METADATA query_flag to the buffer
         self.buffer.push(SKIP_METADATA);
         // apply compression to query frame
-        self.buffer = MyCompression::get().compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
-        Query(self.buffer)
+        Ok(Query(self.buffer))
     }
 }
 impl Values for QueryBuilder<QueryValues> {
@@ -364,7 +363,7 @@ impl QueryBuilder<QueryValues> {
     }
 
     /// Build a query frame with an assigned compression type, with values.
-    pub fn build(mut self) -> Query {
+    pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // modiy the buffer total value_count
@@ -372,9 +371,9 @@ impl QueryBuilder<QueryValues> {
         let end = start + 2;
         self.buffer[start..end].copy_from_slice(&self.stage.value_count.to_be_bytes());
         // apply compression to query frame
-        self.buffer = MyCompression::get().compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
-        Query(self.buffer)
+        Ok(Query(self.buffer))
     }
 }
 
@@ -428,13 +427,13 @@ impl QueryBuilder<QueryPagingState> {
     }
 
     /// Build a query frame with an assigned compression type.
-    pub fn build(mut self) -> Query {
+    pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // apply compression to query frame
-        self.buffer = MyCompression::get().compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
-        Query(self.buffer)
+        Ok(Query(self.buffer))
     }
 }
 
@@ -470,13 +469,13 @@ impl QueryBuilder<QuerySerialConsistency> {
     }
 
     /// Build a query frame with an assigned compression type.
-    pub fn build(mut self) -> Query {
+    pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // apply compression to query frame
-        self.buffer = MyCompression::get().compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
-        Query(self.buffer)
+        Ok(Query(self.buffer))
     }
 }
 
@@ -496,25 +495,25 @@ impl QueryBuilder<QueryTimestamp> {
         }
     }
     /// Build a query frame with an assigned compression type.
-    pub fn build(mut self) -> Query {
+    pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // apply compression to query frame
-        self.buffer = MyCompression::get().compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
-        Query(self.buffer)
+        Ok(Query(self.buffer))
     }
 }
 
 impl QueryBuilder<QueryBuild> {
     /// Build a query frame with an assigned compression type.
-    pub fn build(mut self) -> Query {
+    pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // apply compression to query frame
-        self.buffer = MyCompression::get().compress(self.buffer);
+        self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
-        Query(self.buffer)
+        Ok(Query(self.buffer))
     }
 }
 
@@ -557,6 +556,7 @@ mod tests {
             .value(&SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()) // junk timestamp
             .value(&0) // current-index
             .unset_value() // not-set value for milestone
-            .build();
+            .build()
+            .unwrap();
     }
 }

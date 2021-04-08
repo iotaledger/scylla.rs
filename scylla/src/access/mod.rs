@@ -40,7 +40,6 @@ pub use crate::ring::Ring;
 pub use crate::stage::{ReporterEvent, ReporterHandle};
 /// alias to cql traits and types
 pub use scylla_cql::*;
-
 use std::{borrow::Cow, marker::PhantomData, ops::Deref};
 
 #[repr(u8)]
@@ -89,8 +88,8 @@ impl<S, K, V> DecodeRows<S, K, V> {
 
 impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
     /// Decode a result payload using the `RowsDecoder` impl
-    pub fn decode(&self, bytes: Vec<u8>) -> Result<Option<V>, CqlError> {
-        S::try_decode(bytes.into())
+    pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
+        S::try_decode(bytes.try_into()?)
     }
 }
 
@@ -110,8 +109,8 @@ impl<S> DecodeVoid<S> {
 
 impl<S: VoidDecoder> DecodeVoid<S> {
     /// Decode a result payload using the `VoidDecoder` impl
-    pub fn decode(&self, bytes: Vec<u8>) -> Result<(), CqlError> {
-        S::try_decode(bytes.into())
+    pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
+        S::try_decode(bytes.try_into()?)
     }
 }
 
@@ -278,14 +277,14 @@ mod tests {
 
     impl RowsDecoder<u32, f32> for MyKeyspace {
         type Row = f32;
-        fn try_decode(decoder: Decoder) -> Result<Option<f32>, CqlError> {
+        fn try_decode(decoder: Decoder) -> anyhow::Result<Option<f32>> {
             todo!()
         }
     }
 
     impl RowsDecoder<u32, i32> for MyKeyspace {
         type Row = i32;
-        fn try_decode(decoder: Decoder) -> Result<Option<i32>, CqlError> {
+        fn try_decode(decoder: Decoder) -> anyhow::Result<Option<i32>> {
             todo!()
         }
     }
@@ -308,19 +307,20 @@ mod tests {
         ) {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                    let prepare = Prepare::new().statement(&self.request.statement()).build();
-                    let prepare_worker = PrepareWorker {
-                        retries: 3,
-                        payload: prepare.0.clone(),
-                    };
-                    let prepare_request = ReporterEvent::Request {
-                        worker: Box::new(prepare_worker),
-                        payload: prepare.0,
-                    };
-                    reporter.send(prepare_request).ok();
-                    let payload = self.request.payload().clone();
-                    let retry_request = ReporterEvent::Request { worker: self, payload };
-                    reporter.send(retry_request).ok();
+                    if let Ok(prepare) = Prepare::new().statement(&self.request.statement()).build() {
+                        let prepare_worker = PrepareWorker {
+                            retries: 3,
+                            payload: prepare.0.clone(),
+                        };
+                        let prepare_request = ReporterEvent::Request {
+                            worker: Box::new(prepare_worker),
+                            payload: prepare.0,
+                        };
+                        reporter.send(prepare_request).ok();
+                        let payload = self.request.payload().clone();
+                        let retry_request = ReporterEvent::Request { worker: self, payload };
+                        reporter.send(retry_request).ok();
+                    }
                 }
             }
         }
@@ -343,19 +343,20 @@ mod tests {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                     if let Some(statement) = self.request.get_statement(&id) {
-                        let prepare = Prepare::new().statement(&statement).build();
-                        let prepare_worker = PrepareWorker {
-                            retries: 3,
-                            payload: prepare.0.clone(),
-                        };
-                        let prepare_request = ReporterEvent::Request {
-                            worker: Box::new(prepare_worker),
-                            payload: prepare.0,
-                        };
-                        reporter.send(prepare_request).ok();
-                        let payload = self.request.payload().clone();
-                        let retry_request = ReporterEvent::Request { worker: self, payload };
-                        reporter.send(retry_request).ok();
+                        if let Ok(prepare) = Prepare::new().statement(&statement).build() {
+                            let prepare_worker = PrepareWorker {
+                                retries: 3,
+                                payload: prepare.0.clone(),
+                            };
+                            let prepare_request = ReporterEvent::Request {
+                                worker: Box::new(prepare_worker),
+                                payload: prepare.0,
+                            };
+                            reporter.send(prepare_request).ok();
+                            let payload = self.request.payload().clone();
+                            let retry_request = ReporterEvent::Request { worker: self, payload };
+                            reporter.send(retry_request).ok();
+                        }
                     }
                 }
             }
@@ -369,17 +370,17 @@ mod tests {
     }
 
     impl Worker for PrepareWorker {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
+        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) {
             // Do nothing
         }
 
-        fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>) {
+        fn handle_error(self: Box<Self>, _error: WorkerError, _reporter: &Option<ReporterHandle>) {
             if self.retries > 0 {
                 let prepare_worker = PrepareWorker {
                     retries: self.retries - 1,
                     payload: self.payload.clone(),
                 };
-                let request = ReporterEvent::Request {
+                let _request = ReporterEvent::Request {
                     worker: Box::new(prepare_worker),
                     payload: self.payload.clone(),
                 };
@@ -390,16 +391,23 @@ mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let req1 = keyspace.select::<f32>(&3).consistency(Consistency::One).build();
+        let req1 = keyspace
+            .select::<f32>(&3)
+            .unwrap()
+            .consistency(Consistency::One)
+            .build()
+            .unwrap();
         assert_eq!(req1.payload().len(), 100);
         let worker1 = TestWorker {
             request: Box::new(req1.clone()),
         };
         let req2 = keyspace
             .select::<i32>(&3)
+            .unwrap()
             .consistency(Consistency::One)
             .page_size(500)
-            .build();
+            .build()
+            .unwrap();
         let worker2 = TestWorker {
             request: Box::new(req1.clone()),
         };
@@ -414,7 +422,12 @@ mod tests {
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build();
+        let req = keyspace
+            .insert(&3, &8.0)
+            .unwrap()
+            .consistency(Consistency::One)
+            .build()
+            .unwrap();
         let worker = InsertWorker::boxed(keyspace, 3, 8.0);
 
         let res = req.send_local(worker);
@@ -423,7 +436,12 @@ mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build();
+        let req = keyspace
+            .update(&3, &8.0)
+            .unwrap()
+            .consistency(Consistency::One)
+            .build()
+            .unwrap();
         let worker = TestWorker {
             request: Box::new(req.clone()),
         };
@@ -434,7 +452,12 @@ mod tests {
     #[allow(dead_code)]
     fn test_delete() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.delete::<f32>(&3).consistency(Consistency::One).build();
+        let req = keyspace
+            .delete::<f32>(&3)
+            .unwrap()
+            .consistency(Consistency::One)
+            .build()
+            .unwrap();
         let worker = TestWorker {
             request: Box::new(req.clone()),
         };
@@ -450,11 +473,16 @@ mod tests {
             .batch()
             .logged() // or .batch_type(BatchTypeLogged)
             .insert(&3, &9.0)
+            .unwrap()
             .update_query(&3, &8.0)
+            .unwrap()
             .insert_prepared(&3, &8.0)
+            .unwrap()
             .delete_prepared::<_, f32>(&3)
+            .unwrap()
             .consistency(Consistency::One)
             .build()
+            .unwrap()
             .compute_token(&3);
         let id = keyspace.insert_id::<u32, f32>();
         let statement = req.get_statement(&id).unwrap();

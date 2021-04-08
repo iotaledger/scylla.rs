@@ -22,14 +22,14 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
     fn name(&self) -> &Cow<'static, str>;
 
     /// Decode void result
-    fn decode_void(decoder: scylla_cql::Decoder) -> Result<(), scylla_cql::CqlError>
+    fn decode_void(decoder: scylla_cql::Decoder) -> anyhow::Result<()>
     where
         Self: scylla_cql::VoidDecoder,
     {
         Self::try_decode(decoder)
     }
     /// Decode rows result
-    fn decode_rows<K, V>(decoder: scylla_cql::Decoder) -> Result<Option<V>, scylla_cql::CqlError>
+    fn decode_rows<K, V>(decoder: scylla_cql::Decoder) -> anyhow::Result<Option<V>>
     where
         Self: scylla_cql::RowsDecoder<K, V>,
     {

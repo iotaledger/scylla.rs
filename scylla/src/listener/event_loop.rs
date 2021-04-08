@@ -14,18 +14,21 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Listener {
     ) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Running);
         let event = ScyllaEvent::Children(ScyllaChild::Listener(self.service.clone()));
-        let my_sup = supervisor.as_mut().unwrap();
-        let _ = my_sup.send(event);
-        loop {
-            if let Ok((socket, peer)) = self.tcp_listener.accept().await {
-                let peer = socket.peer_addr().unwrap_or(peer);
-                if let Ok(ws_stream) = accept_async(socket).await {
-                    // build websocket
-                    let websocket = WebsocketdBuilder::new().peer(peer).stream(ws_stream).build();
-                    // spawn websocket
-                    tokio::spawn(websocket.start(supervisor.clone()));
+        if let Some(my_sup) = supervisor.as_mut() {
+            my_sup.send(event).ok();
+            loop {
+                if let Ok((socket, peer)) = self.tcp_listener.accept().await {
+                    let peer = socket.peer_addr().unwrap_or(peer);
+                    if let Ok(ws_stream) = accept_async(socket).await {
+                        // build websocket
+                        let websocket = WebsocketdBuilder::new().peer(peer).stream(ws_stream).build();
+                        // spawn websocket
+                        tokio::spawn(websocket.start(supervisor.clone()));
+                    }
                 }
             }
+        } else {
+            Err(Need::Abort)
         }
     }
 }

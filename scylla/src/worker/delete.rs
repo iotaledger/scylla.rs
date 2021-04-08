@@ -34,14 +34,20 @@ where
     V: 'static + Send + Clone,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
-        let _void = Self::decode_response(Decoder::from(giveload));
+        match Decoder::try_from(giveload) {
+            Ok(decoder) => {
+                Self::decode_response(decoder);
+            }
+            Err(e) => log::error!("{}", e),
+        }
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
         error!("{:?}, reporter running: {}", error, reporter.is_some());
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter);
+                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter)
+                    .unwrap_or_else(|e| error!("Error trying to prepare query: {}", e));
             }
         }
     }
@@ -56,7 +62,8 @@ pub fn handle_unprepared_error<W, S, K, V>(
     key: &K,
     id: [u8; 16],
     reporter: &ReporterHandle,
-) where
+) -> anyhow::Result<()>
+where
     W: 'static + Worker + Clone,
     S: 'static + Delete<K, V>,
     K: 'static + Send,
@@ -64,18 +71,19 @@ pub fn handle_unprepared_error<W, S, K, V>(
 {
     let statement = keyspace.delete_statement::<K, V>();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    let Prepare(payload) = Prepare::new().statement(&statement).build();
+    let Prepare(payload) = Prepare::new().statement(&statement).build()?;
     let prepare_worker = PrepareWorker::boxed(id, statement);
     let prepare_request = ReporterEvent::Request {
         worker: prepare_worker,
         payload,
     };
     reporter.send(prepare_request).ok();
-    let req = keyspace.delete_query(&key).consistency(Consistency::One).build();
+    let req = keyspace.delete_query(&key)?.consistency(Consistency::One).build()?;
     let payload = req.into_payload();
     let retry_request = ReporterEvent::Request {
         worker: worker.clone(),
         payload,
     };
     reporter.send(retry_request).ok();
+    Ok(())
 }

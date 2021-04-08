@@ -30,7 +30,7 @@ async fn main() {
         .await
         .future(|apps| async {
             let ws = format!("ws://{}/", "127.0.0.1:8080");
-            let nodes = vec!["172.17.0.2:19042".parse().unwrap()];
+            let nodes = vec![([172, 17, 0, 2], 19042).into()];
             add_nodes(&ws, nodes, 1).await.expect("unable to add nodes");
             apps
         })

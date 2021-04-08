@@ -76,10 +76,10 @@ impl AuthResponse {
         self
     }
     /// Build a response frame with a assigned compression type.
-    pub(crate) fn build(mut self, compression: impl Compression) -> Self {
+    pub(crate) fn build(mut self, compression: impl Compression) -> anyhow::Result<Self> {
         // apply compression flag(if any to the header)
         self.0[1] |= MyCompression::flag();
-        self.0 = compression.compress(self.0);
-        self
+        self.0 = compression.compress(self.0)?;
+        Ok(self)
     }
 }

@@ -3,19 +3,18 @@
 
 use crate::{cluster::*, listener::*, websocket::*};
 
+use anyhow::{anyhow, bail};
 pub use chronicle::*;
 pub use client::add_nodes::add_nodes;
 pub use log::*;
-pub use tokio::{spawn, sync::mpsc};
-
 pub(crate) use scylla_cql::{CqlBuilder, PasswordAuth};
-
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     net::SocketAddr,
     ops::{Deref, DerefMut},
 };
+pub use tokio::{spawn, sync::mpsc};
 
 mod event_loop;
 mod init;

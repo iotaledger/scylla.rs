@@ -7,12 +7,16 @@ use super::*;
 impl<H: ScyllaScope> Terminating<ScyllaHandle<H>> for Listener {
     async fn terminating(
         &mut self,
-        _status: Result<(), Need>,
-        _supervisor: &mut Option<ScyllaHandle<H>>,
+        status: Result<(), Need>,
+        supervisor: &mut Option<ScyllaHandle<H>>,
     ) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Stopping);
         let event = ScyllaEvent::Children(ScyllaChild::Listener(self.service.clone()));
-        let _ = _supervisor.as_mut().unwrap().send(event);
-        _status
+        if let Some(supervisor) = supervisor.as_mut() {
+            supervisor.send(event).ok();
+            status
+        } else {
+            Err(Need::Abort)
+        }
     }
 }

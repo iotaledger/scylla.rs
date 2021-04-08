@@ -45,15 +45,20 @@ where
     H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
-        let rows = Self::decode_response(Decoder::from(giveload));
-        H::handle_response(self, rows)
+        match Decoder::try_from(giveload) {
+            Ok(decoder) => H::handle_response(self, Self::decode_response(decoder)),
+            Err(e) => H::handle_error(self, WorkerError::Other(e)),
+        }
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
         error!("{:?}, reporter running: {}", error, reporter.is_some());
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter);
+                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter).unwrap_or_else(|e| {
+                    error!("Error trying to prepare query: {}", e);
+                    H::handle_error(self, error);
+                });
             }
         } else {
             H::handle_error(self, error);
@@ -101,7 +106,8 @@ pub fn handle_unprepared_error<W, S, K, V>(
     key: &K,
     id: [u8; 16],
     reporter: &ReporterHandle,
-) where
+) -> anyhow::Result<()>
+where
     W: 'static + Worker + Clone,
     S: 'static + Select<K, V>,
     K: 'static + Send,
@@ -109,18 +115,22 @@ pub fn handle_unprepared_error<W, S, K, V>(
 {
     let statement = keyspace.select_statement::<K, V>();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    let Prepare(payload) = Prepare::new().statement(&statement).build();
+    let Prepare(payload) = Prepare::new().statement(&statement).build()?;
     let prepare_worker = Box::new(PrepareWorker::new(id, statement));
     let prepare_request = ReporterEvent::Request {
         worker: prepare_worker,
         payload,
     };
     reporter.send(prepare_request).ok();
-    let req = keyspace.select_query::<V>(&key).consistency(Consistency::One).build();
+    let req = keyspace
+        .select_query::<V>(&key)?
+        .consistency(Consistency::One)
+        .build()?;
     let payload = req.into_payload();
     let retry_request = ReporterEvent::Request {
         worker: worker.clone(),
         payload,
     };
     reporter.send(retry_request).ok();
+    Ok(())
 }

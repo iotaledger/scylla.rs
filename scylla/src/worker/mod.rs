@@ -6,7 +6,8 @@ use crate::{access::*, stage::ReporterHandle};
 use log::*;
 use scylla_cql::CqlError;
 use select::handle_unprepared_error;
-use std::io::Error;
+use std::convert::TryFrom;
+use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
@@ -17,34 +18,25 @@ pub trait Worker: Send {
     fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>);
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 /// The CQL worker error.
 pub enum WorkerError {
     /// The CQL Error reported from ScyllaDB.
+    #[error("Worker CqlError: {0}")]
     Cql(CqlError),
     /// The IO Error.
-    Io(Error),
+    #[error(transparent)]
+    Other(anyhow::Error),
     /// The overload when we do not have any more streams.
+    #[error("Worker Overload")]
     Overload,
     /// We lost the worker due to the abortion of ScyllaDB connection.
+    #[error("Worker Lost")]
     Lost,
     /// There is no ring initialized.
+    #[error("Worker NoRing")]
     NoRing,
 }
-
-impl std::fmt::Display for WorkerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerError::Cql(cql_error) => write!(f, "Worker CqlError: {:?}", cql_error),
-            WorkerError::Io(io_error) => write!(f, "Worker IoError: {:?}", io_error),
-            WorkerError::Overload => write!(f, "Worker Overload"),
-            WorkerError::Lost => write!(f, "Worker Lost"),
-            WorkerError::NoRing => write!(f, "Worker NoRing"),
-        }
-    }
-}
-
-impl std::error::Error for WorkerError {}
 
 /// should be implemented on the handle of the worker
 pub trait HandleResponse<W: Worker + DecodeResponse<Self::Response>>: Send {

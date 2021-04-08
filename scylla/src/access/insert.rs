@@ -54,7 +54,7 @@ use super::*;
 /// ### Usage
 /// ```
 /// let res = keyspace // A Scylla keyspace
-///     .insert(&my_key, &my_value) // Get the Insert Request with a key and value
+///     .insert(&my_key, &my_value)? // Get the Insert Request with a key and value
 ///     .send_global(worker); // Send the request to the Ring
 /// ```
 pub trait Insert<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
@@ -73,17 +73,17 @@ pub trait Insert<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
 }
 
 pub trait InsertRecommended<S: Insert<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return;
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return>;
 }
 
 impl<S: Insert<K, V>, K, V> InsertRecommended<S, K, V> for QueryStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
         Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
     }
 }
 
 impl<S: Insert<K, V>, K, V> InsertRecommended<S, K, V> for PreparedStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
         Self::encode_statement(query_or_batch, &keyspace.id())
     }
 }
@@ -91,53 +91,69 @@ impl<S: Insert<K, V>, K, V> InsertRecommended<S, K, V> for PreparedStatement {
 /// Wrapper for the `Insert` trait which provides the `insert` function
 pub trait GetInsertRequest<S, K, V> {
     /// Calls the appropriate `Insert` implementation for this Key/Value pair
-    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> anyhow::Result<InsertBuilder<'a, S, K, V, QueryConsistency>>
     where
         S: Insert<K, V>;
-    fn insert_query<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert_query<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> anyhow::Result<InsertBuilder<'a, S, K, V, QueryConsistency>>
     where
         S: Insert<K, V>;
-    fn insert_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert_prepared<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> anyhow::Result<InsertBuilder<'a, S, K, V, QueryConsistency>>
     where
         S: Insert<K, V>;
 }
 
 impl<S: Insert<K, V>, K, V> GetInsertRequest<S, K, V> for S {
-    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> anyhow::Result<InsertBuilder<'a, S, K, V, QueryConsistency>>
     where
         S: Insert<K, V>,
     {
-        InsertBuilder {
+        Ok(InsertBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
             value,
-            builder: S::QueryOrPrepared::make(Query::new(), self),
-        }
+            builder: S::QueryOrPrepared::make(Query::new(), self)?,
+        })
     }
-    fn insert_query<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert_query<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> anyhow::Result<InsertBuilder<'a, S, K, V, QueryConsistency>>
     where
         S: Insert<K, V>,
     {
-        InsertBuilder {
+        Ok(InsertBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
             value,
-            builder: <QueryStatement as InsertRecommended<S, K, V>>::make(Query::new(), self),
-        }
+            builder: <QueryStatement as InsertRecommended<S, K, V>>::make(Query::new(), self)?,
+        })
     }
-    fn insert_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert_prepared<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> anyhow::Result<InsertBuilder<'a, S, K, V, QueryConsistency>>
     where
         S: Insert<K, V>,
     {
-        InsertBuilder {
+        Ok(InsertBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
             value,
-            builder: <PreparedStatement as InsertRecommended<S, K, V>>::make(Query::new(), self),
-        }
+            builder: <PreparedStatement as InsertRecommended<S, K, V>>::make(Query::new(), self)?,
+        })
     }
 }
 pub struct InsertBuilder<'a, S, K, V, Stage> {
@@ -170,19 +186,19 @@ impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryValues> {
         }
     }
     /// Build the InsertRequest
-    pub fn build(self) -> InsertRequest<S, K, V> {
-        let query = self.builder.build();
+    pub fn build(self) -> anyhow::Result<InsertRequest<S, K, V>> {
+        let query = self.builder.build()?;
         // create the request
-        self.keyspace.create_request(query, S::token(self.key))
+        Ok(self.keyspace.create_request(query, S::token(self.key)))
     }
 }
 
 impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryBuild> {
     /// Build the InsertRequest
-    pub fn build(self) -> InsertRequest<S, K, V> {
-        let query = self.builder.build();
+    pub fn build(self) -> anyhow::Result<InsertRequest<S, K, V>> {
+        let query = self.builder.build()?;
         // create the request
-        self.keyspace.create_request(query, S::token(self.key))
+        Ok(self.keyspace.create_request(query, S::token(self.key)))
     }
 }
 

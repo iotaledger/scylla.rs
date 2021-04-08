@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{reporter::*, *};
+use anyhow::anyhow;
 use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf};
 
 mod event_loop;

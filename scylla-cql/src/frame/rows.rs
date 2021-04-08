@@ -3,6 +3,9 @@
 
 //! This module defines the row/column decoder/encoder for the frame structure.
 
+use anyhow::ensure;
+use log::error;
+
 use super::{ColumnDecoder, Frame};
 use std::{
     collections::HashMap,
@@ -77,25 +80,27 @@ impl Metadata {
 /// Rows trait to decode the final result from scylla
 pub trait Rows: Iterator {
     /// create new rows decoder struct
-    fn new(decoder: super::decoder::Decoder) -> Self;
+    fn new(decoder: super::decoder::Decoder) -> anyhow::Result<Self>
+    where
+        Self: Sized;
     /// Take the paging_state from the Rows result
     fn take_paging_state(&mut self) -> Option<Vec<u8>>;
 }
 
 pub trait Row: Sized {
     /// Get the rows iterator
-    fn rows_iter(decoder: super::Decoder) -> super::Iter<Self> {
+    fn rows_iter(decoder: super::Decoder) -> anyhow::Result<super::Iter<Self>> {
         super::Iter::new(decoder)
     }
     /// Define how to decode the row
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized;
 }
 
 pub trait ColumnValue {
     /// Decode the column value of C type;
-    fn column_value<C: ColumnDecoder>(&mut self) -> C;
+    fn column_value<C: ColumnDecoder>(&mut self) -> anyhow::Result<C>;
 }
 
 #[allow(unused)]
@@ -115,19 +120,20 @@ impl<T: Row> Iter<T> {
     }
 }
 impl<T: Row> Rows for Iter<T> {
-    fn new(decoder: super::Decoder) -> Self {
-        let metadata = decoder.metadata();
+    fn new(decoder: super::Decoder) -> anyhow::Result<Self> {
+        let metadata = decoder.metadata()?;
         let rows_start = metadata.rows_start();
         let column_start = rows_start + 4;
-        let rows_count = i32::from_be_bytes(decoder.buffer_as_ref()[rows_start..column_start].try_into().unwrap());
-        Self {
+        ensure!(decoder.buffer_as_ref().len() >= column_start, "Buffer is too small!");
+        let rows_count = i32::from_be_bytes(decoder.buffer_as_ref()[rows_start..column_start].try_into()?);
+        Ok(Self {
             decoder,
             metadata,
             rows_count: rows_count as usize,
             remaining_rows_count: rows_count as usize,
             column_start,
             _marker: std::marker::PhantomData,
-        }
+        })
     }
     fn take_paging_state(&mut self) -> Option<Vec<u8>> {
         self.metadata.take_paging_state()
@@ -140,7 +146,7 @@ impl<T: Row> Iterator for Iter<T> {
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
         if self.remaining_rows_count > 0 {
             self.remaining_rows_count -= 1;
-            Some(T::decode_row(self).into())
+            T::try_decode_row(self).map_err(|e| error!("{}", e)).ok()
         } else {
             None
         }
@@ -148,20 +154,24 @@ impl<T: Row> Iterator for Iter<T> {
 }
 
 impl<T: Row> ColumnValue for Iter<T> {
-    fn column_value<C: ColumnDecoder>(&mut self) -> C {
-        let length = i32::from_be_bytes(
-            self.decoder.buffer_as_ref()[self.column_start..][..4]
-                .try_into()
-                .unwrap(),
+    fn column_value<C: ColumnDecoder>(&mut self) -> anyhow::Result<C> {
+        ensure!(
+            self.decoder.buffer_as_ref().len() >= self.column_start + 4,
+            "Buffer is too small!"
         );
+        let length = i32::from_be_bytes(self.decoder.buffer_as_ref()[self.column_start..][..4].try_into()?);
         self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
         if length > 0 {
+            ensure!(
+                self.decoder.buffer_as_ref().len() >= self.column_start + length as usize,
+                "Buffer is too small!"
+            );
             let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
             // update the next column_start to start from next column
             self.column_start += length as usize;
-            C::decode(col_slice)
+            C::try_decode(col_slice)
         } else {
-            C::decode(&[])
+            C::try_decode(&[])
         }
     }
 }
@@ -169,13 +179,12 @@ impl<T: Row> ColumnValue for Iter<T> {
 macro_rules! row {
     (@tuple ($($t:tt),*)) => {
         impl<$($t: ColumnDecoder),*> Row for ($($t,)*) {
-            fn decode_row<R: ColumnValue>(rows: &mut R) -> Self {
-                (
+            fn try_decode_row<R: ColumnValue>(rows: &mut R) -> anyhow::Result<Self> {
+                Ok((
                     $(
-                        rows.column_value::<$t>(),
+                        rows.column_value::<$t>()?,
                     )*
-                )
-
+                ))
             }
         }
     };
@@ -199,7 +208,7 @@ row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTT
 row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT, TTTTTTTTTTTTTT, TTTTTTTTTTTTTTT));
 
 impl<T: ColumnDecoder> Row for Option<T> {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -208,7 +217,7 @@ impl<T: ColumnDecoder> Row for Option<T> {
 }
 
 impl Row for i64 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -217,7 +226,7 @@ impl Row for i64 {
 }
 
 impl Row for u64 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -226,7 +235,7 @@ impl Row for u64 {
 }
 
 impl Row for f64 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -235,7 +244,7 @@ impl Row for f64 {
 }
 
 impl Row for i32 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -244,7 +253,7 @@ impl Row for i32 {
 }
 
 impl Row for u32 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -253,7 +262,7 @@ impl Row for u32 {
 }
 
 impl Row for f32 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -262,7 +271,7 @@ impl Row for f32 {
 }
 
 impl Row for i16 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -271,7 +280,7 @@ impl Row for i16 {
 }
 
 impl Row for u16 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -280,7 +289,7 @@ impl Row for u16 {
 }
 
 impl Row for i8 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -289,7 +298,7 @@ impl Row for i8 {
 }
 
 impl Row for u8 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -298,7 +307,7 @@ impl Row for u8 {
 }
 
 impl Row for String {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -307,7 +316,7 @@ impl Row for String {
 }
 
 impl Row for IpAddr {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -316,7 +325,7 @@ impl Row for IpAddr {
 }
 
 impl Row for Ipv4Addr {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -325,7 +334,7 @@ impl Row for Ipv4Addr {
 }
 
 impl Row for Ipv6Addr {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -337,7 +346,7 @@ impl<E> Row for Vec<E>
 where
     E: ColumnDecoder,
 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -351,7 +360,7 @@ where
     V: ColumnDecoder,
     S: ::std::hash::BuildHasher + Default,
 {
-    fn decode_row<R: Rows + ColumnValue>(rows: &mut R) -> Self
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -390,23 +399,23 @@ macro_rules! rows {
         #[allow(unused_parens)]
         impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
             /// Create a new rows structure.
-            fn new(decoder: Decoder) -> Self {
-                let metadata = decoder.metadata();
+            fn new(decoder: Decoder) -> anyhow::Result<Self> {
+                let metadata = decoder.metadata()?;
                 let rows_start = metadata.rows_start();
                 let column_start = rows_start + 4;
+                anyhow::ensure!(decoder.buffer_as_ref().len() >= column_start, "Buffer is too small!");
                 let rows_count = i32::from_be_bytes(
                     decoder.buffer_as_ref()[rows_start..column_start]
-                        .try_into()
-                        .unwrap(),
+                        .try_into()?,
                 );
-                Self {
+                Ok(Self {
                     decoder,
                     metadata,
                     rows_count: rows_count as usize,
                     remaining_rows_count: rows_count as usize,
                     column_start,
                     $(_marker: PhantomData::<($($t),+)>,)?
-                }
+                })
             }
             fn take_paging_state(&mut self) -> Option<Vec<u8>> {
                 self.metadata.take_paging_state()
@@ -431,6 +440,10 @@ macro_rules! rows {
                     let row_struct = $row {
                         $(
                             $col_field: {
+                                if self.decoder.buffer_as_ref().len() < self.column_start + 4 {
+                                    log::error!("Buffer is too small!");
+                                    return None;
+                                }
                                 let length = i32::from_be_bytes(
                                     self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
                                 );
@@ -439,9 +452,9 @@ macro_rules! rows {
                                     let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
                                     // update the next column_start to start from next column
                                     self.column_start += (length as usize);
-                                    <$col_type>::decode(col_slice)
+                                    <$col_type>::try_decode(col_slice).map_err(|e| log::error!("{}", e)).ok()?
                                 } else {
-                                    <$col_type>::decode(&[])
+                                    <$col_type>::try_decode(&[]).map_err(|e| log::error!("{}", e)).ok()?
                                 }
                             },
                         )*
@@ -475,6 +488,10 @@ macro_rules! rows {
             fn next(&mut self) -> Option<<Self as Iterator>::Item> {
                 if self.remaining_rows_count > 0 {
                     self.remaining_rows_count -= 1;
+                    if self.decoder.buffer_as_ref().len() < self.column_start + 4 {
+                        log::error!("Buffer is too small!");
+                        return None;
+                    }
                     let length = i32::from_be_bytes(
                         self.decoder.buffer_as_ref()[self.column_start..][..4]
                             .try_into()
@@ -485,9 +502,9 @@ macro_rules! rows {
                         let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
                         // update the next column_start to start from next column
                         self.column_start += (length as usize);
-                        Some(<$row>::decode(col_slice).into())
+                        <$row>::try_decode(col_slice).map_err(|e| log::error!("{}", e)).ok().into()
                     } else {
-                        Some(<$row>::decode(&[]).into())
+                        <$row>::try_decode(&[]).map_err(|e| log::error!("{}", e)).ok().into()
                     }
                 } else {
                     None

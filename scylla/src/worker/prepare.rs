@@ -58,7 +58,7 @@ impl Worker for PrepareWorker {
     fn handle_response(self: Box<Self>, _giveload: Vec<u8>) {
         info!("Successfully prepared statement: '{}'", self.statement);
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>) {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &Option<ReporterHandle>) {
         error!("Failed to prepare statement: {}, error: {}", self.statement, error);
     }
 }

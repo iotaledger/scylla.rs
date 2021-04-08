@@ -57,15 +57,20 @@ where
     H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
-        let rows = Self::decode_response(Decoder::from(giveload));
-        H::handle_response(self, rows)
+        match Decoder::try_from(giveload) {
+            Ok(decoder) => H::handle_response(self, Self::decode_response(decoder)),
+            Err(e) => H::handle_error(self, WorkerError::Other(e)),
+        }
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
         error!("{:?}, reporter running: {}", error, reporter.is_some());
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter);
+                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter).unwrap_or_else(|e| {
+                    error!("Error trying to prepare query: {}", e);
+                    H::handle_error(self, error);
+                });
             }
         } else {
             H::handle_error(self, error);

@@ -287,22 +287,22 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchFlags> {
         }
     }
     /// Build a Batch frame.
-    pub fn build(mut self) -> Batch {
+    pub fn build(mut self) -> anyhow::Result<Batch> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // add noflags byte for batch flags
         self.buffer.push(NOFLAGS);
         // adjust the querycount
         self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = MyCompression::get().compress(self.buffer);
-        Batch(self.buffer)
+        self.buffer = MyCompression::get().compress(self.buffer)?;
+        Ok(Batch(self.buffer))
     }
 }
 
 impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchTimestamp> {
     /// Set the timestamp of the Batch frame.
     pub fn timestamp(mut self, timestamp: i64) -> BatchBuilder<Type, BatchBuild> {
-        *self.buffer.last_mut().unwrap() |= TIMESTAMP;
+        self.buffer.last_mut().map(|last_byte| *last_byte |= TIMESTAMP);
         self.buffer.extend(&BE_8_BYTES_LEN);
         self.buffer.extend(&i64::to_be_bytes(timestamp));
         BatchBuilder {
@@ -313,25 +313,25 @@ impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchTimestamp> {
         }
     }
     /// Build a Batch frame.
-    pub fn build(mut self) -> Batch {
+    pub fn build(mut self) -> anyhow::Result<Batch> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // adjust the querycount
         self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = MyCompression::get().compress(self.buffer);
-        Batch(self.buffer)
+        self.buffer = MyCompression::get().compress(self.buffer)?;
+        Ok(Batch(self.buffer))
     }
 }
 
 impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchBuild> {
     /// Build a Batch frame.
-    pub fn build(mut self) -> Batch {
+    pub fn build(mut self) -> anyhow::Result<Batch> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // adjust the querycount
         self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = MyCompression::get().compress(self.buffer);
-        Batch(self.buffer)
+        self.buffer = MyCompression::get().compress(self.buffer)?;
+        Ok(Batch(self.buffer))
     }
 }
 impl Batch {
@@ -359,6 +359,7 @@ mod tests {
             .id(&[0; 16]) // add second query(prepared one) to the batch
             .value(&"JUNK_VALUE") // junk value
             .consistency(Consistency::One)
-            .build();
+            .build()
+            .unwrap();
     }
 }

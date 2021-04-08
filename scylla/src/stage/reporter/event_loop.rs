@@ -10,133 +10,149 @@ impl EventLoop<StageHandle> for Reporter {
         _status: Result<(), Need>,
         supervisor: &mut Option<StageHandle>,
     ) -> Result<(), Need> {
-        while let Some(event) = self.inbox.rx.recv().await {
-            match event {
-                ReporterEvent::Request { worker, mut payload } => {
-                    if let Some(stream) = self.streams.pop() {
-                        // Send the event
-                        match &self.sender_handle {
-                            Some(sender) => {
-                                // Assign stream_id to the payload
-                                assign_stream_to_payload(stream, &mut payload);
-                                // store payload as reusable at payloads[stream]
-                                self.payloads[stream as usize].as_mut().replace(payload);
-                                sender.send(stream).unwrap();
-                                self.workers.insert(stream, worker);
+        if let Some(supervisor) = supervisor.as_ref() {
+            while let Some(event) = self.inbox.rx.recv().await {
+                match event {
+                    ReporterEvent::Request { worker, mut payload } => {
+                        if let Some(stream) = self.streams.pop() {
+                            // Send the event
+                            match &self.sender_handle {
+                                Some(sender) => {
+                                    // Assign stream_id to the payload
+                                    assign_stream_to_payload(stream, &mut payload);
+                                    // store payload as reusable at payloads[stream]
+                                    self.payloads[stream as usize].as_mut().replace(payload);
+                                    sender.send(stream).unwrap_or_else(|e| error!("{}", e));
+                                    self.workers.insert(stream, worker);
+                                }
+                                None => {
+                                    // return the stream_id
+                                    self.streams.push(stream);
+                                    // This means the sender_tx had been droped as a result of checkpoint from
+                                    // receiver
+                                    worker.handle_error(WorkerError::Other(anyhow!("No Sender!")), &self.handle);
+                                }
                             }
-                            None => {
-                                // return the stream_id
-                                self.streams.push(stream);
-                                // This means the sender_tx had been droped as a result of checkpoint from
-                                // receiver
-                                worker.handle_error(
-                                    WorkerError::Io(Error::new(ErrorKind::Other, "No Sender!")),
-                                    &self.handle,
-                                );
-                            }
+                        } else {
+                            // Send overload to the worker in-case we don't have anymore streams
+                            worker.handle_error(WorkerError::Overload, &self.handle);
                         }
-                    } else {
-                        // Send overload to the worker in-case we don't have anymore streams
-                        worker.handle_error(WorkerError::Overload, &self.handle);
                     }
-                }
-                ReporterEvent::Response { stream_id } => {
-                    self.handle_response(stream_id);
-                }
-                ReporterEvent::Err(io_error, stream_id) => {
-                    self.handle_error(stream_id, WorkerError::Io(io_error));
-                }
-                ReporterEvent::Session(session) => {
-                    match session {
-                        Session::New(service, sender_handle) => {
-                            self.session_id += 1;
-                            self.sender_handle = Some(sender_handle);
-                            // update microservice
-                            self.service.update_microservice(service.get_name(), service);
-                            info!(
-                                "address: {}, shard_id: {}, reporter_id: {}, received session: {:?}",
-                                &self.address, self.shard_id, self.reporter_id, self.session_id
-                            );
-                            if !self.service.is_stopping() {
-                                // degraded service
-                                self.service.update_status(ServiceStatus::Degraded);
-                            }
-                        }
-                        Session::Service(service) => {
-                            if service.is_stopped() {
-                                // drop the sender_handle
-                                self.sender_handle = None;
-                            } else {
-                                // do not update the status if service is_stopping
+                    ReporterEvent::Response { stream_id } => {
+                        self.handle_response(stream_id);
+                    }
+                    ReporterEvent::Err(io_error, stream_id) => {
+                        self.handle_error(stream_id, WorkerError::Other(io_error));
+                    }
+                    ReporterEvent::Session(session) => {
+                        match session {
+                            Session::New(service, sender_handle) => {
+                                self.session_id += 1;
+                                self.sender_handle = Some(sender_handle);
+                                // update microservice
+                                self.service.update_microservice(service.get_name(), service);
+                                info!(
+                                    "address: {}, shard_id: {}, reporter_id: {}, received session: {:?}",
+                                    &self.address, self.shard_id, self.reporter_id, self.session_id
+                                );
                                 if !self.service.is_stopping() {
                                     // degraded service
                                     self.service.update_status(ServiceStatus::Degraded);
                                 }
                             }
-                            // update microservices
-                            self.service.update_microservice(service.get_name(), service);
-                            let microservices_len = self.service.microservices.len();
-                            // check if all microservices are stopped
-                            if self.service.microservices.values().all(|ms| ms.is_stopped()) && microservices_len == 2 {
-                                // first we drain workers map from stucked requests, to force_consistency of
-                                // the old_session requests
-                                self.force_consistency();
-                                warn!(
-                                    "address: {}, shard_id: {}, reporter_id: {}, closing session: {:?}",
-                                    &self.address, self.shard_id, self.reporter_id, self.session_id
-                                );
-                                if !self.service.is_stopping() {
-                                    // Maintenance service mode
-                                    self.service.update_status(ServiceStatus::Maintenance);
+                            Session::Service(service) => {
+                                if service.is_stopped() {
+                                    // drop the sender_handle
+                                    self.sender_handle = None;
+                                } else {
+                                    // do not update the status if service is_stopping
+                                    if !self.service.is_stopping() {
+                                        // degraded service
+                                        self.service.update_status(ServiceStatus::Degraded);
+                                    }
                                 }
-                            } else if self.service.microservices.values().all(|ms| ms.is_running())
-                                && microservices_len == 2
-                            {
-                                if !self.service.is_stopping() {
-                                    // running service
-                                    self.service.update_status(ServiceStatus::Running);
-                                }
-                            };
+                                // update microservices
+                                self.service.update_microservice(service.get_name(), service);
+                                let microservices_len = self.service.microservices.len();
+                                // check if all microservices are stopped
+                                if self.service.microservices.values().all(|ms| ms.is_stopped())
+                                    && microservices_len == 2
+                                {
+                                    // first we drain workers map from stucked requests, to force_consistency of
+                                    // the old_session requests
+                                    self.force_consistency();
+                                    warn!(
+                                        "address: {}, shard_id: {}, reporter_id: {}, closing session: {:?}",
+                                        &self.address, self.shard_id, self.reporter_id, self.session_id
+                                    );
+                                    if !self.service.is_stopping() {
+                                        // Maintenance service mode
+                                        self.service.update_status(ServiceStatus::Maintenance);
+                                    }
+                                } else if self.service.microservices.values().all(|ms| ms.is_running())
+                                    && microservices_len == 2
+                                {
+                                    if !self.service.is_stopping() {
+                                        // running service
+                                        self.service.update_status(ServiceStatus::Running);
+                                    }
+                                };
+                            }
+                            Session::Shutdown => {
+                                // drop the sender_handle to gracefully shut it down
+                                self.sender_handle = None;
+                                // drop self handler, otherwise reporter never shutdown.
+                                self.handle = None;
+                                self.service.update_status(ServiceStatus::Stopping);
+                            }
                         }
-                        Session::Shutdown => {
-                            // drop the sender_handle to gracefully shut it down
-                            self.sender_handle = None;
-                            // drop self handler, otherwise reporter never shutdown.
-                            self.handle = None;
-                            self.service.update_status(ServiceStatus::Stopping);
-                        }
+                        let event = StageEvent::Reporter(self.service.clone());
+                        supervisor.send(event).ok();
                     }
-                    let event = StageEvent::Reporter(self.service.clone());
-                    let _ = supervisor.as_ref().unwrap().send(event);
                 }
             }
+            Ok(())
+        } else {
+            Err(Need::Abort)
         }
-        Ok(())
     }
 }
 
 impl Reporter {
     fn handle_response(&mut self, stream: i16) {
         // remove the worker from workers.
-        let worker = self.workers.remove(&stream).unwrap();
-        let payload = self.payloads[stream as usize].as_mut().take().unwrap();
-        if is_cql_error(&payload) {
-            let cql_error = CqlError::new(&Decoder::from(payload));
-            let error = WorkerError::Cql(cql_error);
-            worker.handle_error(error, &self.handle);
+        if let Some(worker) = self.workers.remove(&stream) {
+            if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
+                if is_cql_error(&payload) {
+                    let error = Decoder::try_from(payload)
+                        .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
+                        .unwrap_or_else(|e| WorkerError::Other(e));
+                    worker.handle_error(error, &self.handle);
+                } else {
+                    worker.handle_response(payload);
+                }
+                // push the stream_id back to streams vector.
+                self.streams.push(stream);
+            } else {
+                error!("No payload found for stream {}!", stream);
+            }
         } else {
-            worker.handle_response(payload);
+            error!("No worker found for stream {}!", stream);
         }
-        // push the stream_id back to streams vector.
-        self.streams.push(stream);
     }
     fn handle_error(&mut self, stream: i16, error: WorkerError) {
         // remove the worker from workers and send error.
-        let worker = self.workers.remove(&stream).unwrap();
-        // drop payload.
-        self.payloads[stream as usize].as_mut().take().unwrap();
-        worker.handle_error(error, &self.handle);
-        // push the stream_id back to streams vector.
-        self.streams.push(stream);
+        if let Some(worker) = self.workers.remove(&stream) {
+            // drop payload.
+            if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
+                worker.handle_error(error, &self.handle);
+                // push the stream_id back to streams vector.
+                self.streams.push(stream);
+            } else {
+                error!("No payload found for stream {}!", stream);
+            }
+        } else {
+            error!("No worker found for stream {}!", stream);
+        }
     }
 }

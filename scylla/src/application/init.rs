@@ -7,7 +7,11 @@ use super::*;
 impl<H: ScyllaScope> Init<H> for Scylla<H> {
     async fn init(&mut self, status: Result<(), Need>, supervisor: &mut Option<H>) -> Result<(), Need> {
         self.service.update_status(ServiceStatus::Initializing);
-        let _ = supervisor.as_mut().unwrap().status_change(self.service.clone());
-        status
+        if let Some(supervisor) = supervisor.as_mut() {
+            supervisor.status_change(self.service.clone());
+            status
+        } else {
+            Err(Need::Abort)
+        }
     }
 }

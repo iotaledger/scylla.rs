@@ -7,12 +7,14 @@ use super::{
     consistency::Consistency,
     decoder::{self, Decoder, Frame},
 };
-use std::{
-    convert::{From, TryInto},
-    mem::transmute,
-};
+use anyhow::{anyhow, bail};
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
+use std::convert::{TryFrom, TryInto};
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("{message}")]
 /// The CQL error structure.
 pub struct CqlError {
     /// The Error code.
@@ -25,64 +27,68 @@ pub struct CqlError {
 
 impl CqlError {
     /// Get the CQL error from the frame decoder.
-    pub fn new(decoder: &Decoder) -> Self {
-        Self::from(decoder.body())
+    pub fn new(decoder: &Decoder) -> anyhow::Result<CqlError> {
+        Self::try_from(decoder.body()?)
     }
 }
 
-impl From<&[u8]> for CqlError {
-    fn from(slice: &[u8]) -> Self {
-        let code = ErrorCodes::from(slice);
-        let message = decoder::string(&slice[4..]);
+impl TryFrom<&[u8]> for CqlError {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let code = ErrorCodes::try_from(slice)?;
+        let message = decoder::string(&slice[4..])?;
         let additional: Option<Additional>;
         match code {
             ErrorCodes::UnavailableException => {
-                additional = Some(Additional::UnavailableException(UnavailableException::from(
+                additional = Some(Additional::UnavailableException(UnavailableException::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::WriteTimeout => {
-                additional = Some(Additional::WriteTimeout(WriteTimeout::from(
+                additional = Some(Additional::WriteTimeout(WriteTimeout::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::ReadTimeout => {
-                additional = Some(Additional::ReadTimeout(ReadTimeout::from(
+                additional = Some(Additional::ReadTimeout(ReadTimeout::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::ReadFailure => {
-                additional = Some(Additional::ReadFailure(ReadFailure::from(
+                additional = Some(Additional::ReadFailure(ReadFailure::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::FunctionFailure => {
-                additional = Some(Additional::FunctionFailure(FunctionFailure::from(
+                additional = Some(Additional::FunctionFailure(FunctionFailure::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::WriteFailure => {
-                additional = Some(Additional::WriteFailure(WriteFailure::from(
+                additional = Some(Additional::WriteFailure(WriteFailure::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::AlreadyExists => {
-                additional = Some(Additional::AlreadyExists(AlreadyExists::from(
+                additional = Some(Additional::AlreadyExists(AlreadyExists::try_from(
                     &slice[(6 + message.len()..)],
-                )))
+                )?))
             }
             ErrorCodes::Unprepared => {
-                additional = Some(Additional::Unprepared(Unprepared::from(&slice[(6 + message.len()..)])))
+                additional = Some(Additional::Unprepared(Unprepared::try_from(
+                    &slice[(6 + message.len()..)],
+                )?))
             }
             _ => {
                 additional = None;
             }
         }
-        CqlError {
+        Ok(CqlError {
             code,
             message,
             additional,
-        }
+        })
     }
 }
 
@@ -134,7 +140,8 @@ pub const CONFIGURE_ERROR: i32 = 0x2300;
 pub const ALREADY_EXISTS: i32 = 0x2400;
 /// The Error code of `UNPREPARED`.
 pub const UNPREPARED: i32 = 0x2500;
-#[derive(Debug)]
+
+#[derive(Debug, FromPrimitive)]
 #[repr(i32)]
 /// The Error code enum.
 pub enum ErrorCodes {
@@ -175,6 +182,7 @@ pub enum ErrorCodes {
     /// The Error code is `UNPREPARED`.
     Unprepared = 0x2500,
 }
+
 #[derive(Debug)]
 /// The additional error information enum.
 pub enum Additional {
@@ -205,12 +213,14 @@ pub struct UnavailableException {
     /// The number of replicas that were known to be alive when the request had been processed.
     pub alive: i32,
 }
-impl From<&[u8]> for UnavailableException {
-    fn from(slice: &[u8]) -> Self {
-        let cl = Consistency::from(slice);
-        let required = i32::from_be_bytes(slice[2..6].try_into().unwrap());
-        let alive = i32::from_be_bytes(slice[6..10].try_into().unwrap());
-        Self { cl, required, alive }
+impl TryFrom<&[u8]> for UnavailableException {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let cl = Consistency::try_from(slice)?;
+        let required = i32::from_be_bytes(slice[2..6].try_into()?);
+        let alive = i32::from_be_bytes(slice[6..10].try_into()?);
+        Ok(Self { cl, required, alive })
     }
 }
 #[derive(Debug)]
@@ -225,18 +235,20 @@ pub struct WriteTimeout {
     /// That describe the type of the write that timed out.
     pub writetype: WriteType,
 }
-impl From<&[u8]> for WriteTimeout {
-    fn from(slice: &[u8]) -> Self {
-        let cl = Consistency::from(slice);
-        let received = i32::from_be_bytes(slice[2..6].try_into().unwrap());
-        let blockfor = i32::from_be_bytes(slice[6..10].try_into().unwrap());
-        let writetype = WriteType::from(&slice[10..]);
-        Self {
+impl TryFrom<&[u8]> for WriteTimeout {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let cl = Consistency::try_from(slice)?;
+        let received = i32::from_be_bytes(slice[2..6].try_into()?);
+        let blockfor = i32::from_be_bytes(slice[6..10].try_into()?);
+        let writetype = WriteType::try_from(&slice[10..])?;
+        Ok(Self {
             cl,
             received,
             blockfor,
             writetype,
-        }
+        })
     }
 }
 #[derive(Debug)]
@@ -258,18 +270,20 @@ impl ReadTimeout {
         self.data_present == 0
     }
 }
-impl From<&[u8]> for ReadTimeout {
-    fn from(slice: &[u8]) -> Self {
-        let cl = Consistency::from(slice);
-        let received = i32::from_be_bytes(slice[2..6].try_into().unwrap());
-        let blockfor = i32::from_be_bytes(slice[6..10].try_into().unwrap());
+impl TryFrom<&[u8]> for ReadTimeout {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let cl = Consistency::try_from(slice)?;
+        let received = i32::from_be_bytes(slice[2..6].try_into()?);
+        let blockfor = i32::from_be_bytes(slice[6..10].try_into()?);
         let data_present = slice[10];
-        Self {
+        Ok(Self {
             cl,
             received,
             blockfor,
             data_present,
-        }
+        })
     }
 }
 #[derive(Debug)]
@@ -294,20 +308,22 @@ impl ReadFailure {
         self.data_present == 0
     }
 }
-impl From<&[u8]> for ReadFailure {
-    fn from(slice: &[u8]) -> Self {
-        let cl = Consistency::from(slice);
-        let received = i32::from_be_bytes(slice[2..6].try_into().unwrap());
-        let blockfor = i32::from_be_bytes(slice[6..10].try_into().unwrap());
-        let num_failures = i32::from_be_bytes(slice[10..14].try_into().unwrap());
+impl TryFrom<&[u8]> for ReadFailure {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let cl = Consistency::try_from(slice)?;
+        let received = i32::from_be_bytes(slice[2..6].try_into()?);
+        let blockfor = i32::from_be_bytes(slice[6..10].try_into()?);
+        let num_failures = i32::from_be_bytes(slice[10..14].try_into()?);
         let data_present = slice[14];
-        Self {
+        Ok(Self {
             cl,
             received,
             blockfor,
             num_failures,
             data_present,
-        }
+        })
     }
 }
 #[derive(Debug)]
@@ -321,16 +337,18 @@ pub struct FunctionFailure {
     pub arg_types: Vec<String>,
 }
 
-impl From<&[u8]> for FunctionFailure {
-    fn from(slice: &[u8]) -> Self {
-        let keyspace = decoder::string(slice);
-        let function = decoder::string(&slice[2 + keyspace.len()..]);
-        let arg_types = decoder::string_list(&slice[4 + keyspace.len() + function.len()..]);
-        Self {
+impl TryFrom<&[u8]> for FunctionFailure {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let keyspace = decoder::string(slice)?;
+        let function = decoder::string(&slice[2 + keyspace.len()..])?;
+        let arg_types = decoder::string_list(&slice[4 + keyspace.len() + function.len()..])?;
+        Ok(Self {
             keyspace,
             function,
             arg_types,
-        }
+        })
     }
 }
 #[derive(Debug)]
@@ -348,20 +366,22 @@ pub struct WriteFailure {
     pub writetype: WriteType,
 }
 
-impl From<&[u8]> for WriteFailure {
-    fn from(slice: &[u8]) -> Self {
-        let cl = Consistency::from(slice);
-        let received = i32::from_be_bytes(slice[2..6].try_into().unwrap());
-        let blockfor = i32::from_be_bytes(slice[6..10].try_into().unwrap());
-        let num_failures = i32::from_be_bytes(slice[10..14].try_into().unwrap());
-        let writetype = WriteType::from(&slice[14..]);
-        Self {
+impl TryFrom<&[u8]> for WriteFailure {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let cl = Consistency::try_from(slice)?;
+        let received = i32::from_be_bytes(slice[2..6].try_into()?);
+        let blockfor = i32::from_be_bytes(slice[6..10].try_into()?);
+        let num_failures = i32::from_be_bytes(slice[10..14].try_into()?);
+        let writetype = WriteType::try_from(&slice[14..])?;
+        Ok(Self {
             cl,
             received,
             blockfor,
             num_failures,
             writetype,
-        }
+        })
     }
 }
 #[derive(Debug)]
@@ -375,11 +395,13 @@ pub struct AlreadyExists {
     pub table: String,
 }
 
-impl From<&[u8]> for AlreadyExists {
-    fn from(slice: &[u8]) -> Self {
-        let ks = decoder::string(slice);
-        let table = decoder::string(slice[2 + ks.len()..].try_into().unwrap());
-        Self { ks, table }
+impl TryFrom<&[u8]> for AlreadyExists {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let ks = decoder::string(slice)?;
+        let table = decoder::string(slice[2 + ks.len()..].try_into()?)?;
+        Ok(Self { ks, table })
     }
 }
 #[derive(Debug)]
@@ -389,10 +411,13 @@ pub struct Unprepared {
     pub id: [u8; 16],
 }
 
-impl From<&[u8]> for Unprepared {
-    fn from(slice: &[u8]) -> Self {
-        let id = decoder::prepared_id(slice);
-        Self { id }
+impl TryFrom<&[u8]> for Unprepared {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: decoder::prepared_id(slice)?,
+        })
     }
 }
 #[derive(Debug)]
@@ -416,9 +441,11 @@ pub enum WriteType {
     Cdc,
 }
 
-impl From<&[u8]> for WriteType {
-    fn from(slice: &[u8]) -> Self {
-        match decoder::str(slice) {
+impl TryFrom<&[u8]> for WriteType {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(match decoder::str(slice)? {
             "SIMPLE" => WriteType::Simple,
             "BATCH" => WriteType::Batch,
             "UNLOGGED_BATCH" => WriteType::UnloggedBatch,
@@ -427,15 +454,16 @@ impl From<&[u8]> for WriteType {
             "CAS" => WriteType::Cas,
             "VIEW" => WriteType::View,
             "CDC" => WriteType::Cdc,
-            _ => {
-                panic!("unexpected writetype error");
-            }
-        }
+            _ => bail!("unexpected writetype error"),
+        })
     }
 }
 
-impl From<&[u8]> for ErrorCodes {
-    fn from(slice: &[u8]) -> ErrorCodes {
-        unsafe { transmute(i32::from_be_bytes(slice[0..4].try_into().unwrap())) }
+impl TryFrom<&[u8]> for ErrorCodes {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        let code = i32::from_be_bytes(slice[0..4].try_into()?);
+        ErrorCodes::from_i32(code).ok_or(anyhow!("No error code found for {}", code))
     }
 }

@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::access::{delete::DeleteRecommended, insert::InsertRecommended, update::UpdateRecommended};
 use dyn_clone::DynClone;
 use scylla_cql::{
     BatchBuild, BatchBuilder, BatchFlags, BatchStatementOrId, BatchTimestamp, BatchType, BatchTypeCounter,
-    BatchTypeLogged, BatchTypeUnlogged, BatchTypeUnset, BatchValues, ColumnEncoder, Consistency,
+    BatchTypeLogged, BatchTypeUnlogged, BatchTypeUnset, BatchValues, Consistency,
 };
 use std::{any::Any, collections::HashMap, marker::PhantomData};
-
-use crate::access::{delete::DeleteRecommended, insert::InsertRecommended, update::UpdateRecommended};
 
 /// An aggregation trait which defines a statement marker of any type
 pub trait AnyStatement<S>: Any + Statement<S> + Send + DynClone {}
@@ -219,7 +218,7 @@ impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementOrId> {
     /// Append an insert query using the default query type defined in the `InsertBatch` impl
     /// and the statement defined in the `Insert` impl.
-    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Insert<K, V>,
         K: 'static + Clone + Send,
@@ -237,28 +236,28 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace)?;
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: Insert<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <QueryStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Insert<K, V>,
         K: 'static + Clone + Send,
@@ -274,16 +273,16 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <PreparedStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
     /// and the statement defined in the `Update` impl.
-    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Update<K, V>,
         K: 'static + Clone + Send,
@@ -301,28 +300,28 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         };
 
         // this will advnace the builder as defined in the Update<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace)?;
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: Update<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <QueryStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Update<K, V>,
         K: 'static + Clone + Send,
@@ -338,16 +337,16 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <PreparedStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
     /// and the statement defined in the `Delete` impl.
-    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete<K, V>(mut self, key: &K) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Delete<K, V>,
         K: 'static + Clone + Send,
@@ -365,28 +364,28 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace)?;
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: Delete<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <QueryStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Delete<K, V>,
         K: 'static + Clone + Send,
@@ -402,18 +401,18 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <PreparedStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     /// Append an insert query using the default query type defined in the `InsertBatch` impl
     /// and the statement defined in the `Insert` impl.
-    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Insert<K, V>,
         K: 'static + Clone + Send,
@@ -431,28 +430,28 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace)?;
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: Insert<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <QueryStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Insert<K, V>,
         K: 'static + Clone + Send,
@@ -468,16 +467,16 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <PreparedStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
     /// and the statement defined in the `Update` impl.
-    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Update<K, V>,
         K: 'static + Clone + Send,
@@ -495,28 +494,28 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         };
 
         // this will advnace the builder as defined in the Update<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace)?;
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: Update<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <QueryStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Update<K, V>,
         K: 'static + Clone + Send,
@@ -532,16 +531,16 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <PreparedStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
     /// and the statement defined in the `Delete` impl.
-    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete<K, V>(mut self, key: &K) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Delete<K, V>,
         K: 'static + Clone + Send,
@@ -559,28 +558,28 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace)?;
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: Delete<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <QueryStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> anyhow::Result<BatchCollector<S, Type, BatchValues>>
     where
         S: 'static + Delete<K, V>,
         K: 'static + Clone + Send,
@@ -596,11 +595,11 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = <PreparedStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace)?;
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Ok(Self::step(builder, self.map, self.keyspace))
     }
 
     /// Set the consistency for this batch
@@ -619,13 +618,13 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchFlags> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> BatchRequest<S> {
-        BatchRequest {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
+        Ok(BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
-            inner: self.builder.build().0.into(),
+            inner: self.builder.build()?.0.into(),
             keyspace: self.keyspace,
-        }
+        })
     }
 }
 
@@ -635,25 +634,25 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchTimestamp>
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> BatchRequest<S> {
-        BatchRequest {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
+        Ok(BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
-            inner: self.builder.build().0.into(),
+            inner: self.builder.build()?.0.into(),
             keyspace: self.keyspace,
-        }
+        })
     }
 }
 
 impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchBuild> {
     /// Build the batch request using the current collector
-    pub fn build(self) -> BatchRequest<S> {
-        BatchRequest {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
+        Ok(BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
-            inner: self.builder.build().0.into(),
+            inner: self.builder.build()?.0.into(),
             keyspace: self.keyspace,
-        }
+        })
     }
 }
 

@@ -82,8 +82,8 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub(crate) fn clone_handle(&self) -> ClusterHandle {
-        self.handle.clone().unwrap()
+    pub(crate) fn clone_handle(&self) -> Option<ClusterHandle> {
+        self.handle.clone()
     }
 }
 /// Cluster Event type
@@ -100,6 +100,16 @@ pub enum ClusterEvent {
     BuildRing(u8),
     /// Used by Scylla/dashboard to shutdown the cluster
     Shutdown,
+}
+
+impl From<Topology> for ClusterEvent {
+    fn from(topo: Topology) -> Self {
+        match topo {
+            Topology::AddNode(address) => ClusterEvent::AddNode(address),
+            Topology::RemoveNode(address) => ClusterEvent::RemoveNode(address),
+            Topology::BuildRing(t) => ClusterEvent::BuildRing(t),
+        }
+    }
 }
 
 impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for ClusterBuilder {}
