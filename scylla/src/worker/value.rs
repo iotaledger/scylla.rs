@@ -56,24 +56,26 @@ where
     V: 'static + Send + Clone,
     H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
             Ok(decoder) => H::handle_response(self, Self::decode_response(decoder)),
             Err(e) => H::handle_error(self, WorkerError::Other(e)),
         }
     }
 
-    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
         error!("{:?}, reporter running: {}", error, reporter.is_some());
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter).unwrap_or_else(|e| {
+                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter).or_else(|e| {
                     error!("Error trying to prepare query: {}", e);
-                    H::handle_error(self, error);
-                });
+                    H::handle_error(self, error)
+                })
+            } else {
+                bail!("No reporter or id!");
             }
         } else {
-            H::handle_error(self, error);
+            H::handle_error(self, error)
         }
     }
 }
@@ -89,8 +91,8 @@ where
     fn handle_response(
         worker: Box<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>,
         response: Self::Response,
-    ) {
-        let _ = worker.handle.send(Ok(response));
+    ) -> anyhow::Result<()> {
+        worker.handle.send(Ok(response)).map_err(|e| anyhow!(e.to_string()))
     }
 }
 
@@ -104,7 +106,10 @@ where
     fn handle_error(
         worker: Box<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>,
         worker_error: WorkerError,
-    ) {
-        let _ = worker.handle.send(Err(worker_error));
+    ) -> anyhow::Result<()> {
+        worker
+            .handle
+            .send(Err(worker_error))
+            .map_err(|e| anyhow!(e.to_string()))
     }
 }

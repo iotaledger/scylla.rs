@@ -296,15 +296,16 @@ mod tests {
     }
 
     impl Worker for TestWorker {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
+        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
+            Ok(())
         }
 
         fn handle_error(
             self: Box<Self>,
             error: crate::worker::WorkerError,
             reporter: &Option<crate::stage::ReporterHandle>,
-        ) {
+        ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                     if let Ok(prepare) = Prepare::new().statement(&self.request.statement()).build() {
@@ -323,6 +324,7 @@ mod tests {
                     }
                 }
             }
+            Ok(())
         }
     }
 
@@ -331,15 +333,16 @@ mod tests {
     }
 
     impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
+        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
+            Ok(())
         }
 
         fn handle_error(
             self: Box<Self>,
             error: crate::worker::WorkerError,
             reporter: &Option<crate::stage::ReporterHandle>,
-        ) {
+        ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                     if let Some(statement) = self.request.get_statement(&id) {
@@ -360,6 +363,7 @@ mod tests {
                     }
                 }
             }
+            Ok(())
         }
     }
 
@@ -370,11 +374,16 @@ mod tests {
     }
 
     impl Worker for PrepareWorker {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) {
+        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
+            Ok(())
         }
 
-        fn handle_error(self: Box<Self>, _error: WorkerError, _reporter: &Option<ReporterHandle>) {
+        fn handle_error(
+            self: Box<Self>,
+            _error: WorkerError,
+            _reporter: &Option<ReporterHandle>,
+        ) -> anyhow::Result<()> {
             if self.retries > 0 {
                 let prepare_worker = PrepareWorker {
                     retries: self.retries - 1,
@@ -385,6 +394,7 @@ mod tests {
                     payload: self.payload.clone(),
                 };
             }
+            Ok(())
         }
     }
 

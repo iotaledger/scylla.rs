@@ -16,7 +16,7 @@ impl Init<NodeHandle> for Stage {
                         payloads.push(Reusable::default())
                     }
                 } else {
-                    error!("Cannot acquire payload!");
+                    error!("Cannot acquire access to reusable payloads!");
                     return Err(Need::Abort);
                 }
             }

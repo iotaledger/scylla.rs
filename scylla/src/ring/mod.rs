@@ -354,7 +354,9 @@ impl Endpoints for Option<Replicas> {
     ) {
         // simulate reporter,
         if let ReporterEvent::Request { worker, .. } = request {
-            worker.handle_error(WorkerError::NoRing, &None);
+            worker
+                .handle_error(WorkerError::NoRing, &None)
+                .unwrap_or_else(|e| log::error!("{}", e));
         };
     }
 }

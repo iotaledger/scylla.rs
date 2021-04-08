@@ -30,19 +30,24 @@ impl EventLoop<StageHandle> for Reporter {
                                     self.streams.push(stream);
                                     // This means the sender_tx had been droped as a result of checkpoint from
                                     // receiver
-                                    worker.handle_error(WorkerError::Other(anyhow!("No Sender!")), &self.handle);
+                                    worker
+                                        .handle_error(WorkerError::Other(anyhow!("No Sender!")), &self.handle)
+                                        .unwrap_or_else(|e| error!("{}", e));
                                 }
                             }
                         } else {
                             // Send overload to the worker in-case we don't have anymore streams
-                            worker.handle_error(WorkerError::Overload, &self.handle);
+                            worker
+                                .handle_error(WorkerError::Overload, &self.handle)
+                                .unwrap_or_else(|e| error!("{}", e));
                         }
                     }
                     ReporterEvent::Response { stream_id } => {
-                        self.handle_response(stream_id);
+                        self.handle_response(stream_id).unwrap_or_else(|e| error!("{}", e));
                     }
                     ReporterEvent::Err(io_error, stream_id) => {
-                        self.handle_error(stream_id, WorkerError::Other(io_error));
+                        self.handle_error(stream_id, WorkerError::Other(io_error))
+                            .unwrap_or_else(|e| error!("{}", e));
                     }
                     ReporterEvent::Session(session) => {
                         match session {
@@ -119,7 +124,7 @@ impl EventLoop<StageHandle> for Reporter {
 }
 
 impl Reporter {
-    fn handle_response(&mut self, stream: i16) {
+    fn handle_response(&mut self, stream: i16) -> anyhow::Result<()> {
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
@@ -127,32 +132,34 @@ impl Reporter {
                     let error = Decoder::try_from(payload)
                         .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
                         .unwrap_or_else(|e| WorkerError::Other(e));
-                    worker.handle_error(error, &self.handle);
+                    worker.handle_error(error, &self.handle)?;
                 } else {
-                    worker.handle_response(payload);
+                    worker.handle_response(payload)?;
                 }
                 // push the stream_id back to streams vector.
                 self.streams.push(stream);
             } else {
-                error!("No payload found for stream {}!", stream);
+                error!("No payload found while handling response for stream {}!", stream);
             }
         } else {
-            error!("No worker found for stream {}!", stream);
+            error!("No worker found while handling response for stream {}!", stream);
         }
+        Ok(())
     }
-    fn handle_error(&mut self, stream: i16, error: WorkerError) {
+    fn handle_error(&mut self, stream: i16, error: WorkerError) -> anyhow::Result<()> {
         // remove the worker from workers and send error.
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.
             if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
-                worker.handle_error(error, &self.handle);
+                worker.handle_error(error, &self.handle)?;
                 // push the stream_id back to streams vector.
                 self.streams.push(stream);
             } else {
-                error!("No payload found for stream {}!", stream);
+                error!("No payload found while handling error for stream {}!", stream);
             }
         } else {
-            error!("No worker found for stream {}!", stream);
+            error!("No worker found while handling error for stream {}!", stream);
         }
+        Ok(())
     }
 }

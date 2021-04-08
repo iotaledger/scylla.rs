@@ -155,7 +155,9 @@ impl Reporter {
             self.streams.push(stream_id);
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
-            worker_id.handle_error(WorkerError::Lost, &self.handle);
+            worker_id
+                .handle_error(WorkerError::Lost, &self.handle)
+                .unwrap_or_else(|e| error!("{}", e));
         }
     }
 }

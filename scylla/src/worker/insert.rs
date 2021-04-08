@@ -29,23 +29,20 @@ where
     K: 'static + Send + Clone,
     V: 'static + Send + Clone,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) {
-        match Decoder::try_from(giveload) {
-            Ok(decoder) => {
-                Self::decode_response(decoder);
-            }
-            Err(e) => log::error!("{}", e),
-        }
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        Self::decode_response(giveload.try_into()?);
+        Ok(())
     }
 
-    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
         error!("{:?}, reporter running: {}", error, reporter.is_some());
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
-                    .unwrap_or_else(|e| error!("Error trying to prepare query: {}", e));
+                return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
+                    .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
             }
         }
+        Ok(())
     }
 }
 

@@ -3,6 +3,7 @@
 
 pub use crate::stage::ReporterEvent;
 use crate::{access::*, stage::ReporterHandle};
+use anyhow::{anyhow, bail};
 use log::*;
 use scylla_cql::CqlError;
 use select::handle_unprepared_error;
@@ -13,9 +14,9 @@ use tokio::sync::mpsc::UnboundedSender;
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send {
     /// Reporter will invoke this method to Send the cql response to worker
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>);
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>);
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()>;
 }
 
 #[derive(Error, Debug)]
@@ -43,12 +44,12 @@ pub trait HandleResponse<W: Worker + DecodeResponse<Self::Response>>: Send {
     /// Defines the response type
     type Response;
     /// Handle response for worker of type W
-    fn handle_response(worker: Box<W>, response: Self::Response);
+    fn handle_response(worker: Box<W>, response: Self::Response) -> anyhow::Result<()>;
 }
 /// should be implemented on the handle of the worker
 pub trait HandleError<W: Worker>: Send {
     /// Handle error for worker of type W
-    fn handle_error(worker: Box<W>, worker_error: WorkerError);
+    fn handle_error(worker: Box<W>, worker_error: WorkerError) -> anyhow::Result<()>;
 }
 
 /// Decode response as T
