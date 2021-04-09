@@ -35,7 +35,7 @@ impl EventLoop<NodeHandle> for Stage {
                             let event = NodeEvent::Service(self.service.clone());
                             supervisor.send(event).ok();
                         } else {
-                            error!("No handle available!");
+                            debug!("No handle available!");
                             return Err(Need::Abort);
                         }
                     }
@@ -93,7 +93,7 @@ impl EventLoop<NodeHandle> for Stage {
                                 }
                             }
                         } else {
-                            error!("No handle available!");
+                            debug!("No handle available!");
                             return Err(Need::Abort);
                         }
                     }
