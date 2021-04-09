@@ -9,7 +9,6 @@ use super::{
 };
 use crate::compression::{Compression, MyCompression};
 use anyhow::{anyhow, ensure};
-use log::error;
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
@@ -33,10 +32,7 @@ pub trait RowsDecoder<K, V> {
 pub trait VoidDecoder {
     /// Try to decode the provided Decoder with an expected Void result
     fn try_decode(decoder: Decoder) -> anyhow::Result<()> {
-        if decoder.is_error().or_else(|e| {
-            error!("{}", e);
-            Err(anyhow!(decoder.get_error()?))
-        })? {
+        if decoder.is_error()? {
             Err(anyhow!(decoder.get_error()?))
         } else {
             Ok(())
@@ -290,16 +286,17 @@ impl Frame for Decoder {
         Ok(self.opcode()? == opcode::ERROR)
     }
     fn get_error(&self) -> anyhow::Result<error::CqlError> {
-        error::CqlError::new(self)
+        if self.is_error()? {
+            error::CqlError::new(self)
+        } else {
+            Err(anyhow!("Not error"))
+        }
     }
     fn get_void(&self) -> anyhow::Result<()> {
-        if self.is_void().or_else(|e| {
-            error!("{}", e);
-            Err(anyhow!(self.get_error()?))
-        })? {
+        if self.is_void()? {
             Ok(())
         } else {
-            Err(anyhow!(self.get_error()?))
+            Err(anyhow!("Not void"))
         }
     }
     fn is_unprepared(&self) -> anyhow::Result<bool> {
