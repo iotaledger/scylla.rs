@@ -23,8 +23,8 @@ impl EventLoop<StageHandle> for Reporter {
                                     assign_stream_to_payload(stream, &mut payload);
                                     // store payload as reusable at payloads[stream]
                                     self.payloads[stream as usize].as_mut().replace(payload);
-                                    sender.send(stream).unwrap_or_else(|e| error!("{}", e));
                                     self.workers.insert(stream, worker);
+                                    sender.send(stream).unwrap_or_else(|e| error!("{}", e));
                                 }
                                 None => {
                                     // This means the sender_tx had been droped as a result of checkpoint from
