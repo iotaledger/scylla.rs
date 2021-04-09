@@ -71,69 +71,63 @@ pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
 }
 
 pub trait SelectRecommended<S: Select<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return>;
-}
-
-impl<S: Select<K, V>, K, V> SelectRecommended<S, K, V> for QueryStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
-        Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+        Self::encode_statement(query_or_batch, &keyspace.statement())
     }
 }
 
-impl<S: Select<K, V>, K, V> SelectRecommended<S, K, V> for PreparedStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
-        Self::encode_statement(query_or_batch, &keyspace.id())
-    }
-}
+impl<S: Select<K, V>, K, V> SelectRecommended<S, K, V> for QueryStatement {}
+
+impl<S: Select<K, V>, K, V> SelectRecommended<S, K, V> for PreparedStatement {}
 
 /// Defines a helper method to specify the Value type
 /// expected by the `Select` trait.
 pub trait GetSelectRequest<S, K> {
     /// Specifies the returned Value type for an upcoming select request
-    fn select<'a, V>(&'a self, key: &'a K) -> anyhow::Result<SelectBuilder<'a, S, K, V, QueryConsistency>>
+    fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
-    fn select_query<'a, V>(&'a self, key: &'a K) -> anyhow::Result<SelectBuilder<'a, S, K, V, QueryConsistency>>
+    fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
-    fn select_prepared<'a, V>(&'a self, key: &'a K) -> anyhow::Result<SelectBuilder<'a, S, K, V, QueryConsistency>>
+    fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
 }
 
 impl<S: Keyspace, K> GetSelectRequest<S, K> for S {
-    fn select<'a, V>(&'a self, key: &'a K) -> anyhow::Result<SelectBuilder<'a, S, K, V, QueryConsistency>>
+    fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>,
     {
-        Ok(SelectBuilder {
+        SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
-            builder: S::QueryOrPrepared::make(Query::new(), self)?,
-        })
+            builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
     }
-    fn select_query<'a, V>(&'a self, key: &'a K) -> anyhow::Result<SelectBuilder<'a, S, K, V, QueryConsistency>>
+    fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>,
     {
-        Ok(SelectBuilder {
+        SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
-            builder: <QueryStatement as SelectRecommended<S, K, V>>::make(Query::new(), self)?,
-        })
+            builder: <QueryStatement as SelectRecommended<S, K, V>>::make(Query::new(), self),
+        }
     }
-    fn select_prepared<'a, V>(&'a self, key: &'a K) -> anyhow::Result<SelectBuilder<'a, S, K, V, QueryConsistency>>
+    fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>,
     {
-        Ok(SelectBuilder {
+        SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
-            builder: <PreparedStatement as SelectRecommended<S, K, V>>::make(Query::new(), self)?,
-        })
+            builder: <PreparedStatement as SelectRecommended<S, K, V>>::make(Query::new(), self),
+        }
     }
 }
 

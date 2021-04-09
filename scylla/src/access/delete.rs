@@ -72,69 +72,63 @@ pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
 }
 
 pub trait DeleteRecommended<S: Delete<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return>;
-}
-
-impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for QueryStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
-        Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+        Self::encode_statement(query_or_batch, &keyspace.statement())
     }
 }
 
-impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for PreparedStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
-        Self::encode_statement(query_or_batch, &keyspace.id())
-    }
-}
+impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for QueryStatement {}
+
+impl<S: Delete<K, V>, K, V> DeleteRecommended<S, K, V> for PreparedStatement {}
 
 /// Defines a helper method to specify the Value type
 /// expected by the `Delete` trait.
 pub trait GetDeleteRequest<S, K> {
     /// Specifies the Value type for an upcoming delete request
-    fn delete<'a, V>(&'a self, key: &'a K) -> anyhow::Result<DeleteBuilder<'a, S, K, V, QueryConsistency>>
+    fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
-    fn delete_query<'a, V>(&'a self, key: &'a K) -> anyhow::Result<DeleteBuilder<'a, S, K, V, QueryConsistency>>
+    fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
-    fn delete_prepared<'a, V>(&'a self, key: &'a K) -> anyhow::Result<DeleteBuilder<'a, S, K, V, QueryConsistency>>
+    fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
 }
 
 impl<S: Keyspace, K> GetDeleteRequest<S, K> for S {
-    fn delete<'a, V>(&'a self, key: &'a K) -> anyhow::Result<DeleteBuilder<'a, S, K, V, QueryConsistency>>
+    fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>,
     {
-        Ok(DeleteBuilder {
+        DeleteBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
-            builder: S::QueryOrPrepared::make(Query::new(), self)?,
-        })
+            builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
     }
-    fn delete_query<'a, V>(&'a self, key: &'a K) -> anyhow::Result<DeleteBuilder<'a, S, K, V, QueryConsistency>>
+    fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>,
     {
-        Ok(DeleteBuilder {
+        DeleteBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
-            builder: <QueryStatement as DeleteRecommended<S, K, V>>::make(Query::new(), self)?,
-        })
+            builder: <QueryStatement as DeleteRecommended<S, K, V>>::make(Query::new(), self),
+        }
     }
-    fn delete_prepared<'a, V>(&'a self, key: &'a K) -> anyhow::Result<DeleteBuilder<'a, S, K, V, QueryConsistency>>
+    fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>,
     {
-        Ok(DeleteBuilder {
+        DeleteBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
-            builder: <PreparedStatement as DeleteRecommended<S, K, V>>::make(Query::new(), self)?,
-        })
+            builder: <PreparedStatement as DeleteRecommended<S, K, V>>::make(Query::new(), self),
+        }
     }
 }
 pub struct DeleteBuilder<'a, S, K, V, Stage> {

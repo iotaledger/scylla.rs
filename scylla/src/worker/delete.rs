@@ -75,7 +75,7 @@ where
         payload,
     };
     reporter.send(prepare_request).ok();
-    let req = keyspace.delete_query(&key)?.consistency(Consistency::One).build()?;
+    let req = keyspace.delete_query(&key).consistency(Consistency::One).build()?;
     let payload = req.into_payload();
     let retry_request = ReporterEvent::Request {
         worker: worker.clone(),

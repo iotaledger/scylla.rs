@@ -127,10 +127,7 @@ where
         payload,
     };
     reporter.send(prepare_request).ok();
-    let req = keyspace
-        .select_query::<V>(&key)?
-        .consistency(Consistency::One)
-        .build()?;
+    let req = keyspace.select_query::<V>(&key).consistency(Consistency::One).build()?;
     let payload = req.into_payload();
     let retry_request = ReporterEvent::Request {
         worker: worker.clone(),

@@ -11,7 +11,6 @@ use super::{
     QueryOrPrepared, Statements, Values,
 };
 use crate::compression::{Compression, MyCompression};
-use std::convert::TryInto;
 
 /// Blanket cql frame header for query frame.
 const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
@@ -63,16 +62,16 @@ impl QueryBuilder<QueryHeader> {
 }
 
 impl QueryOrPrepared for QueryStatement {
-    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> anyhow::Result<T::Return> {
-        Ok(query_or_batch.statement(std::str::from_utf8(&statement)?))
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &str) -> T::Return {
+        query_or_batch.statement(statement)
     }
     fn is_prepared() -> bool {
         false
     }
 }
 impl QueryOrPrepared for PreparedStatement {
-    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> anyhow::Result<T::Return> {
-        Ok(query_or_batch.id(statement.try_into()?))
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &str) -> T::Return {
+        query_or_batch.id(&md5::compute(statement.as_bytes()).into())
     }
     fn is_prepared() -> bool {
         true

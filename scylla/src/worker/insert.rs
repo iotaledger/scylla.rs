@@ -73,7 +73,7 @@ where
     };
     reporter.send(prepare_request).ok();
     let req = keyspace
-        .insert_query(&key, &value)?
+        .insert_query(&key, &value)
         .consistency(Consistency::One)
         .build()?;
     let payload = req.into_payload();

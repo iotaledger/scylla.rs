@@ -403,7 +403,6 @@ mod tests {
         let keyspace = MyKeyspace::new();
         let req1 = keyspace
             .select::<f32>(&3)
-            .unwrap()
             .consistency(Consistency::One)
             .build()
             .unwrap();
@@ -413,7 +412,6 @@ mod tests {
         };
         let req2 = keyspace
             .select::<i32>(&3)
-            .unwrap()
             .consistency(Consistency::One)
             .page_size(500)
             .build()
@@ -432,12 +430,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace
-            .insert(&3, &8.0)
-            .unwrap()
-            .consistency(Consistency::One)
-            .build()
-            .unwrap();
+        let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
         let worker = InsertWorker::boxed(keyspace, 3, 8.0);
 
         let res = req.send_local(worker);
@@ -446,12 +439,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace
-            .update(&3, &8.0)
-            .unwrap()
-            .consistency(Consistency::One)
-            .build()
-            .unwrap();
+        let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build().unwrap();
         let worker = TestWorker {
             request: Box::new(req.clone()),
         };
@@ -464,7 +452,6 @@ mod tests {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace
             .delete::<f32>(&3)
-            .unwrap()
             .consistency(Consistency::One)
             .build()
             .unwrap();
@@ -483,13 +470,9 @@ mod tests {
             .batch()
             .logged() // or .batch_type(BatchTypeLogged)
             .insert(&3, &9.0)
-            .unwrap()
             .update_query(&3, &8.0)
-            .unwrap()
             .insert_prepared(&3, &8.0)
-            .unwrap()
             .delete_prepared::<_, f32>(&3)
-            .unwrap()
             .consistency(Consistency::One)
             .build()
             .unwrap()

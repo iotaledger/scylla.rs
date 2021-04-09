@@ -45,7 +45,7 @@ const MD5_BE_LENGTH: [u8; 2] = [0, 16];
 
 /// Statement or ID
 pub trait QueryOrPrepared: Sized {
-    fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> anyhow::Result<T::Return>;
+    fn encode_statement<T: Statements>(query_or_batch: T, statement: &str) -> T::Return;
     fn is_prepared() -> bool;
 }
 

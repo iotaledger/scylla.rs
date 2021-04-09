@@ -74,87 +74,65 @@ pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
 }
 
 pub trait UpdateRecommended<S: Update<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return>;
-}
-
-impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for QueryStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
-        Self::encode_statement(query_or_batch, keyspace.statement().as_bytes())
+    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
+        Self::encode_statement(query_or_batch, &keyspace.statement())
     }
 }
 
-impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for PreparedStatement {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> anyhow::Result<T::Return> {
-        Self::encode_statement(query_or_batch, &keyspace.id())
-    }
-}
+impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for QueryStatement {}
+
+impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for PreparedStatement {}
 
 /// Wrapper for the `Update` trait which provides the `update` function
 pub trait GetUpdateRequest<S, K, V> {
     /// Calls the appropriate `Insert` implementation for this Key/Value pair
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> anyhow::Result<UpdateBuilder<'a, S, K, V, QueryConsistency>>
+    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
-    fn update_query<'a>(
-        &'a self,
-        key: &'a K,
-        value: &'a V,
-    ) -> anyhow::Result<UpdateBuilder<'a, S, K, V, QueryConsistency>>
+    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
-    fn update_prepared<'a>(
-        &'a self,
-        key: &'a K,
-        value: &'a V,
-    ) -> anyhow::Result<UpdateBuilder<'a, S, K, V, QueryConsistency>>
+    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
 }
 
 impl<S: Update<K, V>, K, V> GetUpdateRequest<S, K, V> for S {
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> anyhow::Result<UpdateBuilder<'a, S, K, V, QueryConsistency>>
+    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>,
     {
-        Ok(UpdateBuilder {
+        UpdateBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
             value,
-            builder: S::QueryOrPrepared::make(Query::new(), self)?,
-        })
+            builder: S::QueryOrPrepared::make(Query::new(), self),
+        }
     }
-    fn update_query<'a>(
-        &'a self,
-        key: &'a K,
-        value: &'a V,
-    ) -> anyhow::Result<UpdateBuilder<'a, S, K, V, QueryConsistency>>
+    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>,
     {
-        Ok(UpdateBuilder {
+        UpdateBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
             value,
-            builder: <QueryStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self)?,
-        })
+            builder: <QueryStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+        }
     }
-    fn update_prepared<'a>(
-        &'a self,
-        key: &'a K,
-        value: &'a V,
-    ) -> anyhow::Result<UpdateBuilder<'a, S, K, V, QueryConsistency>>
+    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>,
     {
-        Ok(UpdateBuilder {
+        UpdateBuilder {
             _marker: PhantomData,
             keyspace: self,
             key,
             value,
-            builder: <PreparedStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self)?,
-        })
+            builder: <PreparedStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+        }
     }
 }
 pub struct UpdateBuilder<'a, S, K, V, Stage> {
