@@ -125,11 +125,11 @@ impl EventLoop<StageHandle> for Reporter {
 
 impl Reporter {
     fn handle_response(&mut self, stream: i16) -> anyhow::Result<()> {
+        // push the stream_id back to streams vector.
+        self.streams.push(stream);
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
-                // push the stream_id back to streams vector.
-                self.streams.push(stream);
                 if is_cql_error(&payload) {
                     let error = Decoder::try_from(payload)
                         .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
@@ -147,12 +147,12 @@ impl Reporter {
         Ok(())
     }
     fn handle_error(&mut self, stream: i16, error: WorkerError) -> anyhow::Result<()> {
+        // push the stream_id back to streams vector.
+        self.streams.push(stream);
         // remove the worker from workers and send error.
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.
             if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
-                // push the stream_id back to streams vector.
-                self.streams.push(stream);
                 worker.handle_error(error, &self.handle)?;
             } else {
                 error!("No payload found while handling error for stream {}!", stream);
