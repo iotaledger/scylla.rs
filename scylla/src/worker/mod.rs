@@ -55,12 +55,12 @@ pub trait HandleError<W: Worker>: Send {
 /// Decode response as T
 pub trait DecodeResponse<T> {
     /// Decode decoder into T type
-    fn decode_response(decoder: Decoder) -> T;
+    fn decode_response(decoder: Decoder) -> anyhow::Result<T>;
 }
 
 impl<W: Worker> DecodeResponse<Decoder> for W {
-    fn decode_response(decoder: Decoder) -> Decoder {
-        decoder
+    fn decode_response(decoder: Decoder) -> anyhow::Result<Decoder> {
+        Ok(decoder)
     }
 }
 

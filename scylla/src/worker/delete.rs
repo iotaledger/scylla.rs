@@ -34,7 +34,7 @@ where
     V: 'static + Send + Clone,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        Self::decode_response(giveload.try_into()?);
+        Self::decode_response(giveload.try_into()?)?;
         Ok(())
     }
 

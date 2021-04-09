@@ -44,8 +44,8 @@ where
     K: Send + Clone,
     V: Send + Clone,
 {
-    fn decode_response(decoder: Decoder) -> Option<V> {
-        S::decode(decoder)
+    fn decode_response(decoder: Decoder) -> anyhow::Result<Option<V>> {
+        S::try_decode(decoder)
     }
 }
 
@@ -58,7 +58,7 @@ where
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
-            Ok(decoder) => H::handle_response(self, Self::decode_response(decoder)),
+            Ok(decoder) => H::handle_response(self, Self::decode_response(decoder)?),
             Err(e) => H::handle_error(self, WorkerError::Other(e)),
         }
     }
