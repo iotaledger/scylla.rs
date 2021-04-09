@@ -22,10 +22,10 @@ impl Init<NodeHandle> for Stage {
             }
             let streams: Vec<i16> = (0..last_range).collect();
             let mut streams_iter = streams.chunks_exact(self.appends_num as usize);
-            if let Some(streams) = streams_iter.next() {
-                if let Some(reporter_handles) = self.reporters_handles.as_mut() {
-                    // Start reporters
-                    for reporter_id in 0..self.reporter_count {
+            if let Some(reporter_handles) = self.reporters_handles.as_mut() {
+                // Start reporters
+                for reporter_id in 0..self.reporter_count {
+                    if let Some(streams) = streams_iter.next() {
                         // build reporter
                         let reporter = ReporterBuilder::new()
                             .session_id(self.session_id)
@@ -47,18 +47,18 @@ impl Init<NodeHandle> for Stage {
                             error!("No reporter handle found!");
                             return Err(Need::Abort);
                         }
+                    } else {
+                        error!("Failed to create streams!");
+                        return Err(Need::Abort);
                     }
-                    self.service.update_status(ServiceStatus::Initializing);
-                    let event = NodeEvent::RegisterReporters(self.service.clone(), reporter_handles.clone());
-                    supervisor.send(event).ok();
-                    status
-                } else {
-                    error!("No reporter handles container available!");
-                    return Err(Need::Abort);
                 }
+                self.service.update_status(ServiceStatus::Initializing);
+                let event = NodeEvent::RegisterReporters(self.service.clone(), reporter_handles.clone());
+                supervisor.send(event).ok();
+                status
             } else {
-                error!("Failed to create streams!");
-                Err(Need::Abort)
+                error!("No reporter handles container available!");
+                return Err(Need::Abort);
             }
         } else {
             Err(Need::Abort)
