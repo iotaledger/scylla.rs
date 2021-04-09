@@ -129,14 +129,7 @@ impl Reporter {
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
-                if is_cql_error(&payload) {
-                    let error = Decoder::try_from(payload)
-                        .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
-                        .unwrap_or_else(|e| WorkerError::Other(e));
-                    worker.handle_error(error, &self.handle)?;
-                } else {
-                    worker.handle_response(payload)?;
-                }
+                worker.handle_response(payload)?;
             } else {
                 error!("No payload found while handling response for stream {}!", stream);
             }
