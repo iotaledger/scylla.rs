@@ -8,8 +8,8 @@ use super::{
     decoder::{self, Decoder, Frame},
 };
 use anyhow::{anyhow, bail, ensure};
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
+// use num_derive::FromPrimitive;
+// use num_traits::FromPrimitive;
 use std::convert::{TryFrom, TryInto};
 use thiserror::Error;
 
@@ -141,7 +141,7 @@ pub const ALREADY_EXISTS: i32 = 0x2400;
 /// The Error code of `UNPREPARED`.
 pub const UNPREPARED: i32 = 0x2500;
 
-#[derive(Debug, FromPrimitive)]
+#[derive(Debug)]
 #[repr(i32)]
 /// The Error code enum.
 pub enum ErrorCodes {
@@ -465,6 +465,7 @@ impl TryFrom<&[u8]> for ErrorCodes {
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
         ensure!(slice.len() >= 4, "Buffer is too small!");
         let code = i32::from_be_bytes(slice[0..4].try_into()?);
-        ErrorCodes::from_i32(code).ok_or(anyhow!("No error code found for {}", code))
+        // ErrorCodes::from_i32(code).ok_or(anyhow!("No error code found for {}", code))
+        unsafe { Ok(std::mem::transmute(code)) }
     }
 }
