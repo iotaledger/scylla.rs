@@ -19,16 +19,10 @@ impl EventLoop<ReportersHandles> for Receiver {
             while let Ok(n) = self.socket.read(&mut self.buffer[self.i..]).await {
                 if n != 0 {
                     self.current_length += n;
-                    if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
-                        self.i = self.current_length;
-                    } else {
-                        self.handle_frame_header(0)
-                            .and_then(|_| self.handle_frame(n, 0, reporter_handles))
-                            .map_err(|e| {
-                                error!("{}", e);
-                                Need::Abort
-                            })?;
-                    }
+                    self.handle_remaining_buffer(0, reporter_handles).map_err(|e| {
+                        error!("{}", e);
+                        Need::Abort
+                    })?;
                 } else {
                     break;
                 }
@@ -46,8 +40,8 @@ impl Receiver {
             self.buffer.copy_within(i..(i + self.current_length), self.i);
             self.i = self.current_length;
         } else {
-            self.handle_frame_header(i)?;
-            self.handle_frame(self.current_length, i, reporters_handles)?;
+            self.handle_frame_header(i)
+                .and_then(|_| self.handle_frame(self.current_length, i, reporters_handles))?;
         }
         Ok(())
     }

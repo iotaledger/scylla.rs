@@ -14,10 +14,11 @@ impl EventLoop<StageHandle> for Reporter {
             while let Some(event) = self.inbox.rx.recv().await {
                 match event {
                     ReporterEvent::Request { worker, mut payload } => {
-                        if let Some(stream) = self.streams.pop() {
+                        if let Some(stream) = self.streams.iter().next().cloned() {
                             // Send the event
                             match &self.sender_handle {
                                 Some(sender) => {
+                                    self.streams.remove(&stream);
                                     // Assign stream_id to the payload
                                     assign_stream_to_payload(stream, &mut payload);
                                     // store payload as reusable at payloads[stream]
@@ -26,8 +27,6 @@ impl EventLoop<StageHandle> for Reporter {
                                     self.workers.insert(stream, worker);
                                 }
                                 None => {
-                                    // return the stream_id
-                                    self.streams.push(stream);
                                     // This means the sender_tx had been droped as a result of checkpoint from
                                     // receiver
                                     worker
@@ -126,7 +125,7 @@ impl EventLoop<StageHandle> for Reporter {
 impl Reporter {
     fn handle_response(&mut self, stream: i16) -> anyhow::Result<()> {
         // push the stream_id back to streams vector.
-        self.streams.push(stream);
+        self.streams.insert(stream);
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
@@ -148,7 +147,7 @@ impl Reporter {
     }
     fn handle_error(&mut self, stream: i16, error: WorkerError) -> anyhow::Result<()> {
         // push the stream_id back to streams vector.
-        self.streams.push(stream);
+        self.streams.insert(stream);
         // remove the worker from workers and send error.
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.

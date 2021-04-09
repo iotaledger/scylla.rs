@@ -33,7 +33,7 @@ impl Init<NodeHandle> for Stage {
                             .shard_id(self.shard_id)
                             .address(self.address.clone())
                             .payloads(self.payloads.clone())
-                            .streams(streams.into())
+                            .streams(streams.to_owned().into_iter().collect())
                             .build();
                         // clone reporter_handle
                         if let Some(reporter_handle) = reporter.clone_handle() {

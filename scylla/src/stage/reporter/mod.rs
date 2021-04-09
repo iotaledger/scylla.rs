@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use scylla_cql::{CqlError, Decoder};
 use sender::SenderHandle;
 use std::{
+    collections::HashSet,
     convert::TryFrom,
     ops::{Deref, DerefMut},
 };
@@ -23,7 +24,7 @@ builder!(ReporterBuilder {
     session_id: usize,
     reporter_id: u8,
     shard_id: u16,
-    streams: Vec<i16>,
+    streams: HashSet<i16>,
     address: SocketAddr,
     payloads: Payloads
 });
@@ -84,7 +85,7 @@ pub struct Reporter {
     address: SocketAddr,
     session_id: usize,
     reporter_id: u8,
-    streams: Vec<i16>,
+    streams: HashSet<i16>,
     shard_id: u16,
     workers: Workers,
     sender_handle: Option<SenderHandle>,
@@ -152,7 +153,7 @@ impl Reporter {
     fn force_consistency(&mut self) {
         for (stream_id, worker_id) in self.workers.drain() {
             // push the stream_id back into the streams vector
-            self.streams.push(stream_id);
+            self.streams.insert(stream_id);
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
             worker_id
