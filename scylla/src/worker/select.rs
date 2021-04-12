@@ -14,6 +14,8 @@ where
     pub handle: H,
     pub keyspace: S,
     pub key: K,
+    pub page_size: Option<i32>,
+    pub paging_state: Option<Vec<u8>>,
     pub _marker: std::marker::PhantomData<V>,
 }
 
@@ -29,11 +31,18 @@ where
             handle,
             keyspace,
             key,
+            page_size: None,
+            paging_state: None,
             _marker,
         }
     }
     pub fn boxed(handle: H, keyspace: S, key: K, _marker: std::marker::PhantomData<V>) -> Box<Self> {
         Box::new(Self::new(handle, keyspace, key, _marker))
+    }
+    pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self, page_size: i32, paging_state: P) -> Self {
+        self.page_size = Some(page_size);
+        self.paging_state = paging_state.into();
+        self
     }
 }
 
@@ -53,7 +62,15 @@ where
         error!("{:?}, reporter running: {}", error, reporter.is_some());
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter);
+                handle_unprepared_error(
+                    &self,
+                    &self.keyspace,
+                    &self.key,
+                    id,
+                    self.page_size,
+                    &self.paging_state,
+                    reporter,
+                );
             }
         } else {
             H::handle_error(self, error);
@@ -100,6 +117,8 @@ pub fn handle_unprepared_error<W, S, K, V>(
     keyspace: &S,
     key: &K,
     id: [u8; 16],
+    page_size: Option<i32>,
+    paging_state: &Option<Vec<u8>>,
     reporter: &ReporterHandle,
 ) where
     W: 'static + Worker + Clone,
@@ -116,7 +135,13 @@ pub fn handle_unprepared_error<W, S, K, V>(
         payload,
     };
     reporter.send(prepare_request).ok();
-    let req = keyspace.select_query::<V>(&key).consistency(Consistency::One).build();
+    let req = keyspace.select_query::<V>(&key).consistency(Consistency::One);
+    let req = if let Some(page_size) = page_size {
+        req.page_size(page_size).paging_state(&paging_state)
+    } else {
+        req.paging_state(&paging_state)
+    }
+    .build();
     let payload = req.into_payload();
     let retry_request = ReporterEvent::Request {
         worker: worker.clone(),
