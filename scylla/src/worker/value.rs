@@ -75,7 +75,7 @@ where
                     H::handle_error(self, error)
                 })
             } else {
-                bail!("No reporter or id!");
+                H::handle_error(self, error)
             }
         } else {
             H::handle_error(self, error)
