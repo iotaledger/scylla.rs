@@ -12,7 +12,7 @@ repository = "https://github.com/iotaledger/scylla.rs"
 rand = "0.8"
 lz4 = "1.23"
 snap = "1.0"
-socket2 = "0.3"
+socket2 = "0.4"
 port_scanner = "0.1"
 futures = "*"
 tokio = {version = "1.0", features = ["full"]}
