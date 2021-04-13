@@ -57,6 +57,9 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                 ScyllaEvent::Result(socket_msg) => {
                     // TODO add logs based on the socket_msg
                     self.response_to_sockets(&socket_msg).await;
+                    // update the stream with the service status
+                    let service_socket_msg = SocketMsg::Scylla(self.service.clone());
+                    self.response_to_sockets(&service_socket_msg).await;
                 }
                 ScyllaEvent::Abort => return Err(Need::Abort),
                 ScyllaEvent::Passthrough(apps_events) => {
