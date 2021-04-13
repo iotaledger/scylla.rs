@@ -8,7 +8,6 @@ use futures::SinkExt;
 impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
     async fn event_loop(&mut self, _status: Result<(), Need>, supervisor: &mut Option<H>) -> Result<(), Need> {
         let my_sup = supervisor.as_mut().unwrap();
-        self.service.update_status(ServiceStatus::Running);
         while let Some(event) = self.inbox.rx.recv().await {
             match event {
                 ScyllaEvent::Children(scylla_child) => {
@@ -24,6 +23,19 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                         ScyllaChild::Cluster(microservice) => {
                             self.service.update_microservice(microservice.get_name(), microservice);
                             // tell all the active applications about status_change
+                            ///////// update the scylla application status //////
+                            if !self.service.is_stopping() {
+                                if self.service.microservices.values().all(|ms| ms.is_initializing()) {
+                                    self.service.update_status(ServiceStatus::Initializing);
+                                } else if self.service.microservices.values().all(|ms| ms.is_maintenance()) {
+                                    self.service.update_status(ServiceStatus::Maintenance);
+                                } else if self.service.microservices.values().all(|ms| ms.is_running()) {
+                                    self.service.update_status(ServiceStatus::Running);
+                                } else {
+                                    self.service.update_status(ServiceStatus::Degraded);
+                                }
+                            }
+                            ///////////////////////////////////////////////////////
                             let socket_msg = SocketMsg::Scylla(self.service.clone());
                             self.response_to_sockets(&socket_msg).await;
                             let SocketMsg::Scylla(service) = socket_msg;
