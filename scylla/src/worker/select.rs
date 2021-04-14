@@ -16,6 +16,7 @@ where
     pub key: K,
     pub page_size: Option<i32>,
     pub paging_state: Option<Vec<u8>>,
+    pub retries: usize,
     pub _marker: std::marker::PhantomData<V>,
 }
 
@@ -26,18 +27,19 @@ where
     V: 'static + Send + Clone,
     H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
-    pub fn new(handle: H, keyspace: S, key: K, _marker: std::marker::PhantomData<V>) -> Self {
+    pub fn new(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Self {
         Self {
             handle,
             keyspace,
             key,
             page_size: None,
             paging_state: None,
+            retries: 0,
             _marker,
         }
     }
-    pub fn boxed(handle: H, keyspace: S, key: K, _marker: std::marker::PhantomData<V>) -> Box<Self> {
-        Box::new(Self::new(handle, keyspace, key, _marker))
+    pub fn boxed(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Box<Self> {
+        Box::new(Self::new(handle, keyspace, key, retries, _marker))
     }
     pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self, page_size: i32, paging_state: P) -> Self {
         self.page_size = Some(page_size);
@@ -58,8 +60,7 @@ where
         H::handle_response(self, rows)
     }
 
-    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
-        error!("{:?}, reporter running: {}", error, reporter.is_some());
+    fn handle_error(mut self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 handle_unprepared_error(
@@ -71,8 +72,24 @@ where
                     &self.paging_state,
                     reporter,
                 );
+                return ();
             }
+        }
+        if self.retries > 0 {
+            self.retries -= 1;
+            // currently we assume all cql/worker errors are retryable, but we might change this in future
+            let req = self.keyspace.select_query::<V>(&self.key).consistency(Consistency::One);
+            let req = if let Some(page_size) = self.page_size {
+                req.page_size(page_size).paging_state(&self.paging_state)
+            } else {
+                req.paging_state(&self.paging_state)
+            }
+            .build();
+            tokio::spawn(async { req.send_global(self) });
         } else {
+            // no more retries
+            // print error!
+            error!("{:?}, reporter running: {}", error, reporter.is_some());
             H::handle_error(self, error);
         }
     }
