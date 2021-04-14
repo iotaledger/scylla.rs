@@ -60,6 +60,9 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                     ScyllaEvent::Result(socket_msg) => {
                         // TODO add logs based on the socket_msg
                         self.response_to_sockets(&socket_msg).await;
+                        // update the stream with the service status
+                        let service_socket_msg = SocketMsg::Scylla(self.service.clone());
+                        self.response_to_sockets(&service_socket_msg).await;
                     }
                     ScyllaEvent::Abort => return Err(Need::Abort),
                     ScyllaEvent::Passthrough(apps_events) => {
@@ -76,21 +79,15 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                                             my_sup.shutdown_app(&self.get_name());
                                             // shutdown children
                                             // Listener
-                                            if let Some(listener_handle) = self.listener_handle.take() {
-                                                listener_handle.shutdown();
-                                            }
+                                            let listener_handle = self.listener_handle.take().unwrap();
+                                            listener_handle.shutdown();
                                             // shutdown cluster
-                                            if let Some(cluster_handle) = self.cluster_handle.take() {
-                                                cluster_handle.shutdown();
-                                            }
+                                            let cluster_handle = self.cluster_handle.take().unwrap();
+                                            cluster_handle.shutdown();
                                             // Shutdown the websockets
                                             for (_, ws) in &mut self.websockets {
                                                 let _ = ws.close().await;
                                             }
-                                            // drop self sender/handle to enable graceful shutdown
-                                            self.handle.take();
-                                            // set service to stopping
-                                            self.service.update_status(ServiceStatus::Stopping);
                                         }
                                     }
                                     ScyllaThrough::Topology(topology) => {
