@@ -34,7 +34,7 @@ where
             key,
             page_size: None,
             paging_state: None,
-            retries: 0,
+            retries,
             _marker,
         }
     }
