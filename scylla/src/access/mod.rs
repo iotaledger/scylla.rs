@@ -431,7 +431,7 @@ mod tests {
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
-        let worker = InsertWorker::boxed(keyspace, 3, 8.0);
+        let worker = InsertWorker::boxed(keyspace, 3, 8.0, 0);
 
         let res = req.send_local(worker);
     }

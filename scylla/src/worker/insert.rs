@@ -7,6 +7,7 @@ pub struct InsertWorker<S: Insert<K, V>, K, V> {
     pub keyspace: S,
     pub key: K,
     pub value: V,
+    pub retries: usize,
 }
 
 impl<S: Insert<K, V>, K, V> InsertWorker<S, K, V>
@@ -15,11 +16,16 @@ where
     K: 'static + Send,
     V: 'static + Send,
 {
-    pub fn new(keyspace: S, key: K, value: V) -> Self {
-        Self { keyspace, key, value }
+    pub fn new(keyspace: S, key: K, value: V, retries: usize) -> Self {
+        Self {
+            keyspace,
+            key,
+            value,
+            retries,
+        }
     }
-    pub fn boxed(keyspace: S, key: K, value: V) -> Box<Self> {
-        Box::new(Self::new(keyspace, key, value))
+    pub fn boxed(keyspace: S, key: K, value: V, retries: usize) -> Box<Self> {
+        Box::new(Self::new(keyspace, key, value, retries))
     }
 }
 
@@ -34,13 +40,30 @@ where
         Ok(())
     }
 
-    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
-        error!("{:?}, reporter running: {}", error, reporter.is_some());
+    fn handle_error(
+        mut self: Box<Self>,
+        mut error: WorkerError,
+        reporter: &Option<ReporterHandle>,
+    ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
                     .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
             }
+        }
+        if self.retries > 0 {
+            self.retries -= 1;
+            // currently we assume all cql/worker errors are retryable, but we might change this in future
+            let req = self
+                .keyspace
+                .insert_query(&self.key, &self.value)
+                .consistency(Consistency::One)
+                .build()?;
+            tokio::spawn(async { req.send_global(self) });
+        } else {
+            // no more retries
+            // print error!
+            error!("{:?}, reporter running: {}", error, reporter.is_some());
         }
         Ok(())
     }
