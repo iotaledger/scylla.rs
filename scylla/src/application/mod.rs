@@ -4,7 +4,7 @@
 use crate::{cluster::*, listener::*, websocket::*};
 
 use anyhow::{anyhow, bail};
-pub use chronicle::*;
+pub use backstage::*;
 pub use client::add_nodes::add_nodes;
 pub use log::*;
 pub(crate) use scylla_cql::{CqlBuilder, PasswordAuth};
