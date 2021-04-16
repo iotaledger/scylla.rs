@@ -151,7 +151,7 @@ impl Reporter {
         // remove the worker from workers and send error.
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.
-            if let Some(payload) = self.payloads[stream as usize].as_mut().take() {
+            if let Some(_payload) = self.payloads[stream as usize].as_mut().take() {
                 worker.handle_error(error, &self.handle)?;
             } else {
                 error!("No payload found while handling error for stream {}!", stream);

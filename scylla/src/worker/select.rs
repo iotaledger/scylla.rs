@@ -3,6 +3,7 @@
 
 use super::*;
 
+/// A select worker
 #[derive(Clone)]
 pub struct SelectWorker<H, S: Select<K, V>, K, V>
 where
@@ -11,13 +12,19 @@ where
     V: 'static + Send + Clone,
     H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
+    /// A handle which can be used to return the queried value decoder
     pub handle: H,
+    /// The keyspace this worker operates on
     pub keyspace: S,
+    /// The key used to lookup the value
     pub key: K,
+    /// The query page size, used when retying due to failure
     pub page_size: Option<i32>,
+    /// The query paging state, used when retrying due to failure
     pub paging_state: Option<Vec<u8>>,
+    /// The number of times this worker will retry on failure
     pub retries: usize,
-    pub _marker: std::marker::PhantomData<V>,
+    _marker: std::marker::PhantomData<V>,
 }
 
 impl<H, S: Select<K, V>, K, V> SelectWorker<H, S, K, V>
@@ -27,6 +34,7 @@ where
     V: 'static + Send + Clone,
     H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
+    /// Create a new value selecting worker with a number of retries and a response handle
     pub fn new(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Self {
         Self {
             handle,
@@ -38,9 +46,11 @@ where
             _marker,
         }
     }
+    /// Create a new boxed value selecting worker with a number of retries and a response handle
     pub fn boxed(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Box<Self> {
         Box::new(Self::new(handle, keyspace, key, retries, _marker))
     }
+    /// Add paging information to this worker
     pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self, page_size: i32, paging_state: P) -> Self {
         self.page_size = Some(page_size);
         self.paging_state = paging_state.into();

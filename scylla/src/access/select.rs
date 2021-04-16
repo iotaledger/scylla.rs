@@ -87,9 +87,11 @@ pub trait GetSelectRequest<S, K> {
     fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
+    /// Specifies the returned Value type for an upcoming select request using a query statement
     fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
+    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
     fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
@@ -329,6 +331,7 @@ impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
         DecodeResult::select()
     }
 
+    /// Consume the request to retrieve the payload
     pub fn into_payload(self) -> Vec<u8> {
         self.inner
     }

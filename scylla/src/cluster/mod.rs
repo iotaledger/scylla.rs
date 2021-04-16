@@ -61,7 +61,7 @@ impl Shutdown for ClusterHandle {
         None
     }
 }
-// Cluster state
+/// Cluster state
 pub struct Cluster {
     service: Service,
     reporter_count: u8,

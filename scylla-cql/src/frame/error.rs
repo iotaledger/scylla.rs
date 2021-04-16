@@ -7,7 +7,7 @@ use super::{
     consistency::Consistency,
     decoder::{self, Decoder, Frame},
 };
-use anyhow::{anyhow, bail, ensure};
+use anyhow::{bail, ensure};
 // use num_derive::FromPrimitive;
 // use num_traits::FromPrimitive;
 use std::convert::{TryFrom, TryInto};

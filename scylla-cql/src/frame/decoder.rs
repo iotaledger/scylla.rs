@@ -19,6 +19,7 @@ use std::{
 };
 /// RowsDecoder trait to decode the rows result from scylla
 pub trait RowsDecoder<K, V> {
+    /// The Row to decode. Must implement [`super::Row`].
     type Row: super::Row;
     /// Try to decode the provided Decoder with an expected Rows result
     fn try_decode(decoder: Decoder) -> anyhow::Result<Option<V>>;

@@ -3,20 +3,27 @@
 
 use super::*;
 
+/// A statement prepare worker
 pub struct PrepareWorker {
+    /// The expected id for this statement
     pub id: [u8; 16],
+    /// The statement to prepare
     pub statement: String,
 }
 impl PrepareWorker {
+    /// Create a new prepare worker
     pub fn new<T: ToString>(id: [u8; 16], statement: T) -> Self {
         Self {
             id,
             statement: statement.to_string(),
         }
     }
+    /// Create a new boxed prepare worker
     pub fn boxed<T: ToString>(id: [u8; 16], statement: T) -> Box<Self> {
         Box::new(Self::new(id, statement))
     }
+    /// Create a prepare worker for an insert statement given a keyspace with the
+    /// appropriate trait definition
     pub fn insert<S, K, V>(keyspace: &S) -> Self
     where
         S: Insert<K, V>,
@@ -26,6 +33,8 @@ impl PrepareWorker {
             statement: keyspace.statement().to_string(),
         }
     }
+    /// Create a prepare worker for a select statement given a keyspace with the
+    /// appropriate trait definition
     pub fn select<S, K, V>(keyspace: &S) -> Self
     where
         S: Select<K, V>,
@@ -35,6 +44,8 @@ impl PrepareWorker {
             statement: keyspace.statement().to_string(),
         }
     }
+    /// Create a prepare worker for an update statement given a keyspace with the
+    /// appropriate trait definition
     pub fn update<S, K, V>(keyspace: &S) -> Self
     where
         S: Update<K, V>,
@@ -44,6 +55,8 @@ impl PrepareWorker {
             statement: keyspace.statement().to_string(),
         }
     }
+    /// Create a prepare worker for a delete statement given a keyspace with the
+    /// appropriate trait definition
     pub fn delete<S, K, V>(keyspace: &S) -> Self
     where
         S: Delete<K, V>,
