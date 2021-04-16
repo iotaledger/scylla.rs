@@ -3,11 +3,22 @@
 
 pub use crate::stage::ReporterEvent;
 use crate::{access::*, stage::ReporterHandle};
+pub use delete::DeleteWorker;
+pub use insert::InsertWorker;
 use log::*;
+pub use prepare::PrepareWorker;
 use scylla_cql::CqlError;
 use select::handle_unprepared_error;
+pub use select::SelectWorker;
 use std::io::Error;
 use tokio::sync::mpsc::UnboundedSender;
+pub use value::ValueWorker;
+
+mod delete;
+mod insert;
+mod prepare;
+mod select;
+mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send {
@@ -70,15 +81,3 @@ impl<W: Worker> DecodeResponse<Decoder> for W {
         decoder
     }
 }
-
-pub mod delete;
-pub mod insert;
-pub mod prepare;
-pub mod select;
-pub mod value;
-
-pub use delete::DeleteWorker;
-pub use insert::InsertWorker;
-pub use prepare::PrepareWorker;
-pub use select::SelectWorker;
-pub use value::ValueWorker;

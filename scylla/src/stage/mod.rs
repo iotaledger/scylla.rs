@@ -102,7 +102,7 @@ pub enum StageEvent {
     /// Shutdwon a stage.
     Shutdown,
 }
-// Stage state
+/// Stage state
 pub struct Stage {
     service: Service,
     address: SocketAddr,

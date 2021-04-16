@@ -93,9 +93,11 @@ pub trait GetSelectRequest<S, K> {
     fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
+    /// Specifies the returned Value type for an upcoming select request using a query statement
     fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
+    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
     fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Select<K, V>;
@@ -155,7 +157,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency> {
     }
 }
 impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryValues> {
-    pub fn page_size(mut self, page_size: i32) -> SelectBuilder<'a, S, K, V, QueryPagingState> {
+    pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, QueryPagingState> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -164,10 +166,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryValues> {
         }
     }
     /// Set the paging state.
-    pub fn paging_state(
-        mut self,
-        paging_state: &Option<Vec<u8>>,
-    ) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
+    pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -202,10 +201,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryBuild> {
 
 impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryPagingState> {
     /// Set the paging state in the query frame.
-    pub fn paging_state(
-        mut self,
-        paging_state: &Option<Vec<u8>>,
-    ) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
+    pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -215,7 +211,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryPagingState> {
     }
 
     /// Set the timestamp of the query frame.
-    pub fn timestamp(mut self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -224,7 +220,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryPagingState> {
         }
     }
 
-    pub fn build(mut self) -> SelectRequest<S, K, V> {
+    pub fn build(self) -> SelectRequest<S, K, V> {
         let query = self.builder.build();
         // create the request
         self.keyspace.create_request(query, S::token(self.key))
@@ -232,7 +228,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryPagingState> {
 }
 impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QuerySerialConsistency> {
     /// Set the timestamp of the query frame.
-    pub fn timestamp(mut self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -241,7 +237,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QuerySerialConsistenc
         }
     }
 
-    pub fn build(mut self) -> SelectRequest<S, K, V> {
+    pub fn build(self) -> SelectRequest<S, K, V> {
         let query = self.builder.build();
         // create the request
         self.keyspace.create_request(query, S::token(self.key))
@@ -341,6 +337,7 @@ impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
         DecodeResult::select()
     }
 
+    /// Consume the request to retrieve the payload
     pub fn into_payload(self) -> Vec<u8> {
         self.inner
     }

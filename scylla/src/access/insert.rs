@@ -94,9 +94,11 @@ pub trait GetInsertRequest<S, K, V> {
     fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Insert<K, V>;
+    /// Calls `Insert` implementation for this Key/Value pair using a query statement
     fn insert_query<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Insert<K, V>;
+    /// Calls `Insert` implementation for this Key/Value pair using a prepared statement id
     fn insert_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Insert<K, V>;
@@ -274,6 +276,7 @@ impl<S: Insert<K, V>, K, V> InsertRequest<S, K, V> {
         DecodeResult::insert()
     }
 
+    /// Consume the request to retrieve the payload
     pub fn into_payload(self) -> Vec<u8> {
         self.inner
     }

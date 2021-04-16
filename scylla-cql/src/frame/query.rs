@@ -16,35 +16,68 @@ use std::convert::TryInto;
 /// Blanket cql frame header for query frame.
 const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
 
+/// Query request builder. Maintains a type-gated stage so that operations
+/// are applied in a valid order.
+///
+/// ## Example
+/// ```
+/// let builder = Query::new();
+/// let query = builder
+///     .statement("statement")
+///     .values(&0)
+///     .values(&"val2".to_string())
+///     .consistency(Consistency::One)
+///     .build();
+/// let payload = query.0;
+/// ```
 pub struct QueryBuilder<Stage> {
     buffer: Vec<u8>,
     stage: Stage,
 }
 
+/// Gating type for query headers
 pub struct QueryHeader;
+/// Gating type for query statement
 pub struct QueryStatement;
+
+/// Gating type for prepared statement id
 pub struct PreparedStatement;
+
+/// Gating type for query consistency
 pub struct QueryConsistency;
+
+/// Gating type for query flags
 pub struct QueryFlags {
     index: usize,
 }
+
+/// Gating type for query values
 pub struct QueryValues {
     query_flags: QueryFlags,
     value_count: u16,
 }
+
+/// Gating type for query paging state
 pub struct QueryPagingState {
     query_flags: QueryFlags,
 }
+
+/// Gating type for query serial consistency
 pub struct QuerySerialConsistency {
     query_flags: QueryFlags,
 }
+
+/// Gating type for query timestamps
 pub struct QueryTimestamp {
     query_flags: QueryFlags,
 }
+
+/// Gating type for completed query
 pub struct QueryBuild;
 
 impl QueryBuilder<QueryHeader> {
-    fn new() -> QueryBuilder<QueryStatement> {
+    /// Create a new query builder
+    pub fn new() -> QueryBuilder<QueryStatement> {
         let mut buffer: Vec<u8> = Vec::new();
         buffer.extend_from_slice(&QUERY_HEADER);
         QueryBuilder::<QueryStatement> {
@@ -52,7 +85,8 @@ impl QueryBuilder<QueryHeader> {
             stage: QueryStatement,
         }
     }
-    fn with_capacity(capacity: usize) -> QueryBuilder<QueryStatement> {
+    /// Create a new query builder with a given buffer capacity
+    pub fn with_capacity(capacity: usize) -> QueryBuilder<QueryStatement> {
         let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
         buffer.extend_from_slice(&QUERY_HEADER);
         QueryBuilder::<QueryStatement> {

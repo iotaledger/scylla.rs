@@ -82,6 +82,7 @@ pub trait Rows: Iterator {
     fn take_paging_state(&mut self) -> Option<Vec<u8>>;
 }
 
+/// Defines a result-set row
 pub trait Row: Sized {
     /// Get the rows iterator
     fn rows_iter(decoder: super::Decoder) -> super::Iter<Self> {
@@ -93,11 +94,13 @@ pub trait Row: Sized {
         Self: Sized;
 }
 
+/// Defines a result-set column value
 pub trait ColumnValue {
     /// Decode the column value of C type;
     fn column_value<C: ColumnDecoder>(&mut self) -> C;
 }
 
+/// An iterator over the rows of a result-set
 #[allow(unused)]
 #[derive(Clone)]
 pub struct Iter<T: Row> {

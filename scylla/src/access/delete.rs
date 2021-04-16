@@ -94,9 +94,11 @@ pub trait GetDeleteRequest<S, K> {
     fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
+    /// Specifies the Value type for an upcoming delete request using a query statement
     fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
+    /// Specifies the Value type for an upcoming delete request using a prepared statement id
     fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Delete<K, V>;
@@ -269,6 +271,7 @@ impl<S: Delete<K, V>, K, V> DeleteRequest<S, K, V> {
         DecodeResult::delete()
     }
 
+    /// Consume the request to retrieve the payload
     pub fn into_payload(self) -> Vec<u8> {
         self.inner
     }

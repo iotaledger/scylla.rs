@@ -28,15 +28,34 @@ pub enum BatchTypes {
     /// The batch will be a "counter" batch.
     Counter = 2,
 }
+
+/// Batch request builder. Maintains a type-gated stage so that operations
+/// are applied in a valid order.
+///
+/// ## Example
+/// ```
+/// let builder = Batch::new();
+/// let batch = builder
+///     .logged()
+///     .statement("statement")
+///     .consistency(Consistency::One)
+///     .build();
+/// let payload = batch.0;
+/// ```
 pub struct BatchBuilder<Type: Copy + Into<u8>, Stage> {
     buffer: Vec<u8>,
     query_count: u16,
     batch_type: Type,
     stage: Stage,
 }
+
+/// Gating type for batch headers
 pub struct BatchHeader;
 
+/// Gating type for batch type
 pub struct BatchType;
+
+/// Gating type for unset batch type
 #[derive(Copy, Clone)]
 pub struct BatchTypeUnset;
 impl Into<u8> for BatchTypeUnset {
@@ -44,6 +63,8 @@ impl Into<u8> for BatchTypeUnset {
         panic!("Batch type is not set!")
     }
 }
+
+/// Gating type for logged batch type
 #[derive(Copy, Clone)]
 pub struct BatchTypeLogged;
 impl Into<u8> for BatchTypeLogged {
@@ -51,6 +72,8 @@ impl Into<u8> for BatchTypeLogged {
         0
     }
 }
+
+/// Gating type for unlogged batch type
 #[derive(Copy, Clone)]
 pub struct BatchTypeUnlogged;
 impl Into<u8> for BatchTypeUnlogged {
@@ -58,6 +81,8 @@ impl Into<u8> for BatchTypeUnlogged {
         1
     }
 }
+
+/// Gating type for counter batch type
 #[derive(Copy, Clone)]
 pub struct BatchTypeCounter;
 impl Into<u8> for BatchTypeCounter {
@@ -65,16 +90,27 @@ impl Into<u8> for BatchTypeCounter {
         2
     }
 }
+
+/// Gating type for statement / prepared id
 pub struct BatchStatementOrId;
+
+/// Gating type for statement values
 pub struct BatchValues {
     value_count: u16,
     index: usize,
 }
+
+/// Gating type for batch flags
 pub struct BatchFlags;
+
+/// Gating type for batch timestamp
 pub struct BatchTimestamp;
+
+/// Gating type for completed batch
 pub struct BatchBuild;
 
 impl BatchBuilder<BatchTypeUnset, BatchHeader> {
+    /// Create a new batch builder
     pub fn new() -> BatchBuilder<BatchTypeUnset, BatchType> {
         let mut buffer: Vec<u8> = Vec::new();
         buffer.extend_from_slice(&BATCH_HEADER);
@@ -85,6 +121,7 @@ impl BatchBuilder<BatchTypeUnset, BatchHeader> {
             stage: BatchType,
         }
     }
+    /// Create a new batch build with a given buffer capacity
     pub fn with_capacity(capacity: usize) -> BatchBuilder<BatchTypeUnset, BatchType> {
         let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
         buffer.extend_from_slice(&BATCH_HEADER);
@@ -98,7 +135,7 @@ impl BatchBuilder<BatchTypeUnset, BatchHeader> {
 }
 
 impl BatchBuilder<BatchTypeUnset, BatchType> {
-    /// Set the batch type in the Batch frame.
+    /// Set the batch type in the Batch frame. See https://cassandra.apache.org/doc/latest/cql/dml.html#batch
     pub fn batch_type<Type: Copy + Into<u8>>(mut self, batch_type: Type) -> BatchBuilder<Type, BatchStatementOrId> {
         // push batch_type and pad zero querycount
         self.buffer.extend(&[batch_type.into(), 0, 0]);
@@ -109,6 +146,7 @@ impl BatchBuilder<BatchTypeUnset, BatchType> {
             stage: BatchStatementOrId,
         }
     }
+    /// Set the batch type to logged. See https://cassandra.apache.org/doc/latest/cql/dml.html#batch
     pub fn logged(mut self) -> BatchBuilder<BatchTypeLogged, BatchStatementOrId> {
         // push logged batch_type and pad zero querycount
         self.buffer.extend(&[0, 0, 0]);
@@ -119,6 +157,7 @@ impl BatchBuilder<BatchTypeUnset, BatchType> {
             stage: BatchStatementOrId,
         }
     }
+    /// Set the batch type to unlogged. See https://cassandra.apache.org/doc/latest/cql/dml.html#unlogged-batches
     pub fn unlogged(mut self) -> BatchBuilder<BatchTypeUnlogged, BatchStatementOrId> {
         // push unlogged batch_type and pad zero querycount
         self.buffer.extend(&[1, 0, 0]);
@@ -129,6 +168,7 @@ impl BatchBuilder<BatchTypeUnset, BatchType> {
             stage: BatchStatementOrId,
         }
     }
+    /// Set the batch type to counter. See https://cassandra.apache.org/doc/latest/cql/dml.html#counter-batches
     pub fn counter(mut self) -> BatchBuilder<BatchTypeCounter, BatchStatementOrId> {
         // push counter batch_type and pad zero querycount
         self.buffer.extend(&[2, 0, 0]);

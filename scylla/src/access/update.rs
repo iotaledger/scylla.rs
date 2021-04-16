@@ -91,13 +91,15 @@ impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for PreparedStatement {
 
 /// Wrapper for the `Update` trait which provides the `update` function
 pub trait GetUpdateRequest<S, K, V> {
-    /// Calls the appropriate `Insert` implementation for this Key/Value pair
+    /// Calls the appropriate `Update` implementation for this Key/Value pair
     fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
+    /// Calls the `Update` implementation for this Key/Value pair using a query statement
     fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
+    /// Calls the `Update` implementation for this Key/Value pair using a prepared statement id
     fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
     where
         S: Update<K, V>;
@@ -275,6 +277,7 @@ impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
         DecodeResult::update()
     }
 
+    /// Consume the request to retrieve the payload
     pub fn into_payload(self) -> Vec<u8> {
         self.inner
     }

@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 
+/// A delete request worker
 #[derive(Clone)]
 pub struct DeleteWorker<S: Delete<K, V>, K, V> {
+    /// The keyspace this worker is for
     pub keyspace: S,
+    /// The key used to delete the record
     pub key: K,
+    /// The number of times this worker will retry on failure
     pub retries: usize,
-    pub _marker: std::marker::PhantomData<V>,
+    _marker: std::marker::PhantomData<V>,
 }
 
 impl<S: Delete<K, V>, K, V> DeleteWorker<S, K, V>
@@ -16,6 +20,7 @@ where
     K: 'static + Send,
     V: 'static + Send,
 {
+    /// Create a new delete worker with a number of retries
     pub fn new(keyspace: S, key: K, retries: usize) -> Self {
         Self {
             keyspace,
@@ -24,6 +29,7 @@ where
             _marker: std::marker::PhantomData,
         }
     }
+    /// Create a new boxed delete worker with a number of retries
     pub fn boxed(keyspace: S, key: K, retries: usize) -> Box<Self> {
         Box::new(Self::new(keyspace, key, retries))
     }

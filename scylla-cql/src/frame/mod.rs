@@ -45,17 +45,25 @@ const MD5_BE_LENGTH: [u8; 2] = [0, 16];
 
 /// Statement or ID
 pub trait QueryOrPrepared: Sized {
+    /// Encode the statement as either a query string or an md5 hash prepared id
     fn encode_statement<T: Statements>(query_or_batch: T, statement: &[u8]) -> T::Return;
+    /// Returns whether this is a prepared statement
     fn is_prepared() -> bool;
 }
 
+/// Defines shared functionality for frames that can receive statements
 pub trait Statements {
+    /// The return type after applying a statement
     type Return;
+    /// Add a statement to the frame
     fn statement(self, statement: &str) -> Self::Return;
+    /// Add a prepared statement id to the frame
     fn id(self, id: &[u8; 16]) -> Self::Return;
 }
 
+/// Defines shared functionality for frames that can receive statement values
 pub trait Values: Sized {
+    /// The return type after applying a value
     type Return: Values<Return = Self::Return>;
     /// Value of type V.
     fn value<V: ColumnEncoder>(self, value: &V) -> Self::Return;

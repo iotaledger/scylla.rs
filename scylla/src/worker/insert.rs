@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 
+/// An insert request worker
 #[derive(Clone)]
 pub struct InsertWorker<S: Insert<K, V>, K, V> {
+    /// The keyspace this worker is for
     pub keyspace: S,
+    /// The key used to insert the record
     pub key: K,
+    /// The value to be inserted
     pub value: V,
+    /// The number of times this worker will retry on failure
     pub retries: usize,
 }
 
@@ -16,6 +21,7 @@ where
     K: 'static + Send,
     V: 'static + Send,
 {
+    /// Create a new insert worker with a number of retries
     pub fn new(keyspace: S, key: K, value: V, retries: usize) -> Self {
         Self {
             keyspace,
@@ -24,6 +30,7 @@ where
             retries,
         }
     }
+    /// Create a new boxed insert worker with a number of retries
     pub fn boxed(keyspace: S, key: K, value: V, retries: usize) -> Box<Self> {
         Box::new(Self::new(keyspace, key, value, retries))
     }

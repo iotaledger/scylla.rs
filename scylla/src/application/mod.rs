@@ -47,9 +47,11 @@ builder!(
 pub enum ScyllaThrough {
     /// Shutdown json to gracefully shutdown scylla app
     Shutdown,
+    /// Alter the scylla topology
     Topology(Topology),
 }
 
+#[allow(missing_docs)]
 #[repr(u8)]
 #[derive(PartialEq)]
 pub enum Caller {
@@ -122,8 +124,9 @@ pub enum Topology {
 }
 
 #[derive(Deserialize, Serialize)]
-// use Scylla to indicate to the msg is from/to Scylla
+/// Indicates which app this message is for
 pub enum SocketMsg<T> {
+    /// Message for Scylla app
     Scylla(T),
 }
 
