@@ -20,14 +20,17 @@ const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
 ///
 /// ## Example
 /// ```
+/// use scylla_cql::{Consistency, Query, Statements, Values};
+///
 /// let builder = Query::new();
 /// let query = builder
 ///     .statement("statement")
-///     .values(&0)
-///     .values(&"val2".to_string())
 ///     .consistency(Consistency::One)
-///     .build();
+///     .value(&0)
+///     .value(&"val2".to_string())
+///     .build()?;
 /// let payload = query.0;
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct QueryBuilder<Stage> {
     buffer: Vec<u8>,

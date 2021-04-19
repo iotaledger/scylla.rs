@@ -34,13 +34,16 @@ pub enum BatchTypes {
 ///
 /// ## Example
 /// ```
+/// use scylla_cql::{Batch, Consistency, Statements};
+///
 /// let builder = Batch::new();
 /// let batch = builder
 ///     .logged()
 ///     .statement("statement")
 ///     .consistency(Consistency::One)
-///     .build();
+///     .build()?;
 /// let payload = batch.0;
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct BatchBuilder<Type: Copy + Into<u8>, Stage> {
     buffer: Vec<u8>,
