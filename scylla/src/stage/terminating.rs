@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -10,9 +10,6 @@ impl Terminating<NodeHandle> for Stage {
         _status: Result<(), Need>,
         _supervisor: &mut Option<NodeHandle>,
     ) -> Result<(), Need> {
-        self.service.update_status(ServiceStatus::Stopping);
-        // let event = ScyllaEvent::Children(ScyllaChild::Cluster(self.service.clone(), None));
-        // let _ = _supervisor.as_mut().unwrap().send(event);
         _status
     }
 }

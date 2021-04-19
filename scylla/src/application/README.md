@@ -1,2 +1,2 @@
 ## About
-ScyllaDB Application
+Scylla Application

@@ -3,8 +3,11 @@
 
 //! This module defines the consistency enum.
 
-use std::{convert::TryInto, mem::transmute};
-#[derive(Debug)]
+use anyhow::anyhow;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
+use std::convert::{TryFrom, TryInto};
+#[derive(Debug, FromPrimitive)]
 #[repr(u16)]
 /// The consistency level enum.
 pub enum Consistency {
@@ -32,8 +35,11 @@ pub enum Consistency {
     LocalOne = 0xA,
 }
 
-impl From<&[u8]> for Consistency {
-    fn from(slice: &[u8]) -> Self {
-        unsafe { transmute(u16::from_be_bytes(slice[0..2].try_into().unwrap())) }
+impl TryFrom<&[u8]> for Consistency {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Consistency::from_u16(u16::from_be_bytes(slice[0..2].try_into()?))
+            .ok_or(anyhow!("No consistency representation for provided bytes!"))
     }
 }

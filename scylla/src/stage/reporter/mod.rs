@@ -1,12 +1,14 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
 use crate::worker::{Worker, WorkerError};
+use anyhow::anyhow;
+use scylla_cql::{CqlError, Decoder};
 use sender::SenderHandle;
-
 use std::{
-    io::{Error, ErrorKind},
+    collections::HashSet,
+    convert::TryFrom,
     ops::{Deref, DerefMut},
 };
 
@@ -21,15 +23,14 @@ type Workers = HashMap<i16, Box<dyn Worker>>;
 builder!(ReporterBuilder {
     session_id: usize,
     reporter_id: u8,
-    streams: Vec<i16>,
+    shard_id: u16,
+    streams: HashSet<i16>,
     address: SocketAddr,
-    shard_id: u8,
-    payloads: Payloads,
-    handle: ReporterHandle,
-    inbox: ReporterInbox
+    payloads: Payloads
 });
 
 /// ReporterHandle to be passed to the children (Stage)
+#[derive(Clone)]
 pub struct ReporterHandle {
     tx: mpsc::UnboundedSender<ReporterEvent>,
 }
@@ -56,7 +57,7 @@ impl DerefMut for ReporterHandle {
 pub enum ReporterEvent {
     /// The request Cql query.
     Request {
-        // The worker which is used to process the request.
+        /// The worker which is used to process the request.
         worker: Box<dyn Worker>,
         /// The request payload.
         payload: Vec<u8>,
@@ -67,7 +68,7 @@ pub enum ReporterEvent {
         stream_id: i16,
     },
     /// The stream error.
-    Err(Error, i16),
+    Err(anyhow::Error, i16),
     /// The stage session.
     Session(Session),
 }
@@ -84,13 +85,19 @@ pub struct Reporter {
     address: SocketAddr,
     session_id: usize,
     reporter_id: u8,
-    streams: Vec<i16>,
-    shard_id: u8,
+    streams: HashSet<i16>,
+    shard_id: u16,
     workers: Workers,
     sender_handle: Option<SenderHandle>,
     payloads: Payloads,
     handle: Option<ReporterHandle>,
     inbox: ReporterInbox,
+}
+
+impl Reporter {
+    pub fn clone_handle(&self) -> Option<ReporterHandle> {
+        self.handle.clone()
+    }
 }
 
 impl ActorBuilder<StageHandle> for ReporterBuilder {}
@@ -142,6 +149,20 @@ impl AknShutdown<Reporter> for StageHandle {
     }
 }
 
+impl Reporter {
+    fn force_consistency(&mut self) {
+        for (stream_id, worker_id) in self.workers.drain() {
+            // push the stream_id back into the streams vector
+            self.streams.insert(stream_id);
+            // tell worker_id that we lost the response for his request, because we lost scylla connection in
+            // middle of request cycle, still this is a rare case.
+            worker_id
+                .handle_error(WorkerError::Lost, &self.handle)
+                .unwrap_or_else(|e| error!("{}", e));
+        }
+    }
+}
+
 pub fn compute_reporter_num(stream_id: i16, appends_num: i16) -> u8 {
     (stream_id / appends_num) as u8
 }
@@ -152,12 +173,6 @@ fn assign_stream_to_payload(stream: i16, payload: &mut Vec<u8>) {
     payload[3] = stream as u8; // payload[3] is the second byte of the stream_id. please refer to cql specs
 }
 
-fn force_consistency(streams: &mut Vec<i16>, workers: &mut Workers) {
-    for (stream_id, worker_id) in workers.drain() {
-        // push the stream_id back into the streams vector
-        streams.push(stream_id);
-        // tell worker_id that we lost the response for his request, because we lost scylla connection in
-        // middle of request cycle, still this is a rare case.
-        worker_id.send_error(WorkerError::Lost);
-    }
+fn is_cql_error(buffer: &[u8]) -> bool {
+    buffer[4] == 0
 }

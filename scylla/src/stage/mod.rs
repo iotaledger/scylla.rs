@@ -1,11 +1,20 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::node::*;
 use crate::application::*;
-use std::ops::{Deref, DerefMut};
+use receiver::ReceiverBuilder;
+use reporter::ReporterBuilder;
+use sender::SenderBuilder;
 
-use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+    cell::UnsafeCell,
+    collections::HashMap,
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
+use tokio::net::TcpStream;
 
 mod event_loop;
 mod init;
@@ -17,24 +26,51 @@ mod terminating;
 pub use reporter::{ReporterEvent, ReporterHandle};
 
 /// The reporters of shard id to its corresponding sender of stage reporter events.
-pub type ReportersHandles = HashMap<u8, mpsc::UnboundedSender<reporter::ReporterEvent>>;
+#[derive(Clone)]
+pub struct ReportersHandles(HashMap<u8, ReporterHandle>);
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
+
+impl Deref for ReportersHandles {
+    type Target = HashMap<u8, ReporterHandle>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ReportersHandles {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Shutdown for ReportersHandles {
+    fn shutdown(self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        for reporter_handle in self.values() {
+            let _ = reporter_handle.send(ReporterEvent::Session(reporter::Session::Shutdown));
+        }
+        None
+    }
+}
 
 // Stage builder
 builder!(StageBuilder {
     address: SocketAddr,
+    authenticator: PasswordAuth,
     reporter_count: u8,
-    shard_id: u8,
+    shard_id: u16,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>,
-    //authenticator: Option<PasswordAuth>
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
     handle: StageHandle,
     inbox: StageInbox
 });
 
 /// StageHandle to be passed to the children (reporter/s)
+#[derive(Clone)]
 pub struct StageHandle {
     tx: mpsc::UnboundedSender<StageEvent>,
 }
@@ -59,33 +95,35 @@ impl DerefMut for StageHandle {
 
 /// Stage event enum.
 pub enum StageEvent {
-    // Connect to a shard.
-    // Connect(sender::Sender, sender::Receiver),
     /// Reporter child status change
     Reporter(Service),
-    /// Reconnection request.
-    Reconnect(usize),
+    /// Establish connection to scylla shard.
+    Connect,
     /// Shutdwon a stage.
     Shutdown,
 }
-// Stage state
+/// Stage state
 pub struct Stage {
     service: Service,
     address: SocketAddr,
+    authenticator: PasswordAuth,
+    appends_num: i16,
     reporter_count: u8,
-    reporters_handles: ReportersHandles,
+    reporters_handles: Option<ReportersHandles>,
     session_id: usize,
-    reconnect_requests: u8,
-    connected: bool,
-    shard_id: u8,
+    shard_id: u16,
     payloads: Payloads,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>,
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
     handle: Option<StageHandle>,
     inbox: StageInbox,
 }
-
+impl Stage {
+    pub(crate) fn clone_handle(&self) -> Option<StageHandle> {
+        self.handle.clone()
+    }
+}
 #[derive(Default)]
 /// The reusable sender payload.
 pub struct Reusable {
@@ -124,14 +162,14 @@ impl Builder for StageBuilder {
         Self::State {
             service: Service::new(),
             address: self.address.unwrap(),
+            authenticator: self.authenticator.unwrap(),
+            appends_num: 32767 / (reporter_count as i16),
             reporter_count,
-            reporters_handles: HashMap::with_capacity(reporter_count as usize),
+            reporters_handles: Some(ReportersHandles(HashMap::with_capacity(reporter_count as usize))),
             session_id: 0,
-            reconnect_requests: 0,
-            connected: false,
             shard_id: self.shard_id.unwrap(),
             payloads,
-            buffer_size: self.buffer_size.unwrap(),
+            buffer_size: self.buffer_size.unwrap_or(1024000),
             recv_buffer_size: self.recv_buffer_size.unwrap(),
             send_buffer_size: self.send_buffer_size.unwrap(),
             handle,
@@ -158,7 +196,7 @@ impl Name for Stage {
 impl AknShutdown<Stage> for NodeHandle {
     async fn aknowledge_shutdown(self, mut _state: Stage, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        // let event = ScyllaEvent::Children(ScyllaChild::Cluster(_state.service.clone(), Some(_status)));
-        // let _ = self.send(event);
+        let event = NodeEvent::Service(_state.service.clone());
+        let _ = self.send(event);
     }
 }

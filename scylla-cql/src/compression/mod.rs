@@ -11,9 +11,9 @@ pub trait Compression: Sync {
     /// The compression type string, `lz4` or `snappy` or None.
     fn option(&self) -> Option<&'static str>;
     /// Decompress buffer only if compression flag is set
-    fn decompress(&self, compressed: Vec<u8>) -> Vec<u8>;
+    fn decompress(&self, compressed: Vec<u8>) -> anyhow::Result<Vec<u8>>;
     /// Compression the buffer according to the compression type (Lz4 for snappy).
-    fn compress(&self, uncompressed: Vec<u8>) -> Vec<u8>;
+    fn compress(&self, uncompressed: Vec<u8>) -> anyhow::Result<Vec<u8>>;
 }
 
 /// LZ4 compression type.
@@ -25,35 +25,44 @@ impl Compression for Lz4 {
     fn option(&self) -> Option<&'static str> {
         Some("lz4")
     }
-    fn decompress(&self, mut buffer: Vec<u8>) -> Vec<u8> {
+    fn decompress(&self, mut buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         // check if buffer is compressed
-        if buffer[1] & COMPRESSION == COMPRESSION {
-            let compressed_body_length = i32::from_be_bytes(buffer[5..9].try_into().unwrap()) as usize;
+        anyhow::ensure!(buffer.len() >= 9, "Buffer is too small!");
+        Ok(if buffer[1] & COMPRESSION == COMPRESSION {
+            let compressed_body_length = i32::from_be_bytes(buffer[5..9].try_into()?) as usize;
             // Decompress the body by lz4
-            let decompressed_buffer: Vec<u8> =
-                lz4::block::decompress(&buffer[13..(13 + compressed_body_length)], None).unwrap();
-            // adjust the length to equal the uncompressed length
-            buffer.copy_within(9..13, 5);
-            // reduce the frame to be a header only
-            buffer.truncate(9);
-            // Extend the decompressed body
-            buffer.extend(&decompressed_buffer);
-            buffer
+            match lz4::block::decompress(&buffer[9..(9 + compressed_body_length)], None) {
+                Ok(decompressed_buffer) => {
+                    // reduce the frame to be a header only without length
+                    buffer.truncate(5);
+                    // make the body length to be the decompressed body length
+                    buffer.extend(&i32::to_be_bytes(decompressed_buffer.len() as i32));
+                    // Extend the decompressed body
+                    buffer.extend(&decompressed_buffer);
+                    buffer
+                }
+                Err(_) => {
+                    // return only the header as this is mostly a result of header only
+                    buffer.truncate(9);
+                    buffer
+                }
+            }
         } else {
-            // return the buffer as it's
+            // return the buffer as it is
             buffer
-        }
+        })
     }
-    fn compress(&self, mut buffer: Vec<u8>) -> Vec<u8> {
+    fn compress(&self, mut buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(buffer.len() >= 9, "Buffer is too small!");
         // Compress the body
-        let compressed_buffer: Vec<u8> = lz4::block::compress(&buffer[9..], None, true).unwrap();
+        let compressed_buffer: Vec<u8> = lz4::block::compress(&buffer[9..], None, true)?;
         // Truncate the buffer to be header without length
         buffer.truncate(5);
         // make the body length to be the compressed body length
         buffer.extend(&i32::to_be_bytes(compressed_buffer.len() as i32));
         // Extend the compressed body
         buffer.extend(&compressed_buffer);
-        buffer
+        Ok(buffer)
     }
 }
 
@@ -65,13 +74,13 @@ impl Compression for Snappy {
     fn option(&self) -> Option<&'static str> {
         Some("snappy")
     }
-    fn decompress(&self, mut buffer: Vec<u8>) -> Vec<u8> {
-        if buffer[1] & COMPRESSION == COMPRESSION {
-            let compressed_body_length = i32::from_be_bytes(buffer[5..9].try_into().unwrap()) as usize;
+    fn decompress(&self, mut buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(buffer.len() >= 9, "Buffer is too small!");
+        Ok(if buffer[1] & COMPRESSION == COMPRESSION {
+            let compressed_body_length = i32::from_be_bytes(buffer[5..9].try_into()?) as usize;
             // Decompress the body by snappy
-            let decompressed_buffer: Vec<u8> = snap::raw::Decoder::new()
-                .decompress_vec(&buffer[9..(9 + compressed_body_length)])
-                .unwrap();
+            let decompressed_buffer: Vec<u8> =
+                snap::raw::Decoder::new().decompress_vec(&buffer[9..(9 + compressed_body_length)])?;
             // reduce the frame to be a header only without length
             buffer.truncate(5);
             // make the body length to be the decompressed body length
@@ -81,18 +90,19 @@ impl Compression for Snappy {
             buffer
         } else {
             buffer
-        }
+        })
     }
-    fn compress(&self, mut buffer: Vec<u8>) -> Vec<u8> {
+    fn compress(&self, mut buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(buffer.len() >= 9, "Buffer is too small!");
         // Compress the body
-        let compressed_buffer: Vec<u8> = snap::raw::Encoder::new().compress_vec(&buffer[9..]).unwrap();
+        let compressed_buffer: Vec<u8> = snap::raw::Encoder::new().compress_vec(&buffer[9..])?;
         // Truncate the buffer to be header only without length
         buffer.truncate(5);
         // Update the body length to be the compressed body length
         buffer.extend(&i32::to_be_bytes(compressed_buffer.len() as i32));
         // Extend the compressed body
         buffer.extend(&compressed_buffer);
-        buffer
+        Ok(buffer)
     }
 }
 
@@ -104,14 +114,16 @@ impl Compression for Uncompressed {
     fn option(&self) -> Option<&'static str> {
         None
     }
-    fn decompress(&self, buffer: Vec<u8>) -> Vec<u8> {
-        buffer
+    fn decompress(&self, buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(buffer.len() >= 9, "Buffer is too small!");
+        Ok(buffer)
     }
-    fn compress(&self, mut buffer: Vec<u8>) -> Vec<u8> {
+    fn compress(&self, mut buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(buffer.len() >= 9, "Buffer is too small!");
         // no need to compress, only adjust the body length
         let body_length = i32::to_be_bytes((buffer.len() as i32) - 9);
         buffer[5..9].copy_from_slice(&body_length);
-        buffer
+        Ok(buffer)
     }
 }
 /// `MY_COMPRESSION` is used to enable user defines a global compression structure.
@@ -166,11 +178,11 @@ impl Compression for MyCompression {
     fn option(&self) -> Option<&'static str> {
         self.0.option()
     }
-    fn decompress(&self, buffer: Vec<u8>) -> Vec<u8> {
+    fn decompress(&self, buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         // get the inner compression and then decompress
         self.0.decompress(buffer)
     }
-    fn compress(&self, buffer: Vec<u8>) -> Vec<u8> {
+    fn compress(&self, buffer: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         // get the inner compression and then compress
         self.0.compress(buffer)
     }

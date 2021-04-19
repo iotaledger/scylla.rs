@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::application::*;
@@ -20,11 +20,12 @@ pub struct ListenerHandle {
     abort_handle: AbortHandle,
 }
 impl ListenerHandle {
+    /// Create a new listener handle
     pub fn new(abort_handle: AbortHandle) -> Self {
         Self { abort_handle }
     }
 }
-// Listener state
+/// Listener state
 pub struct Listener {
     service: Service,
     tcp_listener: TcpListener,
@@ -69,7 +70,7 @@ impl Shutdown for ListenerHandle {
 impl<H: ScyllaScope> AknShutdown<Listener> for ScyllaHandle<H> {
     async fn aknowledge_shutdown(self, mut _state: Listener, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        let event = ScyllaEvent::Children(ScyllaChild::Listener(_state.service.clone(), Some(_status)));
+        let event = ScyllaEvent::Children(ScyllaChild::Listener(_state.service.clone()));
         let _ = self.send(event);
     }
 }

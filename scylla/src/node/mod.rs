@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 /// Import supervisor scope
@@ -9,6 +9,7 @@ use super::stage::*;
 use crate::application::*;
 
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     ops::{Deref, DerefMut},
 };
@@ -20,17 +21,17 @@ mod terminating;
 // Node builder
 builder!(NodeBuilder {
     address: SocketAddr,
-    //node_id: NodeId,
-    //data_center: DC,
+    data_center: String,
     reporter_count: u8,
-    shard_count: u8,
+    shard_count: u16,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>
-    //authenticator: Option<PasswordAuth>
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
+    authenticator: PasswordAuth
 });
 
 /// NodeHandle to be passed to the children (Stage)
+#[derive(Clone)]
 pub struct NodeHandle {
     tx: mpsc::UnboundedSender<NodeEvent>,
 }
@@ -52,28 +53,44 @@ impl DerefMut for NodeHandle {
         &mut self.tx
     }
 }
-
+impl Shutdown for NodeHandle {
+    fn shutdown(self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let _ = self.tx.send(NodeEvent::Shutdown);
+        None
+    }
+}
 /// Node event enum.
 pub enum NodeEvent {
     /// Shutdown the node.
     Shutdown,
-    StageService(Service, Option<ReportersHandles>),
-    /* Register the node in its corresponding stage.
-     * RegisterReporters(u8, stage::supervisor::Reporters), */
+    /// Register the stage reporters.
+    RegisterReporters(Service, ReportersHandles),
+    /// To keep the node with up to date stage service
+    Service(Service),
 }
-// Node state
+/// Node state
 pub struct Node {
     service: Service,
     address: SocketAddr,
+    reporters_handles: Option<HashMap<SocketAddr, ReportersHandles>>,
     reporter_count: u8,
-    shard_count: u8,
+    stages: HashMap<u16, StageHandle>,
+    shard_count: u16,
     buffer_size: usize,
-    recv_buffer_size: Option<usize>,
-    send_buffer_size: Option<usize>,
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
+    authenticator: PasswordAuth,
     handle: Option<NodeHandle>,
     inbox: NodeInbox,
 }
-
+impl Node {
+    pub(crate) fn clone_handle(&self) -> NodeHandle {
+        self.handle.clone().unwrap()
+    }
+}
 impl ActorBuilder<ClusterHandle> for NodeBuilder {}
 
 /// implementation of builder
@@ -83,16 +100,17 @@ impl Builder for NodeBuilder {
         let (tx, rx) = mpsc::unbounded_channel::<NodeEvent>();
         let handle = Some(NodeHandle { tx });
         let inbox = NodeInbox { rx };
-        // TODO initialize global_ring
-
         Self::State {
             service: Service::new(),
             address: self.address.unwrap(),
+            reporters_handles: Some(HashMap::new()),
             reporter_count: self.reporter_count.unwrap(),
+            stages: HashMap::new(),
             shard_count: self.shard_count.unwrap(),
             buffer_size: self.buffer_size.unwrap(),
             recv_buffer_size: self.recv_buffer_size.unwrap(),
             send_buffer_size: self.send_buffer_size.unwrap(),
+            authenticator: self.authenticator.unwrap(),
             handle,
             inbox,
         }
@@ -117,7 +135,7 @@ impl Name for Node {
 impl AknShutdown<Node> for ClusterHandle {
     async fn aknowledge_shutdown(self, mut _state: Node, _status: Result<(), Need>) {
         _state.service.update_status(ServiceStatus::Stopped);
-        // let event = ScyllaEvent::Children(ScyllaChild::Cluster(_state.service.clone(), Some(_status)));
-        // let _ = self.send(event);
+        let event = ClusterEvent::Service(_state.service.clone());
+        let _ = self.send(event);
     }
 }

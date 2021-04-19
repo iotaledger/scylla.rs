@@ -27,13 +27,18 @@ impl Authenticator for AllowAllAuth {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 /// The password autentication structure with the user and password fields.
 pub struct PasswordAuth {
     user: String,
     pass: String,
 }
 
+impl Default for PasswordAuth {
+    fn default() -> Self {
+        PasswordAuth::new("cassandra".to_owned(), "cassandra".to_owned())
+    }
+}
 impl PasswordAuth {
     /// Create a new user with account and the corresponding password.
     pub fn new(user: String, pass: String) -> Self {
@@ -71,10 +76,10 @@ impl AuthResponse {
         self
     }
     /// Build a response frame with a assigned compression type.
-    pub(crate) fn build(mut self, compression: impl Compression) -> Self {
+    pub(crate) fn build(mut self, compression: impl Compression) -> anyhow::Result<Self> {
         // apply compression flag(if any to the header)
         self.0[1] |= MyCompression::flag();
-        self.0 = compression.compress(self.0);
-        self
+        self.0 = compression.compress(self.0)?;
+        Ok(self)
     }
 }

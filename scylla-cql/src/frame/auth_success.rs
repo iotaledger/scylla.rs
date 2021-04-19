@@ -4,6 +4,7 @@
 //! This module implements the needed structure and traits used for successful autentication.
 
 use super::decoder::{bytes, Decoder, Frame};
+use std::convert::TryFrom;
 
 /// The structure for successful autentication.
 pub struct AuthSuccess {
@@ -12,8 +13,8 @@ pub struct AuthSuccess {
 
 impl AuthSuccess {
     /// Create a new `AuthSuccess` structure from frame decoder.
-    pub fn new(decoder: &Decoder) -> Self {
-        Self::from(decoder.body())
+    pub fn new(decoder: &Decoder) -> anyhow::Result<Self> {
+        Self::try_from(decoder.body()?)
     }
     /// Get the autentication token.
     pub fn token(&self) -> Option<&Vec<u8>> {
@@ -21,9 +22,10 @@ impl AuthSuccess {
     }
 }
 
-impl From<&[u8]> for AuthSuccess {
-    fn from(slice: &[u8]) -> Self {
-        let token = bytes(slice);
-        Self { token }
+impl TryFrom<&[u8]> for AuthSuccess {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self { token: bytes(slice)? })
     }
 }

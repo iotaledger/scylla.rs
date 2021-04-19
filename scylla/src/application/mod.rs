@@ -1,17 +1,20 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{cluster::*, listener::*, websocket::*};
 
-pub use chronicle::*;
+use anyhow::{anyhow, bail};
+pub use backstage::*;
+pub use client::add_nodes::add_nodes;
 pub use log::*;
-pub use tokio::{spawn, sync::mpsc};
-
+pub(crate) use scylla_cql::{CqlBuilder, PasswordAuth};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     ops::{Deref, DerefMut},
 };
+pub use tokio::{spawn, sync::mpsc};
 
 mod event_loop;
 mod init;
@@ -28,25 +31,36 @@ builder!(
     ScyllaBuilder<H> {
         listen_address: String,
         reporter_count: u8,
-        thread_count: u16,
+        thread_count: usize,
         local_dc: String,
         buffer_size: usize,
-        recv_buffer_size: usize,
-        send_buffer_size: usize,
+        recv_buffer_size: u32,
+        send_buffer_size: u32,
         listener_handle: ListenerHandle,
-        authenticator: usize
+        cluster_handle: ClusterHandle,
+        authenticator: PasswordAuth
 });
 
 #[derive(Deserialize, Serialize)]
+/// It's the Interface the scylla app to dynamiclly configure the application during runtime
 pub enum ScyllaThrough {
+    /// Shutdown json to gracefully shutdown scylla app
     Shutdown,
-    AddNode(String),
-    RemoveNode(String),
-    TryBuild(u8),
+    /// Alter the scylla topology
+    Topology(Topology),
+}
+
+#[allow(missing_docs)]
+#[repr(u8)]
+#[derive(PartialEq)]
+pub enum Caller {
+    Launcher = 0,
+    Other = 1,
 }
 
 /// ScyllaHandle to be passed to the children (Listener and Cluster)
 pub struct ScyllaHandle<H: ScyllaScope> {
+    pub(crate) caller: Caller,
     tx: tokio::sync::mpsc::UnboundedSender<ScyllaEvent<H::AppsEvents>>,
 }
 /// ScyllaInbox used to recv events
@@ -56,7 +70,10 @@ pub struct ScyllaInbox<H: ScyllaScope> {
 
 impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
     fn clone(&self) -> Self {
-        ScyllaHandle::<H> { tx: self.tx.clone() }
+        ScyllaHandle::<H> {
+            caller: Caller::Other,
+            tx: self.tx.clone(),
+        }
     }
 }
 
@@ -64,28 +81,52 @@ impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
 pub struct Scylla<H: ScyllaScope> {
     service: Service,
     listener_handle: Option<ListenerHandle>,
-    // cluster_handle: u8,
+    cluster_handle: Option<ClusterHandle>,
     websockets: HashMap<String, WsTx>,
     handle: Option<ScyllaHandle<H>>,
     inbox: ScyllaInbox<H>,
-    /*    tcp_listener:
-     *    listener: None,
-     *    sockets: HashMap::new(),
-     *    tx: Sender(tx),
-     *    rx, */
 }
 
 /// SubEvent type, indicated the children
 pub enum ScyllaChild {
-    Listener(Service, Option<Result<(), Need>>),
-    Cluster(Service, Option<Result<(), Need>>),
+    /// Used by Listener to keep scylla up to date with its service
+    Listener(Service),
+    /// Used by Cluster to keep scylla up to date with its service
+    Cluster(Service),
+    /// Used by Websocket to keep scylla up to date with its service
     Websocket(Service, Option<WsTx>),
 }
 
 /// Event type of the Scylla Application
 pub enum ScyllaEvent<T> {
+    /// It's the passthrough event, which the scylla application will receive from
     Passthrough(T),
+    /// Used by scylla children to push their service
     Children(ScyllaChild),
+    /// Used by cluster to inform scylla in order to inform the sockets with the result of topology events
+    Result(SocketMsg<Result<Topology, Topology>>),
+    /// Abort the scylla app, sent by launcher
+    Abort,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+/// Topology event
+pub enum Topology {
+    /// AddNode json to add new scylla node
+    AddNode(SocketAddr),
+    /// RemoveNode json to remove an existing scylla node
+    RemoveNode(SocketAddr),
+    /// BuildRing json to re/build the cluster topology,
+    /// Current limitation: for now the admin supposed to define uniform replication factor among all DataCenter and
+    /// all keyspaces
+    BuildRing(u8),
+}
+
+#[derive(Deserialize, Serialize)]
+/// Indicates which app this message is for
+pub enum SocketMsg<T> {
+    /// Message for Scylla app
+    Scylla(T),
 }
 
 /// implementation of the AppBuilder
@@ -101,12 +142,15 @@ impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
     type State = Scylla<H>;
     fn build(self) -> Self::State {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let handle = Some(ScyllaHandle { tx });
+        let handle = Some(ScyllaHandle {
+            caller: Caller::Other,
+            tx,
+        });
         let inbox = ScyllaInbox { rx };
         Scylla::<H> {
             service: Service::new(),
             listener_handle: Some(self.listener_handle.expect("Expected Listener handle")),
-            // cluster_handle: u8,
+            cluster_handle: self.cluster_handle,
             websockets: HashMap::new(),
             handle,
             inbox,
@@ -115,12 +159,13 @@ impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
     }
 }
 
+// TODO integrate well with other services;
 /// implementation of passthrough functionality
 impl<H: ScyllaScope> Passthrough<ScyllaThrough> for ScyllaHandle<H> {
-    fn launcher_status_change(&mut self, service: &Service) {}
-    fn app_status_change(&mut self, service: &Service) {}
-    fn passthrough(&mut self, event: ScyllaThrough, from_app_name: String) {}
-    fn service(&mut self, service: &Service) {}
+    fn launcher_status_change(&mut self, _service: &Service) {}
+    fn app_status_change(&mut self, _service: &Service) {}
+    fn passthrough(&mut self, _event: ScyllaThrough, _from_app_name: String) {}
+    fn service(&mut self, _service: &Service) {}
 }
 
 /// implementation of shutdown functionality
@@ -131,6 +176,10 @@ impl<H: ScyllaScope> Shutdown for ScyllaHandle<H> {
     {
         let scylla_shutdown: H::AppsEvents = serde_json::from_str("{\"Scylla\": \"Shutdown\"}").unwrap();
         let _ = self.send(ScyllaEvent::Passthrough(scylla_shutdown));
+        // if the caller is launcher we abort scylla app. better solution will be implemented in future
+        if self.caller == Caller::Launcher {
+            let _ = self.send(ScyllaEvent::Abort);
+        }
         None
     }
 }

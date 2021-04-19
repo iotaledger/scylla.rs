@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::application::*;
@@ -9,7 +9,8 @@ use futures::{
 
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+pub(crate) use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream};
+pub(crate) mod client;
 mod event_loop;
 mod init;
 mod terminating;
@@ -23,7 +24,8 @@ builder!(
 pub type WsTx = SplitSink<WebSocketStream<TcpStream>, Message>;
 /// The readhalf of the webssocket
 pub type WsRx = SplitStream<WebSocketStream<TcpStream>>;
-// Listener state
+
+/// Client Websocket struct
 pub struct Websocket {
     service: Service,
     peer: SocketAddr,

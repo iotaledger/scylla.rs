@@ -1,4 +1,4 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -13,24 +13,28 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Websocket {
         // exit the websocket event_loop if status is Err
         status?;
         // socket running
-        self.service.update_status(ServiceStatus::Running);
-        let event = ScyllaEvent::Children(ScyllaChild::Websocket(self.service.clone(), None));
-        supervisor.as_mut().unwrap().send(event).map_err(|_| Need::Abort)?;
-        while let Some(Ok(msg)) = self.ws_rx.next().await {
-            match msg {
-                Message::Text(msg_txt) => {
-                    let apps_events: H::AppsEvents = serde_json::from_str(&msg_txt).map_err(|_| Need::Abort)?;
-                    let event = ScyllaEvent::Passthrough(apps_events);
-                    supervisor.as_mut().unwrap().send(event).map_err(|_| Need::Abort)?;
+        if let Some(supervisor) = supervisor.as_mut() {
+            self.service.update_status(ServiceStatus::Running);
+            let event = ScyllaEvent::Children(ScyllaChild::Websocket(self.service.clone(), None));
+            supervisor.send(event).map_err(|_| Need::Abort)?;
+            while let Some(Ok(msg)) = self.ws_rx.next().await {
+                match msg {
+                    Message::Text(msg_txt) => {
+                        let apps_events: H::AppsEvents = serde_json::from_str(&msg_txt).map_err(|_| Need::Abort)?;
+                        let event = ScyllaEvent::Passthrough(apps_events);
+                        supervisor.send(event).map_err(|_| Need::Abort)?;
+                    }
+                    Message::Close(_) => {
+                        self.service.update_status(ServiceStatus::Stopping);
+                        let event = ScyllaEvent::Children(ScyllaChild::Websocket(self.service.clone(), None));
+                        supervisor.send(event).map_err(|_| Need::Abort)?;
+                    }
+                    _ => {}
                 }
-                Message::Close(_) => {
-                    self.service.update_status(ServiceStatus::Stopping);
-                    let event = ScyllaEvent::Children(ScyllaChild::Websocket(self.service.clone(), None));
-                    supervisor.as_mut().unwrap().send(event).map_err(|_| Need::Abort)?;
-                }
-                _ => {}
             }
+            Ok(())
+        } else {
+            Err(Need::Abort)
         }
-        Ok(())
     }
 }

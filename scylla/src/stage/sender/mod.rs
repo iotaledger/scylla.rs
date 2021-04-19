@@ -1,10 +1,9 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{reporter::*, *};
-use tokio::io::AsyncWriteExt;
-
-use tokio::{io::WriteHalf, net::TcpStream};
+use anyhow::anyhow;
+use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf};
 
 mod event_loop;
 mod init;
@@ -12,7 +11,7 @@ mod terminating;
 
 // Sender builder
 builder!(SenderBuilder {
-    socket: WriteHalf<TcpStream>,
+    socket: OwnedWriteHalf,
     payloads: Payloads,
     appends_num: i16
 });
@@ -47,7 +46,7 @@ type SenderEvent = i16;
 /// Sender state
 pub struct Sender {
     service: Service,
-    socket: WriteHalf<TcpStream>,
+    socket: OwnedWriteHalf,
     handle: Option<SenderHandle>,
     inbox: SenderInbox,
     payloads: Payloads,

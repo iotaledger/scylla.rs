@@ -55,11 +55,11 @@ impl PrepareBuilder<PrepareStatement> {
 
 impl PrepareBuilder<PrepareBuild> {
     /// Build the prepare frame with an assigned compression type.
-    pub fn build(mut self) -> Prepare {
+    pub fn build(mut self) -> anyhow::Result<Prepare> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
-        self.buffer = MyCompression::get().compress(self.buffer);
-        Prepare(self.buffer)
+        self.buffer = MyCompression::get().compress(self.buffer)?;
+        Ok(Prepare(self.buffer))
     }
 }
 
@@ -80,6 +80,6 @@ mod tests {
     #[test]
     // note: junk data
     fn simple_prepare_builder_test() {
-        let Prepare(_payload) = Prepare::new().statement("INSERT_TX_QUERY").build();
+        let Prepare(_payload) = Prepare::new().statement("INSERT_TX_QUERY").build().unwrap();
     }
 }

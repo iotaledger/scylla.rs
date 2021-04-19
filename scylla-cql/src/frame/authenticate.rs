@@ -4,6 +4,7 @@
 //! This module implements the structure used in autentication process.
 
 use super::decoder::{string, Decoder, Frame};
+use std::convert::TryFrom;
 
 /// The `Authenticate` sturcutre with the autenticator name.
 pub struct Authenticate {
@@ -13,8 +14,8 @@ pub struct Authenticate {
 
 impl Authenticate {
     /// Create a new autenticator from the frame decoder.
-    pub fn new(decoder: &Decoder) -> Self {
-        Self::from(decoder.body())
+    pub fn new(decoder: &Decoder) -> anyhow::Result<Self> {
+        Self::try_from(decoder.body()?)
     }
     /// Get the autenticator name.
     #[allow(unused)]
@@ -23,9 +24,12 @@ impl Authenticate {
     }
 }
 
-impl From<&[u8]> for Authenticate {
-    fn from(slice: &[u8]) -> Self {
-        let authenticator = string(slice);
-        Self { authenticator }
+impl TryFrom<&[u8]> for Authenticate {
+    type Error = anyhow::Error;
+
+    fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self {
+            authenticator: string(slice)?,
+        })
     }
 }

@@ -1,11 +1,13 @@
-// Copyright 2020 IOTA Stiftung
+// Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    cluster::supervisor::Nodes,
-    stage::{reporter::Event, supervisor::Reporters},
-    worker::Error,
+    cluster::{NodeInfo, Nodes},
+    stage::{ReporterEvent, ReportersHandles},
+    worker::WorkerError,
 };
+use std::net::SocketAddr;
+
 use rand::{distributions::Uniform, prelude::ThreadRng, thread_rng, Rng};
 use std::{
     cell::RefCell,
@@ -19,23 +21,21 @@ use std::{
 // types
 /// The token of Ring.
 pub type Token = i64;
+/// The tokens of shards.
+pub type Tokens = Vec<(Token, SocketAddr, DC, Msb, ShardCount)>;
 /// The most significant bit in virtual node.
 pub type Msb = u8;
 /// The number of shards.
-pub type ShardCount = u8;
+pub type ShardCount = u16;
 /// The tuple of recording a virtual node.
-pub type VnodeTuple = (Token, Token, [u8; 5], DC, Msb, ShardCount);
-/// The tuple of virtual nodes with their relicas
-pub type VnodeWithReplicas = (Token, Token, Replicas); // VnodeWithReplicas
-/// Four-bytes ip and last byte for shard num.
-pub type NodeId = [u8; 5];
+pub type VnodeTuple = (Token, Token, SocketAddr, DC, Msb, ShardCount);
 /// The data center string.
 pub type DC = String;
 type Replicas = HashMap<DC, Vec<Replica>>;
-type Replica = (NodeId, Msb, ShardCount);
+type Replica = (SocketAddr, Msb, ShardCount);
 type Vcell = Box<dyn Vnode>;
-/// The registry of `NodeID` to its reporters.
-pub type Registry = HashMap<NodeId, Reporters>;
+/// The registry of `SocketAddr` to its reporters.
+pub type Registry = HashMap<SocketAddr, ReportersHandles>;
 /// The global ring  of ScyllaDB.
 pub type GlobalRing = (
     Vec<DC>,
@@ -55,15 +55,15 @@ pub type WeakRing = Weak<GlobalRing>;
 
 /// The Ring structure used to handle the access to ScyllaDB ring.
 pub struct Ring {
-    version: u8,
-    weak: Option<Weak<GlobalRing>>,
-    registry: Registry,
-    root: Vcell,
-    uniform: Uniform<u8>,
-    rng: ThreadRng,
-    dcs: Vec<DC>,
-    uniform_dcs: Uniform<usize>,
-    uniform_rf: Uniform<usize>,
+    pub version: u8,
+    pub weak: Option<Weak<GlobalRing>>,
+    pub registry: Registry,
+    pub root: Vcell,
+    pub uniform: Uniform<u8>,
+    pub rng: ThreadRng,
+    pub dcs: Vec<DC>,
+    pub uniform_dcs: Uniform<usize>,
+    pub uniform_rf: Uniform<usize>,
 }
 
 static mut VERSION: u8 = 0;
@@ -94,9 +94,10 @@ thread_local! {
     };
 }
 
+#[allow(unused)]
 impl Ring {
     /// Send request to a given data_center with the given replica_index and token.
-    pub fn send(data_center: &str, replica_index: usize, token: Token, request: Event) {
+    pub fn send(data_center: &str, replica_index: usize, token: Token, request: ReporterEvent) {
         RING.with(|local| {
             local
                 .borrow_mut()
@@ -105,16 +106,41 @@ impl Ring {
         })
     }
     /// Send request to the first local datacenter with the given replica_index and token.
-    pub fn send_local(replica_index: usize, token: Token, request: Event) {
+    pub fn send_local(replica_index: usize, token: Token, request: ReporterEvent) {
         RING.with(|local| local.borrow_mut().sending().local(replica_index, token, request))
     }
     /// Send request to the first local datacenter with the given token and a random replica.
-    pub fn send_local_random_replica(token: Token, request: Event) {
+    pub fn send_local_random_replica(token: Token, request: ReporterEvent) {
         RING.with(|local| local.borrow_mut().sending().local_random_replica(token, request))
     }
     /// Send request to the global datacenter with the given token and a random replica.
-    pub fn send_global_random_replica(token: Token, request: Event) {
+    pub fn send_global_random_replica(token: Token, request: ReporterEvent) {
         RING.with(|local| local.borrow_mut().sending().global_random_replica(token, request))
+    }
+    pub fn rebuild() {
+        RING.with(|local| {
+            let mut ring = local.borrow_mut();
+            unsafe {
+                if VERSION != ring.version {
+                    // load weak and upgrade to arc if strong_count > 0;
+                    if let Some(mut arc) =
+                        Weak::upgrade(GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap())
+                    {
+                        let new_weak = Arc::downgrade(&arc);
+                        let (dcs, uniform_dcs, uniform_rf, uniform, version, registry, root) = Arc::make_mut(&mut arc);
+                        // update the local ring
+                        ring.dcs = dcs.clone();
+                        ring.uniform_dcs = *uniform_dcs;
+                        ring.uniform_rf = *uniform_rf;
+                        ring.uniform = *uniform;
+                        ring.version = *version;
+                        ring.registry = registry.clone();
+                        ring.root = root.clone();
+                        ring.weak.replace(new_weak);
+                    };
+                }
+            }
+        });
     }
     fn sending(&mut self) -> &mut Self {
         unsafe {
@@ -139,7 +165,7 @@ impl Ring {
         }
         self
     }
-    fn global(&mut self, data_center: &str, replica_index: usize, token: Token, request: Event) {
+    fn global(&mut self, data_center: &str, replica_index: usize, token: Token, request: ReporterEvent) {
         // send request.
         self.root.as_mut().search(token).send(
             data_center,
@@ -151,7 +177,7 @@ impl Ring {
             self.uniform,
         );
     }
-    fn local(&mut self, replica_index: usize, token: Token, request: Event) {
+    fn local(&mut self, replica_index: usize, token: Token, request: ReporterEvent) {
         // send request.
         self.root.as_mut().search(token).send(
             &self.dcs[0],
@@ -163,7 +189,7 @@ impl Ring {
             self.uniform,
         );
     }
-    fn local_random_replica(&mut self, token: Token, request: Event) {
+    fn local_random_replica(&mut self, token: Token, request: ReporterEvent) {
         // send request.
         self.root.as_mut().search(token).send(
             &self.dcs[0],
@@ -175,7 +201,7 @@ impl Ring {
             self.uniform,
         );
     }
-    fn global_random_replica(&mut self, token: Token, request: Event) {
+    fn global_random_replica(&mut self, token: Token, request: ReporterEvent) {
         // send request.
         self.root.as_mut().search(token).send(
             &self.dcs[self.rng.sample(self.uniform_dcs)],
@@ -233,7 +259,7 @@ trait SmartId {
         registry: &mut Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
-        request: Event,
+        request: ReporterEvent,
     );
 }
 impl SmartId for Replica {
@@ -243,17 +269,17 @@ impl SmartId for Replica {
         registry: &mut Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
-        request: Event,
+        request: ReporterEvent,
     ) {
         // shard awareness algo,
-        self.0[4] = (((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u8;
-        registry
+        self.0
+            .set_port((((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u16);
+        let _ = registry
             .get_mut(&self.0)
             .unwrap()
             .get_mut(&rng.sample(uniform))
             .unwrap()
-            .send(request)
-            .unwrap();
+            .send(request);
     }
 }
 
@@ -265,7 +291,7 @@ pub trait Endpoints: EndpointsClone + Send + Sync {
         data_center: &str,
         replica_index: usize,
         token: Token,
-        request: Event,
+        request: ReporterEvent,
         registry: &mut Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
@@ -299,7 +325,7 @@ impl Endpoints for Replicas {
         data_center: &str,
         replica_index: usize,
         token: Token,
-        request: Event,
+        request: ReporterEvent,
         mut registry: &mut Registry,
         mut rng: &mut ThreadRng,
         uniform: Uniform<u8>,
@@ -321,14 +347,16 @@ impl Endpoints for Option<Replicas> {
         _: &str,
         _: usize,
         _: Token,
-        request: Event,
+        request: ReporterEvent,
         _: &mut Registry,
         _: &mut ThreadRng,
         _uniform: Uniform<u8>,
     ) {
         // simulate reporter,
-        if let Event::Request { worker, .. } = request {
-            worker.send_error(Error::NoRing);
+        if let ReporterEvent::Request { worker, .. } = request {
+            worker
+                .handle_error(WorkerError::NoRing, &None)
+                .unwrap_or_else(|e| log::error!("{}", e));
         };
     }
 }
@@ -489,12 +517,22 @@ pub fn build_ring(
     uniform_rf: usize,
     version: u8,
 ) -> (Arc<GlobalRing>, Box<Weak<GlobalRing>>) {
-    let mut tokens = Vec::new(); // complete tokens-range
-                                 // iter nodes
-    for node_info in nodes.values() {
+    // complete tokens-range
+    let mut tokens: Tokens = Vec::new();
+    // iter nodes
+    for NodeInfo {
+        tokens: node_tokens,
+        address,
+        data_center,
+        msb,
+        shard_count,
+        ..
+    } in nodes.values()
+    {
         // we generate the tokens li
-        for t in &node_info.tokens {
-            tokens.push(t)
+        for token in node_tokens {
+            let node_token = (*token, address.clone(), data_center.clone(), *msb, *shard_count);
+            tokens.push(node_token)
         }
     }
     // sort_unstable_by token
@@ -603,19 +641,20 @@ pub fn initialize_ring(version: u8, rebuild: bool) -> (ArcRing, Option<Box<Weak<
 
 #[test]
 fn generate_and_compute_fake_ring() {
+    use std::net::{IpAddr, Ipv4Addr};
     let mut rng = thread_rng();
     let uniform = Uniform::new(MIN, MAX);
     // create test token_range vector // the token range should be fetched from scylla node.
-    let mut tokens: Vec<(Token, NodeId, DC)> = Vec::new();
+    let mut tokens: Vec<(Token, SocketAddr, DC)> = Vec::new();
     // 4 us nodes ids
-    let us_node_id_1: NodeId = [127, 0, 0, 1, 0];
-    let us_node_id_2: NodeId = [127, 0, 0, 2, 0];
-    let us_node_id_3: NodeId = [127, 0, 0, 3, 0];
-    let us_node_id_4: NodeId = [127, 0, 0, 4, 0];
+    let us_node_id_1: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
+    let us_node_id_2: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 0);
+    let us_node_id_3: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 0);
+    let us_node_id_4: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 4)), 0);
     // 3 eu nodes ids
-    let eu_node_id_1: NodeId = [128, 0, 0, 1, 0];
-    let eu_node_id_2: NodeId = [128, 0, 0, 2, 0];
-    let eu_node_id_3: NodeId = [128, 0, 0, 3, 0];
+    let eu_node_id_1: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 1)), 0);
+    let eu_node_id_2: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 2)), 0);
+    let eu_node_id_3: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 3)), 0);
     let us = "US".to_string();
     let eu = "EU".to_string();
     for _ in 0..256 {
