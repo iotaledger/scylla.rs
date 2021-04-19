@@ -4,13 +4,12 @@
 pub use crate::stage::ReporterEvent;
 use crate::{access::*, stage::ReporterHandle};
 use anyhow::anyhow;
-pub use delete::DeleteWorker;
-pub use insert::InsertWorker;
+pub use delete::{handle_unprepared_error as handle_delete_unprepared_error, DeleteWorker};
+pub use insert::{handle_unprepared_error as handle_insert_unprepared_error, InsertWorker};
 use log::*;
 pub use prepare::PrepareWorker;
 use scylla_cql::CqlError;
-use select::handle_unprepared_error;
-pub use select::SelectWorker;
+pub use select::{handle_unprepared_error as handle_select_unprepared_error, SelectWorker};
 use std::convert::TryFrom;
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
