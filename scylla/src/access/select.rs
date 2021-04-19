@@ -3,55 +3,71 @@
 
 use super::*;
 
-/// Select query trait which creates an `SelectRequest`
+/// Select query trait which creates a `SelectRequest`
 /// that can be sent to the `Ring`.
 ///
 /// ## Examples
-/// ### Dynamic query
-/// ```no_run
+/// ```
+/// use scylla::{
+///     access::{ComputeToken, GetSelectRequest, Keyspace, Select},
+///     worker::{ValueWorker, WorkerError},
+/// };
+/// use scylla_cql::{Batch, Consistency, PreparedStatement, RowsDecoder, Values};
+/// use std::borrow::Cow;
+/// # use scylla_cql::Decoder;
+/// # #[derive(Default, Clone, Debug)]
+/// # struct MyKeyspace {
+/// #     pub name: Cow<'static, str>,
+/// # }
+/// #
+/// # impl MyKeyspace {
+/// #     pub fn new() -> Self {
+/// #         Self {
+/// #             name: "my_keyspace".into(),
+/// #         }
+/// #     }
+/// # }
+///
+/// # impl Keyspace for MyKeyspace {
+/// #     fn name(&self) -> &Cow<'static, str> {
+/// #         &self.name
+/// #     }
+/// # }
+/// # impl ComputeToken<i32> for MyKeyspace {
+/// #     fn token(_key: &i32) -> i64 {
+/// #         rand::random()
+/// #     }
+/// # }
+/// # type MyKeyType = i32;
+/// # type MyValueType = f32;
+/// # impl RowsDecoder<MyKeyType, MyValueType> for MyKeyspace {
+/// #     type Row = f32;
+/// #     fn try_decode(decoder: Decoder) -> anyhow::Result<Option<f32>> {
+/// #         todo!()
+/// #     }
+/// # }
 /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
-///         "SELECT * FROM keyspace.table WHERE key = ?".into()
+///         format!("SELECT * FROM {}.table where key = ?", self.name()).into()
 ///     }
 ///
-///     fn get_request(&self, key: &MyKeyType) -> SelectRequest<Self, MyKeyType, MyValueType> {
-///         let query = Query::new()
-///             .statement(&self.select_statement::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&key.to_string())
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(query, token)
+///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+///         builder.value(key)
 ///     }
 /// }
-/// ```
-/// ### Prepared statement
-/// ```no_run
-/// impl Select<MyKeyType, MyValueType> for MyKeyspace {
-///     fn statement(&self) -> Cow<'static, str> {
-///         format!("SELECT * FROM {}.table WHERE key = ?", self.name()).into()
-///     }
 ///
-///     fn get_request(&self, key: &MyKeyType) -> SelectRequest<Self, MyKeyType, MyValueType> {
-///         let prepared_cql = Execute::new()
-///             .id(&self.select_id::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&key.to_string())
-///             .build();
+/// # let keyspace = MyKeyspace::new();
+/// # let my_key = 1;
+/// let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Result<Option<MyValueType>, WorkerError>>();
+/// # use std::marker::PhantomData;
+/// let worker = ValueWorker::boxed(sender, keyspace.clone(), my_key, 3, PhantomData::<MyValueType>);
 ///
-///         let token = self.token(&key);
-///
-///         self.create_request(prepared_cql, token)
-///     }
-/// }
-/// ```
-/// ### Usage
-/// ```
-/// let res = keyspace // A Scylla keyspace
-///     .select::<MyValueType>(&my_key)? // Get the Select Request by specifying the Value type
-///     .send_global(worker); // Send the request to the Ring
+/// let request = keyspace // A Scylla keyspace
+///     .select::<MyValueType>(&my_key) // Get the Select Request by specifying the value type
+///     .consistency(Consistency::One)
+///     .build()?;
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub trait Select<K, V>: Keyspace + RowsDecoder<K, V> + ComputeToken<K> {
     /// Set the query type; `QueryStatement` or `PreparedStatement`

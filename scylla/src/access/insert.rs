@@ -7,55 +7,59 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Examples
-/// ### Dynamic query
-/// ```no_run
-/// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
-///     fn statement(&self) -> Cow<'static, str> {
-///         "INSERT INTO keyspace.table (key, val1, val2) VALUES (?,?,?)".into()
-///     }
-///
-///     fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<Self, MyKeyType, MyValueType> {
-///         let query = Query::new()
-///             .statement(&self.insert_statement::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&key.to_string())
-///             .value(&value.subvalue1)
-///             .value(&value.subvalue1)
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(query, token)
-///     }
-/// }
 /// ```
-/// ### Prepared statement
-/// ```no_run
+/// use scylla::{
+///     access::{ComputeToken, GetInsertRequest, Insert, Keyspace},
+///     worker::InsertWorker,
+/// };
+/// use scylla_cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
+/// use std::borrow::Cow;
+/// # #[derive(Default, Clone, Debug)]
+/// # struct MyKeyspace {
+/// #     pub name: Cow<'static, str>,
+/// # }
+/// #
+/// # impl MyKeyspace {
+/// #     pub fn new() -> Self {
+/// #         Self {
+/// #             name: "my_keyspace".into(),
+/// #         }
+/// #     }
+/// # }
+///
+/// # impl Keyspace for MyKeyspace {
+/// #     fn name(&self) -> &Cow<'static, str> {
+/// #         &self.name
+/// #     }
+/// # }
+/// # impl ComputeToken<i32> for MyKeyspace {
+/// #     fn token(_key: &i32) -> i64 {
+/// #         rand::random()
+/// #     }
+/// # }
+/// # impl VoidDecoder for MyKeyspace {}
+/// # type MyKeyType = i32;
+/// # type MyValueType = f32;
 /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
+///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
 ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
 ///     }
 ///
-///     fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> InsertRequest<Self, MyKeyType, MyValueType> {
-///         let prepared_cql = Execute::new()
-///             .id(&self.insert_id::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&key.to_string())
-///             .value(&value.subvalue1)
-///             .value(&value.subvalue1)
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(prepared_cql, token)
+///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+///         builder.value(key).value(value).value(value)
 ///     }
 /// }
-/// ```
-/// ### Usage
-/// ```
-/// let res = keyspace // A Scylla keyspace
-///     .insert(&my_key, &my_value)? // Get the Insert Request with a key and value
-///     .send_global(worker); // Send the request to the Ring
+///
+/// # let keyspace = MyKeyspace::new();
+/// # let (my_key, my_val) = (1, 1.0);
+/// let worker = InsertWorker::boxed(keyspace.clone(), my_key, my_val, 3);
+///
+/// let request = keyspace // A Scylla keyspace
+///     .insert(&my_key, &my_val) // Get the Insert Request
+///     .consistency(Consistency::One)
+///     .build()?;
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub trait Insert<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Set the query type; `QueryStatement` or `PreparedStatement`

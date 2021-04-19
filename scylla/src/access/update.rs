@@ -7,55 +7,54 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Examples
-/// ### Dynamic query
-/// ```no_run
+/// ```
+/// use scylla::access::{ComputeToken, GetUpdateRequest, Keyspace, Update};
+/// use scylla_cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
+/// use std::borrow::Cow;
+/// # #[derive(Default, Clone, Debug)]
+/// # struct MyKeyspace {
+/// #     pub name: Cow<'static, str>,
+/// # }
+/// #
+/// # impl MyKeyspace {
+/// #     pub fn new() -> Self {
+/// #         Self {
+/// #             name: "my_keyspace".into(),
+/// #         }
+/// #     }
+/// # }
+///
+/// # impl Keyspace for MyKeyspace {
+/// #     fn name(&self) -> &Cow<'static, str> {
+/// #         &self.name
+/// #     }
+/// # }
+/// # impl ComputeToken<i32> for MyKeyspace {
+/// #     fn token(_key: &i32) -> i64 {
+/// #         rand::random()
+/// #     }
+/// # }
+/// # impl VoidDecoder for MyKeyspace {}
+/// # type MyKeyType = i32;
+/// # type MyValueType = f32;
 /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
-///         "UPDATE keyspace.table SET val1 = ?, val2 = ? WHERE key = ?".into()
+///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
 ///     }
 ///
-///     fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<Self, MyKeyType, MyValueType> {
-///         let query = Query::new()
-///             .statement(&self.update_statement::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&value.subvalue1)
-///             .value(&value.subvalue1)
-///             .value(&key.to_string())
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(query, token)
+///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+///         builder.value(key).value(value).value(value)
 ///     }
 /// }
-/// ```
-/// ### Prepared statement
-/// ```no_run
-/// impl Update<MyKeyType, MyValueType> for MyKeyspace {
-///     fn statement(&self) -> Cow<'static, str> {
-///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", Self::name()).into()
-///     }
 ///
-///     fn get_request(&self, key: &MyKeyType, value: &MyValueType) -> UpdateRequest<Self, MyKeyType, MyValueType> {
-///         let prepared_cql = Execute::new()
-///             .id(&self.update_id::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&value.subvalue1)
-///             .value(&value.subvalue1)
-///             .value(&key.to_string())
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(prepared_cql, token)
-///     }
-/// }
-/// ```
-/// ### Usage
-/// ```
-/// let res = keyspace // A Scylla keyspace
-///     .update(&my_key, &my_value)? // Get the Update Request with a key and value
-///     .send_global(worker); // Send the request to the Ring
+/// # let keyspace = MyKeyspace::new();
+/// # let (my_key, my_val) = (1, 1.0);
+/// let request = keyspace // A Scylla keyspace
+///     .update(&my_key, &my_val) // Get the Update Request
+///     .consistency(Consistency::One)
+///     .build()?;
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Set the query type; `QueryStatement` or `PreparedStatement`

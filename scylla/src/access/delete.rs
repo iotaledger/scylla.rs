@@ -7,51 +7,59 @@ use super::*;
 /// that can be sent to the `Ring`.
 ///
 /// ## Examples
-/// ### Dynamic query
-/// ```no_run
-/// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
-///     fn statement(&self) -> Cow<'static, str> {
-///         "DELETE FROM keyspace.table WHERE key = ?".into()
-///     }
-///
-///     fn get_request(&self, key: &MyKeyType) -> DeleteRequest<Self, MyKeyType, MyValueType> {
-///         let query = Query::new()
-///             .statement(&self.delete_statement::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&key.to_string())
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(query, token)
-///     }
-/// }
 /// ```
-/// ### Prepared statement
-/// ```no_run
+/// use scylla::{
+///     access::{ComputeToken, Delete, GetDeleteRequest, Keyspace},
+///     worker::DeleteWorker,
+/// };
+/// use scylla_cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
+/// use std::borrow::Cow;
+/// # #[derive(Default, Clone, Debug)]
+/// # struct MyKeyspace {
+/// #     pub name: Cow<'static, str>,
+/// # }
+/// #
+/// # impl MyKeyspace {
+/// #     pub fn new() -> Self {
+/// #         Self {
+/// #             name: "my_keyspace".into(),
+/// #         }
+/// #     }
+/// # }
+///
+/// # impl Keyspace for MyKeyspace {
+/// #     fn name(&self) -> &Cow<'static, str> {
+/// #         &self.name
+/// #     }
+/// # }
+/// # impl ComputeToken<i32> for MyKeyspace {
+/// #     fn token(_key: &i32) -> i64 {
+/// #         rand::random()
+/// #     }
+/// # }
+/// # impl VoidDecoder for MyKeyspace {}
+/// # type MyKeyType = i32;
+/// # type MyValueType = f32;
 /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
 ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
 ///     }
 ///
-///     fn get_request(&self, key: &MyKeyType) -> DeleteRequest<Self, MyKeyType, MyValueType> {
-///         let prepared_cql = Execute::new()
-///             .id(&self.delete_id::<MyKeyType, MyValueType>())
-///             .consistency(scylla_cql::Consistency::One)
-///             .value(&key.to_string())
-///             .build();
-///
-///         let token = self.token(&key);
-///
-///         self.create_request(prepared_cql, token)
+///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+///         builder.value(key).value(key)
 ///     }
 /// }
-/// ```
-/// ### Usage
-/// ```
-/// let res = keyspace // A Scylla keyspace
-///     .delete::<MyValueType>(&my_key)? // Get the Delete Request by specifying the Value type
-///     .send_local(worker); // Send the request to the Ring
+///
+/// # let keyspace = MyKeyspace::new();
+/// # let my_key = 1;
+/// let worker = DeleteWorker::boxed(keyspace.clone(), my_key, 3);
+///
+/// let request = keyspace // A Scylla keyspace
+///     .delete::<MyValueType>(&my_key) // Get the Delete Request by specifying the Value type
+///     .consistency(Consistency::One)
+///     .build()?;
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub trait Delete<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Set the query type; `QueryStatement` or `PreparedStatement`

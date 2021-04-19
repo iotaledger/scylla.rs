@@ -181,14 +181,15 @@ impl<T> Deref for DecodeResult<T> {
     }
 }
 
-mod tests {
+#[doc(hidden)]
+pub mod tests {
 
     use crate::worker::InsertWorker;
 
     use super::*;
 
     #[derive(Default, Clone, Debug)]
-    struct MyKeyspace {
+    pub struct MyKeyspace {
         pub name: Cow<'static, str>,
     }
 

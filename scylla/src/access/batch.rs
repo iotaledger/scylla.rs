@@ -151,17 +151,23 @@ impl<S: Keyspace> BatchRequest<S> {
 /// and qualified for use in a Batch via batch traits ([`InsertBatch`], [`DeleteBatch`], [`UpdateBatch`])
 /// ## Example
 /// ```
+/// # use scylla::access::{tests::MyKeyspace, Batchable};
+/// use scylla_cql::{Batch, Consistency};
+///
+/// # let keyspace = MyKeyspace::new();
+/// # let (my_key, my_val, token_key) = (1, 1.0, 1);
 /// let req = keyspace
 ///     // Creates the `BatchCollector`
 ///     .batch()
 ///     .logged()
 ///     // Add a few pre-defined access queries
-///     .delete(&my_key)
+///     .delete::<_, f32>(&my_key)
 ///     .insert_query(&my_key, &my_val)
 ///     .update_prepared(&my_key, &my_val)
 ///     .consistency(Consistency::One)
-///     .build()
+///     .build()?
 ///     .compute_token(&token_key);
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage> {
     builder: BatchBuilder<Type, Stage>,
