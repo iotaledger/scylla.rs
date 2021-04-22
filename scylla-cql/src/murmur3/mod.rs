@@ -260,24 +260,38 @@ mod tests {
 
     #[test]
     fn perf_test() {
+        struct Item {
+            key: String,
+            hash1: i64,
+            hash2: i64,
+        }
+
         let file_str = std::include_str!("murmur3_tests.txt");
-        let n = 1000;
+        let n = 10000;
         let mut buf = String::new();
+        let mut items: Vec<Item> = Vec::new();
+        let mut file = BufReader::new(Cursor::new(file_str));
+        while let Ok(read) = file.read_line(&mut buf) {
+            if read == 0 {
+                break;
+            }
+            let mut vals = buf.split_whitespace();
+            let key = vals.next().unwrap();
+            let hash1 = vals.next().unwrap().parse::<i64>().unwrap();
+            let hash2 = vals.next().unwrap().parse::<i64>().unwrap();
+            items.push(Item {
+                key: key.to_string(),
+                hash1,
+                hash2,
+            });
+            buf.clear();
+        }
 
         let now = std::time::SystemTime::now();
         for _ in 0..n {
-            let mut file = BufReader::new(Cursor::new(file_str));
-            while let Ok(read) = file.read_line(&mut buf) {
-                if read == 0 {
-                    break;
-                }
-                let mut vals = buf.split_whitespace();
-                let key = vals.next().unwrap();
-                let hash1 = vals.next().unwrap().parse::<i64>().unwrap();
-                let hash2 = vals.next().unwrap().parse::<i64>().unwrap();
-                let (h1, h2) = murmur3_cassandra_x64_128(key.as_bytes(), 0).unwrap();
-                assert_eq!((h1, h2), (hash1, hash2));
-                buf.clear();
+            for item in &items {
+                let (h1, h2) = murmur3_cassandra_x64_128(item.key.as_bytes(), 0).unwrap();
+                assert_eq!((h1, h2), (item.hash1, item.hash2));
             }
         }
         println!(
@@ -286,27 +300,23 @@ mod tests {
             now.elapsed().unwrap().as_millis()
         );
 
-        buf.clear();
         let now = std::time::SystemTime::now();
         for _ in 0..n {
-            let mut file = BufReader::new(Cursor::new(file_str));
-            while let Ok(read) = file.read_line(&mut buf) {
-                if read == 0 {
-                    break;
-                }
-                let mut vals = buf.split_whitespace();
-                let mut key = Cursor::new(vals.next().unwrap());
-                let hash1 = vals.next().unwrap().parse::<i64>().unwrap();
-                let _hash2 = vals.next().unwrap().parse::<i64>().unwrap();
+            for item in &items {
+                let mut key = Cursor::new(item.key.clone());
                 let h1 = old_murmur3_cassandra_x64_128(&mut key, 0).unwrap();
-                assert_eq!(h1, hash1);
-                buf.clear();
+                assert_eq!(h1, item.hash1);
             }
         }
-        println!(
-            "Old Method: {} runs completed in {} ms",
-            1000_i64 * n,
-            now.elapsed().unwrap().as_millis()
-        );
+        let mut total_time = now.elapsed().unwrap().as_millis();
+        // We exclute the Cursor cloning time to compare the calculation speed
+        let now = std::time::SystemTime::now();
+        for _ in 0..n {
+            for item in &items {
+                let _ = Cursor::new(item.key.clone());
+            }
+        }
+        total_time -= now.elapsed().unwrap().as_millis();
+        println!("Old Method: {} runs completed in {} ms", 1000_i64 * n, total_time);
     }
 }
