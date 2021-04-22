@@ -73,9 +73,9 @@ pub trait ColumnEncoder {
     }
 
     /// Start an encoding chain
-    fn chain_encode(&self) -> ColumnEncodeChain {
+    fn chain_encode<T: ColumnEncoder>(&self, other: &T) -> ColumnEncodeChain {
         let buffer = self.encode_new();
-        ColumnEncodeChain { buffer }
+        ColumnEncodeChain { buffer }.chain(other)
     }
 }
 
