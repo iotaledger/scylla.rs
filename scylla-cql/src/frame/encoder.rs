@@ -39,6 +39,20 @@ pub struct Unset;
 pub trait ColumnEncoder {
     /// Encoder the column buffer.
     fn encode(&self, buffer: &mut Vec<u8>);
+
+    /// Encode this value to a new buffer
+    fn encode_new(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.encode(&mut buf);
+        buf
+    }
+
+    /// Encode this value to a new buffer with a given capacity
+    fn encode_with_capacity(&self, capacity: usize) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(capacity);
+        self.encode(&mut buf);
+        buf
+    }
 }
 
 impl<T> ColumnEncoder for Option<T>
