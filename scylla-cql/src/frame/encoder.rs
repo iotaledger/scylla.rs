@@ -307,3 +307,5 @@ pub trait TokenEncoder: ColumnEncoder {
         TokenEncodeChain { buffer }.chain(other)
     }
 }
+
+impl<T: ColumnEncoder> TokenEncoder for T {}
