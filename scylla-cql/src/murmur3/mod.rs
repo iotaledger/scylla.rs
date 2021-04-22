@@ -21,13 +21,13 @@ where
 /// # Example
 /// ```
 /// use scylla_cql::murmur3_cassandra_x64_128;
-/// let hash_result = murmur3_cassandra_x64_128(
+/// let hash_pair = murmur3_cassandra_x64_128(
 ///     "EHUHSJRCMDJSZUQMNLDBSRFC9O9XCI9SMHFWWHNDYOOOWMSOJQHCC9GFUEGECEVVXCSXYTHSRJ9TZ9999".as_bytes(),
 ///     0,
 /// );
 /// ```
 #[allow(unused)]
-pub fn murmur3_cassandra_x64_128(source: &[u8], seed: u32) -> anyhow::Result<(i64, i64)> {
+pub fn murmur3_cassandra_x64_128(source: &[u8], seed: u32) -> (i64, i64) {
     const C1: i64 = -8_663_945_395_140_668_459_i64; // 0x87c3_7b91_1142_53d5;
     const C2: i64 = 0x4cf5_ad43_2745_937f;
     const C3: i64 = 0x52dc_e729;
@@ -111,7 +111,7 @@ pub fn murmur3_cassandra_x64_128(source: &[u8], seed: u32) -> anyhow::Result<(i6
     h2 = fmix64_i64(h2);
     h1 = h1.wrapping_add(h2);
     h2 = h2.wrapping_add(h1);
-    return Ok((h1, h2));
+    (h1, h2)
 }
 
 #[allow(unused)]
@@ -317,15 +317,15 @@ mod tests {
     #[test]
     fn test_tx_murmur3_token_generation() {
         let tx = "EHUHSJRCMDJSZUQMNLDBSRFC9O9XCI9SMHFWWHNDYOOOWMSOJQHCC9GFUEGECEVVXCSXYTHSRJ9TZ9999";
-        let hash_result = murmur3_cassandra_x64_128(tx.as_bytes(), 0);
-        assert_eq!(hash_result.unwrap().0, -7733304998189415164);
+        let hash_pair = murmur3_cassandra_x64_128(tx.as_bytes(), 0);
+        assert_eq!(hash_pair.0, -7733304998189415164);
     }
 
     #[test]
     fn test_address_murmur3_token_generation() {
         let addr = "NBBM9QWTLPXDQPISXWRJSMOKJQVHCIYBZTWPPAXJSRNRDWQOJDQNX9BZ9RQVLNVTOJBHKBDPP9NPGPGYAQGFDYOHLA";
-        let hash_result = murmur3_cassandra_x64_128(addr.as_bytes(), 0);
-        assert_eq!(hash_result.unwrap().0, -5381343058315604526);
+        let hash_pair = murmur3_cassandra_x64_128(addr.as_bytes(), 0);
+        assert_eq!(hash_pair.0, -5381343058315604526);
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
             let key = vals.next().unwrap();
             let hash1 = vals.next().unwrap().parse::<i64>().unwrap();
             let hash2 = vals.next().unwrap().parse::<i64>().unwrap();
-            let (h1, h2) = murmur3_cassandra_x64_128(key.as_bytes(), 0).unwrap();
+            let (h1, h2) = murmur3_cassandra_x64_128(key.as_bytes(), 0);
             assert_eq!((h1, h2), (hash1, hash2));
             buf.clear();
         }
@@ -378,7 +378,7 @@ mod tests {
         let now = std::time::SystemTime::now();
         for _ in 0..n {
             for item in &items {
-                let (h1, h2) = murmur3_cassandra_x64_128(item.key.as_bytes(), 0).unwrap();
+                let (h1, h2) = murmur3_cassandra_x64_128(item.key.as_bytes(), 0);
                 assert_eq!((h1, h2), (item.hash1, item.hash2));
             }
         }
