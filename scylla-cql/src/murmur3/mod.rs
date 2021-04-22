@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! This crates implements the murmur3, which is used to calculate the partition key in scyllaDB.
+use std::convert::TryInto;
 
 fn copy_into_array<A, T>(slice: &[T]) -> A
 where
@@ -27,6 +28,94 @@ where
 /// ```
 #[allow(unused)]
 pub fn murmur3_cassandra_x64_128(source: &[u8], seed: u32) -> anyhow::Result<(i64, i64)> {
+    const C1: i64 = -8_663_945_395_140_668_459_i64; // 0x87c3_7b91_1142_53d5;
+    const C2: i64 = 0x4cf5_ad43_2745_937f;
+    const C3: i64 = 0x52dc_e729;
+    const C4: i64 = 0x3849_5ab5;
+    const R1: u32 = 27;
+    const R2: u32 = 31;
+    const R3: u32 = 33;
+    const M: i64 = 5;
+    let mut h1: i64 = seed as i64;
+    let mut h2: i64 = seed as i64;
+    let mut chunks_iter = source.chunks_exact(16);
+    let rem = chunks_iter.remainder();
+    for chunk in chunks_iter {
+        let k1 = i64::from_le_bytes((&chunk[..8]).try_into().unwrap());
+        let k2 = i64::from_le_bytes((&chunk[8..]).try_into().unwrap());
+        h1 ^= k1.wrapping_mul(C1).rotate_left(R2).wrapping_mul(C2);
+        h1 = h1.rotate_left(R1).wrapping_add(h2).wrapping_mul(M).wrapping_add(C3);
+        h2 ^= k2.wrapping_mul(C2).rotate_left(R3).wrapping_mul(C1);
+        h2 = h2.rotate_left(R2).wrapping_add(h1).wrapping_mul(M).wrapping_add(C4);
+    }
+    let read = rem.len();
+    if read > 0 {
+        let mut k1 = 0;
+        let mut k2 = 0;
+        if read >= 15 {
+            k2 ^= (rem[14] as i64) << 48;
+        }
+        if read >= 14 {
+            k2 ^= (rem[13] as i64) << 40;
+        }
+        if read >= 13 {
+            k2 ^= (rem[12] as i64) << 32;
+        }
+        if read >= 12 {
+            k2 ^= (rem[11] as i64) << 24;
+        }
+        if read >= 11 {
+            k2 ^= (rem[10] as i64) << 16;
+        }
+        if read >= 10 {
+            k2 ^= (rem[9] as i64) << 8;
+        }
+        if read >= 9 {
+            k2 ^= rem[8] as i64;
+            k2 = k2.wrapping_mul(C2).rotate_left(33).wrapping_mul(C1);
+            h2 ^= k2;
+        }
+        if read >= 8 {
+            k1 ^= (rem[7] as i64) << 56;
+        }
+        if read >= 7 {
+            k1 ^= (rem[6] as i64) << 48;
+        }
+        if read >= 6 {
+            k1 ^= (rem[5] as i64) << 40;
+        }
+        if read >= 5 {
+            k1 ^= (rem[4] as i64) << 32;
+        }
+        if read >= 4 {
+            k1 ^= (rem[3] as i64) << 24;
+        }
+        if read >= 3 {
+            k1 ^= (rem[2] as i64) << 16;
+        }
+        if read >= 2 {
+            k1 ^= (rem[1] as i64) << 8;
+        }
+        if read >= 1 {
+            k1 ^= rem[0] as i64;
+        }
+        k1 = k1.wrapping_mul(C1).rotate_left(31).wrapping_mul(C2);
+        h1 ^= k1;
+    }
+
+    h1 ^= source.len() as i64;
+    h2 ^= source.len() as i64;
+    h1 = h1.wrapping_add(h2);
+    h2 = h2.wrapping_add(h1);
+    h1 = fmix64_i64(h1);
+    h2 = fmix64_i64(h2);
+    h1 = h1.wrapping_add(h2);
+    h2 = h2.wrapping_add(h1);
+    return Ok((h1, h2));
+}
+
+#[allow(unused)]
+pub fn old_modified_murmur3_cassandra_x64_128(source: &[u8], seed: u32) -> anyhow::Result<(i64, i64)> {
     const C1: i64 = -8_663_945_395_140_668_459_i64; // 0x87c3_7b91_1142_53d5;
     const C2: i64 = 0x4cf5_ad43_2745_937f;
     const C3: i64 = 0x52dc_e729;
@@ -295,6 +384,19 @@ mod tests {
         }
         println!(
             "New Method: {} runs completed in {} ms",
+            1000_i64 * n,
+            now.elapsed().unwrap().as_millis()
+        );
+
+        let now = std::time::SystemTime::now();
+        for _ in 0..n {
+            for item in &items {
+                let (h1, h2) = old_modified_murmur3_cassandra_x64_128(item.key.as_bytes(), 0).unwrap();
+                assert_eq!((h1, h2), (item.hash1, item.hash2));
+            }
+        }
+        println!(
+            "Old Modified Method: {} runs completed in {} ms",
             1000_i64 * n,
             now.elapsed().unwrap().as_millis()
         );
