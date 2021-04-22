@@ -35,6 +35,24 @@ pub struct Null;
 /// The Unset unit stucture.
 pub struct Unset;
 
+/// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
+pub struct ColumnEncodeChain {
+    buffer: Vec<u8>,
+}
+
+impl ColumnEncodeChain {
+    /// Chain a new column
+    pub fn chain<T: ColumnEncoder>(mut self, other: &T) -> Self {
+        other.encode(&mut self.buffer);
+        self
+    }
+
+    /// Complete the chain and return the buffer
+    pub fn finish(self) -> Vec<u8> {
+        self.buffer
+    }
+}
+
 /// The frame column encoder.
 pub trait ColumnEncoder {
     /// Encoder the column buffer.
@@ -53,6 +71,12 @@ pub trait ColumnEncoder {
         self.encode(&mut buf);
         buf
     }
+
+    /// Start an encoding chain
+    fn chain_encode(&self) -> ColumnEncodeChain {
+        let buffer = self.encode_new();
+        ColumnEncodeChain { buffer }
+    }
 }
 
 impl<T> ColumnEncoder for Option<T>
@@ -62,7 +86,7 @@ where
     fn encode(&self, buffer: &mut Vec<u8>) {
         match self {
             Some(value) => value.encode(buffer),
-            None => UNSET_VALUE.encode(buffer),
+            None => ColumnEncoder::encode(&UNSET_VALUE, buffer),
         }
     }
 }
@@ -247,5 +271,39 @@ impl ColumnEncoder for Unset {
 impl ColumnEncoder for Null {
     fn encode(&self, buffer: &mut Vec<u8>) {
         buffer.extend(&BE_NULL_BYTES_LEN);
+    }
+}
+
+/// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
+pub struct TokenEncodeChain {
+    buffer: Vec<u8>,
+}
+
+impl TokenEncodeChain {
+    /// Chain a new value
+    pub fn chain<T: TokenEncoder>(mut self, other: &T) -> Self {
+        self.buffer.extend_from_slice(other.encode_new()[2..].into());
+        self.buffer.push(0);
+        self
+    }
+
+    /// Complete the chain and return the token
+    pub fn finish(self) -> i64 {
+        crate::murmur3_cassandra_x64_128(&self.buffer, 0).0
+    }
+}
+
+/// Encoding functionality for tokens
+pub trait TokenEncoder: ColumnEncoder {
+    /// Encode a single token
+    fn get_token(&self) -> i64 {
+        crate::murmur3_cassandra_x64_128(&self.encode_new()[4..], 0).0
+    }
+
+    /// Start an encode chain
+    fn chain_token<T: TokenEncoder>(&self, other: &T) -> TokenEncodeChain {
+        let mut buffer: Vec<u8> = self.encode_new()[2..].into();
+        buffer.push(0);
+        TokenEncodeChain { buffer }.chain(other)
     }
 }

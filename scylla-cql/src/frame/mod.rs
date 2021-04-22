@@ -30,7 +30,7 @@ pub use auth_success::AuthSuccess;
 pub use batch::*;
 pub use consistency::Consistency;
 pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
-pub use encoder::ColumnEncoder;
+pub use encoder::{ColumnEncodeChain, ColumnEncoder, TokenEncodeChain, TokenEncoder};
 pub use error::{CqlError, ErrorCodes};
 pub use prepare::Prepare;
 pub use query::{
