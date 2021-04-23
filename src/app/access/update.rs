@@ -8,8 +8,10 @@ use super::*;
 ///
 /// ## Examples
 /// ```
-/// use crate::cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
-/// use scylla_app::access::{ComputeToken, GetUpdateRequest, Keyspace, Update};
+/// use scylla_rs::{
+///     app::access::{ComputeToken, GetUpdateRequest, Keyspace, Update},
+///     cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder},
+/// };
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
 /// # struct MyKeyspace {

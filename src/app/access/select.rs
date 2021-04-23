@@ -8,13 +8,15 @@ use super::*;
 ///
 /// ## Examples
 /// ```
-/// use scylla_app::{
-///     access::{ComputeToken, GetSelectRequest, Keyspace, Select},
-///     worker::{ValueWorker, WorkerError},
+/// use scylla_rs::{
+///     app::{
+///         access::{ComputeToken, GetSelectRequest, Keyspace, Select},
+///         worker::{ValueWorker, WorkerError},
+///     },
+///     cql::{Batch, Consistency, PreparedStatement, RowsDecoder, Values},
 /// };
-/// use crate::cql::{Batch, Consistency, PreparedStatement, RowsDecoder, Values};
 /// use std::borrow::Cow;
-/// # use crate::cql::Decoder;
+/// # use scylla_rs::cql::Decoder;
 /// # #[derive(Default, Clone, Debug)]
 /// # struct MyKeyspace {
 /// #     pub name: Cow<'static, str>,

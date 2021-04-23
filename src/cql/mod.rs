@@ -9,6 +9,7 @@ pub mod compression;
 mod connection;
 mod frame;
 mod murmur3;
+mod tests;
 
 pub use connection::*;
 /// This is the public API of this crate

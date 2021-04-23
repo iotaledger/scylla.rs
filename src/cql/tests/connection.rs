@@ -1,7 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use scylla_cql::Cql;
+#[allow(unused_imports)]
+use crate::cql::Cql;
 
 #[tokio::test]
 async fn establish_connection_with_regular_cql_port() {

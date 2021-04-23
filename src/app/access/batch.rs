@@ -150,9 +150,11 @@ impl<S: Keyspace> BatchRequest<S> {
 /// and qualified for use in a Batch via batch traits ([`InsertBatch`], [`DeleteBatch`], [`UpdateBatch`])
 /// ## Example
 /// ```
-/// # use scylla_app::access::tests::MyKeyspace;
-/// use crate::cql::{Batch, Consistency};
-/// use scylla_app::access::Batchable;
+/// # use scylla_rs::app::access::tests::MyKeyspace;
+/// use scylla_rs::{
+///     app::access::Batchable,
+///     cql::{Batch, Consistency},
+/// };
 ///
 /// # let keyspace = MyKeyspace::new();
 /// # let (my_key, my_val, token_key) = (1, 1.0, 1);

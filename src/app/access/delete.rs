@@ -8,11 +8,13 @@ use super::*;
 ///
 /// ## Examples
 /// ```
-/// use scylla_app::{
-///     access::{ComputeToken, Delete, GetDeleteRequest, Keyspace},
-///     worker::DeleteWorker,
+/// use scylla_rs::{
+///     app::{
+///         access::{ComputeToken, Delete, GetDeleteRequest, Keyspace},
+///         worker::DeleteWorker,
+///     },
+///     cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder},
 /// };
-/// use crate::cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
 /// # struct MyKeyspace {

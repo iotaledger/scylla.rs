@@ -34,7 +34,7 @@ pub enum BatchTypes {
 ///
 /// ## Example
 /// ```
-/// use scylla_cql::{Batch, Consistency, Statements};
+/// use scylla_rs::cql::{Batch, Consistency, Statements};
 ///
 /// let builder = Batch::new();
 /// let batch = builder

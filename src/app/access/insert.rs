@@ -8,11 +8,13 @@ use super::*;
 ///
 /// ## Examples
 /// ```
-/// use scylla_app::{
-///     access::{ComputeToken, GetInsertRequest, Insert, Keyspace},
-///     worker::InsertWorker,
+/// use scylla_rs::{
+///     app::{
+///         access::{ComputeToken, GetInsertRequest, Insert, Keyspace},
+///         worker::InsertWorker,
+///     },
+///     cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder},
 /// };
-/// use crate::cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
 /// # struct MyKeyspace {

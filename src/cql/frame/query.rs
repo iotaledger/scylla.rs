@@ -20,7 +20,7 @@ const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
 ///
 /// ## Example
 /// ```
-/// use scylla_cql::{Consistency, Query, Statements, Values};
+/// use scylla_rs::cql::{Consistency, Query, Statements, Values};
 ///
 /// let builder = Query::new();
 /// let query = builder
