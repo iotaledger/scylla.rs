@@ -34,10 +34,10 @@
 
 Scylla<area>.rs provides fast and safe interoperability between rust applications and a distributed Scylla database. Scylla<area>.rs is built on the IOTA actor framework [backstage](https://github.com/iotaledger/backstage), but does not require dependent apps to use this framework.
 
-Scylla<area>.rs includes the following crates:
+Scylla<area>.rs is divided into two parts:
 
-- **[Scylla](scylla/README.md):** Contains traits that simplify database access as well as the actor implementation which manages the database connection.
-- **[Scylla CQL](scylla-cql/README.md):** Contains CQL frame definitions as well as utilities for compression, hashing, and building frames.
+- **Application:** Contains traits that simplify database access as well as the actor implementation which manages the database connection. This functionality is feature gated with the `app` feature.
+- **CQL:** Contains CQL frame definitions as well as utilities for compression, hashing, and building frames.
 
 **Note:** This is alpha software, so there may be performance and stability issues. Please report any issues in our [issue tracker](https://github.com/iotaledger/scylla.rs/issues/new).
 

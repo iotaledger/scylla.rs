@@ -1,1 +1,0 @@
-# Scylla Application
