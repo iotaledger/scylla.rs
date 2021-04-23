@@ -1,5 +1,15 @@
-[workspace]
+[package]
+name = "scylla-rs"
+version = "0.1.2"
+authors = ["IOTA Stiftung"]
+edition = "2018"
+license-file = "LICENSE"
+homepage = "https://www.iota.org"
+repository = "https://github.com/iotaledger/scylla.rs"
+description = "An async ScyllaDB driver built on an actor-model framework"
+keywords = ["iota", "scylla", "cassandra", "cql", "driver"]
 
+[workspace]
 members = [
     "scylla",
     "scylla-cql",
