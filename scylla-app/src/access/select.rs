@@ -8,7 +8,7 @@ use super::*;
 ///
 /// ## Examples
 /// ```
-/// use scylla::{
+/// use scylla_app::{
 ///     access::{ComputeToken, GetSelectRequest, Keyspace, Select},
 ///     worker::{ValueWorker, WorkerError},
 /// };

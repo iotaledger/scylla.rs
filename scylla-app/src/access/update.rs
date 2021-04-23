@@ -8,7 +8,7 @@ use super::*;
 ///
 /// ## Examples
 /// ```
-/// use scylla::access::{ComputeToken, GetUpdateRequest, Keyspace, Update};
+/// use scylla_app::access::{ComputeToken, GetUpdateRequest, Keyspace, Update};
 /// use scylla_cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder};
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
