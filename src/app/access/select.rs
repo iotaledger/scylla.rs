@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::cql::{QueryPagingState, QuerySerialConsistency};
 
 /// Select query trait which creates a `SelectRequest`
 /// that can be sent to the `Ring`.

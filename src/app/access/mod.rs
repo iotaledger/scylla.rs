@@ -29,14 +29,17 @@ use crate::{
         ring::Ring,
         stage::{ReporterEvent, ReporterHandle},
     },
-    cql::*,
+    cql::{
+        Consistency, Decoder, Prepare, PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency,
+        QueryOrPrepared, QueryStatement, QueryValues, RowsDecoder, Statements, Values, VoidDecoder,
+    },
 };
 pub use batch::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
 pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
 pub use keyspace::Keyspace;
 pub use select::{GetSelectRequest, GetSelectStatement, Select, SelectRequest};
-use std::{borrow::Cow, marker::PhantomData, ops::Deref};
+use std::{borrow::Cow, convert::TryInto, marker::PhantomData, ops::Deref};
 pub use update::{GetUpdateRequest, GetUpdateStatement, Update, UpdateRequest};
 
 #[repr(u8)]

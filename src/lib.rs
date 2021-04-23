@@ -6,8 +6,14 @@ pub use cql::*;
 #[cfg(feature = "app")]
 pub mod app;
 
-#[cfg(feature = "app")]
 pub mod prelude {
+    #[cfg(feature = "app")]
     pub use super::app::{access::*, worker::*, *};
+    #[cfg(feature = "app")]
     pub use backstage::*;
+
+    pub use super::cql::{
+        ColumnDecoder, ColumnEncoder, ColumnValue, Consistency, Decoder, Frame, Iter, Prepare, PreparedStatement,
+        QueryStatement, Row, Rows, RowsDecoder, Statements, TokenEncoder, Values, VoidDecoder,
+    };
 }
