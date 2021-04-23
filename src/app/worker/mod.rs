@@ -1,9 +1,9 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-pub use crate::app::stage::ReporterEvent;
+pub use crate::app::stage::{ReporterEvent, ReporterHandle};
 use crate::{
-    app::{access::*, stage::ReporterHandle},
+    app::access::*,
     cql::{Consistency, CqlError, Decoder, Prepare},
 };
 use anyhow::anyhow;
