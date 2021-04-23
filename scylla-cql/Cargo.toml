@@ -11,7 +11,7 @@ repository = "https://github.com/iotaledger/scylla.rs"
 lz4 = "1.23"
 snap = "1.0"
 port_scanner = "0.1"
-tokio = "1.5"
+tokio = {version = "1.5", features = ["io-util", "net"]}
 anyhow = "1.0"
 log = "0.4"
 thiserror = "1.0"

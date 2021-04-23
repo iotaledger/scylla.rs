@@ -1,6 +1,6 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
-use scylla_rs::app::application::*;
+use scylla_rs::app::*;
 // launcher
 launcher!(builder: AppsBuilder {[] -> Scylla<Sender>: ScyllaBuilder<Sender>}, state: Apps {});
 

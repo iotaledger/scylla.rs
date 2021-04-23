@@ -8,6 +8,7 @@ homepage = "https://www.iota.org"
 repository = "https://github.com/iotaledger/scylla.rs"
 description = "An async ScyllaDB driver built on an actor-model framework"
 keywords = ["iota", "scylla", "cassandra", "cql", "driver"]
+exclude = ["scylla-app/**/*", "scylla-cql/**/*", ".github/**/*"]
 
 [workspace]
 members = [
@@ -16,7 +17,7 @@ members = [
 ]
 
 [dependencies]
-scylla-app = { path = "./scylla-app" }
+scylla-app = { path = "./scylla-app", optional = true }
 scylla-cql = { path = "./scylla-cql" }
 
 [dev-dependencies]
@@ -33,3 +34,7 @@ num_cpus = "1.13"
 [[example]]
 name = "scylla"
 path = "examples/scylla.rs"
+
+[features]
+default = ["app"]
+app = ["scylla-app"]
