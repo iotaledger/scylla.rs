@@ -11,6 +11,25 @@ keywords = ["iota", "scylla", "cassandra", "cql", "driver"]
 
 [workspace]
 members = [
-    "scylla",
+    "scylla-app",
     "scylla-cql",
 ]
+
+[dependencies]
+scylla-app = { path = "./scylla-app" }
+scylla-cql = { path = "./scylla-cql" }
+
+[dev-dependencies]
+env_logger = "0.8"
+tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "signal"] }
+backstage = "0.1"
+async-trait = "0.1"
+serde = "1.0"
+serde_json = "1.0"
+log = "0.4"
+futures = "0.3"
+num_cpus = "1.13"
+
+[[example]]
+name = "scylla"
+path = "examples/scylla.rs"

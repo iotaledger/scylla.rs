@@ -3,8 +3,8 @@ name = "scylla-cql"
 version = "0.1.2"
 authors = ["IOTA Stiftung"]
 edition = "2018"
-license = "APACHE 2.0"
-homepage = "https://docs.iota.org/docs/chronicle/1.1/overview"
+license-file = "../LICENSE"
+homepage = "https://www.iota.org"
 repository = "https://github.com/iotaledger/scylla.rs"
 
 [dependencies]
