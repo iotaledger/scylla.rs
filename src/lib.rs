@@ -13,7 +13,8 @@ pub mod prelude {
     pub use backstage::*;
 
     pub use super::cql::{
-        ColumnDecoder, ColumnEncoder, ColumnValue, Consistency, Decoder, Frame, Iter, Prepare, PreparedStatement,
-        QueryStatement, Row, Rows, RowsDecoder, Statements, TokenEncoder, Values, VoidDecoder,
+        Batch, ColumnDecoder, ColumnEncoder, ColumnValue, Consistency, Decoder, Frame, Iter, Prepare,
+        PreparedStatement, Query, QueryStatement, Row, Rows, RowsDecoder, Statements, TokenEncoder, Values,
+        VoidDecoder,
     };
 }
