@@ -8,6 +8,7 @@ homepage = "https://www.iota.org"
 repository = "https://github.com/iotaledger/scylla.rs"
 description = "An async ScyllaDB driver built on an actor-model framework"
 keywords = ["iota", "scylla", "cassandra", "cql", "driver"]
+exclude = [".github/**/*"]
 
 [dependencies]
 # CQL

@@ -1,13 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-/// Import supervisor scope
-use super::cluster::*;
-/// Import Stage child
-use super::stage::*;
-/// Import application scope
-use crate::app::application::*;
-
+use super::{
+    cluster::{ClusterEvent, ClusterHandle},
+    stage::{ReportersHandles, StageBuilder, StageEvent, StageHandle},
+    *,
+};
 use std::{
     collections::HashMap,
     net::SocketAddr,

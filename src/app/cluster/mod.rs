@@ -1,9 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use super::{
+    node::{NodeBuilder, NodeHandle},
+    *,
+};
 use crate::app::{
-    application::*,
-    node::*,
     ring::{build_ring, initialize_ring, ArcRing, Registry, Ring, WeakRing},
     stage::ReportersHandles,
 };

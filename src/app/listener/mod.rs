@@ -1,8 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::app::application::*;
-
+use super::{websocket::WebsocketBuilder, *};
 use futures::future::AbortHandle;
 use tokio::net::TcpListener;
 mod event_loop;

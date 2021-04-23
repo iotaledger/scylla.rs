@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::app::application::*;
+use super::*;
 use futures::{
     stream::{SplitSink, SplitStream},
     StreamExt,
@@ -16,7 +16,7 @@ mod init;
 mod terminating;
 
 builder!(
-    WebsocketdBuilder {
+    WebsocketBuilder {
         peer: SocketAddr,
         stream: WebSocketStream<TcpStream>
 });
@@ -33,9 +33,9 @@ pub struct Websocket {
     opt_ws_tx: Option<WsTx>,
 }
 
-impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for WebsocketdBuilder {}
+impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for WebsocketBuilder {}
 
-impl Builder for WebsocketdBuilder {
+impl Builder for WebsocketBuilder {
     type State = Websocket;
     fn build(self) -> Self::State {
         // split the websocket stream

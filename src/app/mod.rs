@@ -24,5 +24,8 @@ pub mod websocket;
 pub mod worker;
 
 pub use application::*;
-/// API of the crate
+use backstage::*;
+use log::*;
+use tokio::sync::mpsc;
+pub use websocket::client::add_nodes::add_nodes;
 pub use worker::{Worker, WorkerError};

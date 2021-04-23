@@ -5,3 +5,9 @@ pub mod cql;
 pub use cql::*;
 #[cfg(feature = "app")]
 pub mod app;
+
+#[cfg(feature = "app")]
+pub mod prelude {
+    pub use super::app::{access::*, worker::*, *};
+    pub use backstage::*;
+}

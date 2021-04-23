@@ -1,12 +1,14 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::node::*;
-use crate::app::application::*;
+use super::{
+    node::{NodeEvent, NodeHandle},
+    *,
+};
 use receiver::ReceiverBuilder;
 use reporter::ReporterBuilder;
+pub use reporter::{ReporterEvent, ReporterHandle};
 use sender::SenderBuilder;
-
 use std::{
     cell::UnsafeCell,
     collections::HashMap,
@@ -22,8 +24,6 @@ mod receiver;
 mod reporter;
 mod sender;
 mod terminating;
-
-pub use reporter::{ReporterEvent, ReporterHandle};
 
 /// The reporters of shard id to its corresponding sender of stage reporter events.
 #[derive(Clone)]

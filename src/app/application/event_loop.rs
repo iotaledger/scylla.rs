@@ -3,6 +3,7 @@
 
 use super::*;
 use futures::SinkExt;
+use tokio_tungstenite::tungstenite::Message;
 
 #[async_trait::async_trait]
 impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {

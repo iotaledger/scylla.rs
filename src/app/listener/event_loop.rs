@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::app::websocket::WebsocketdBuilder;
 use tokio_tungstenite::accept_async;
 
 #[async_trait::async_trait]
@@ -21,7 +20,7 @@ impl<H: ScyllaScope> EventLoop<ScyllaHandle<H>> for Listener {
                     let peer = socket.peer_addr().unwrap_or(peer);
                     if let Ok(ws_stream) = accept_async(socket).await {
                         // build websocket
-                        let websocket = WebsocketdBuilder::new().peer(peer).stream(ws_stream).build();
+                        let websocket = WebsocketBuilder::new().peer(peer).stream(ws_stream).build();
                         // spawn websocket
                         tokio::spawn(websocket.start(supervisor.clone()));
                     }
