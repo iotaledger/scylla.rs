@@ -278,14 +278,14 @@ pub mod tests {
 
     impl RowsDecoder<u32, f32> for MyKeyspace {
         type Row = f32;
-        fn try_decode(decoder: Decoder) -> anyhow::Result<Option<f32>> {
+        fn try_decode(_decoder: Decoder) -> anyhow::Result<Option<f32>> {
             todo!()
         }
     }
 
     impl RowsDecoder<u32, i32> for MyKeyspace {
         type Row = i32;
-        fn try_decode(decoder: Decoder) -> anyhow::Result<Option<i32>> {
+        fn try_decode(_decoder: Decoder) -> anyhow::Result<Option<i32>> {
             todo!()
         }
     }
@@ -297,7 +297,7 @@ pub mod tests {
     }
 
     impl Worker for TestWorker {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
@@ -334,7 +334,7 @@ pub mod tests {
     }
 
     impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
@@ -423,9 +423,9 @@ pub mod tests {
         let worker3 = TestWorker {
             request: Box::new(req2.clone()),
         };
-        let res = req1.clone().send_local(Box::new(worker1));
-        let res = req1.send_local(Box::new(worker2));
-        let res = req2.send_local(Box::new(worker3));
+        let _res = req1.clone().send_local(Box::new(worker1));
+        let _res = req1.send_local(Box::new(worker2));
+        let _res = req2.send_local(Box::new(worker3));
     }
 
     #[allow(dead_code)]
@@ -434,7 +434,7 @@ pub mod tests {
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
         let worker = InsertWorker::boxed(keyspace, 3, 8.0, 0);
 
-        let res = req.send_local(worker);
+        let _res = req.send_local(worker);
     }
 
     #[allow(dead_code)]
@@ -445,7 +445,7 @@ pub mod tests {
             request: Box::new(req.clone()),
         };
 
-        let res = req.send_local(Box::new(worker));
+        let _res = req.send_local(Box::new(worker));
     }
 
     #[allow(dead_code)]
@@ -460,7 +460,7 @@ pub mod tests {
             request: Box::new(req.clone()),
         };
 
-        let res = req.send_local(Box::new(worker));
+        let _res = req.send_local(Box::new(worker));
     }
 
     #[test]
@@ -482,6 +482,6 @@ pub mod tests {
         let statement = req.get_statement(&id).unwrap();
         assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
         let worker = BatchWorker { request: req.clone() };
-        let res = req.clone().send_local(Box::new(worker));
+        let _res = req.clone().send_local(Box::new(worker));
     }
 }

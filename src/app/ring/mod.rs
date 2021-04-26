@@ -55,14 +55,23 @@ pub type WeakRing = Weak<GlobalRing>;
 
 /// The Ring structure used to handle the access to ScyllaDB ring.
 pub struct Ring {
+    /// Version of the Ring
     pub version: u8,
+    /// Most recent weak global ring
     pub weak: Option<Weak<GlobalRing>>,
+    /// Registry which holds all scylla reporters
     pub registry: Registry,
+    /// Root of ring (binary tree)
     pub root: Vcell,
+    /// Uniform to sample reporter_id up to reporter_count == 255
     pub uniform: Uniform<u8>,
+    /// Rng used by uniform to sample random number
     pub rng: ThreadRng,
+    /// DataCenter (NOTE: the very first is the local datacenter)
     pub dcs: Vec<DC>,
+    /// Uniform to pick random datacenter (used by send_global strategy)
     pub uniform_dcs: Uniform<usize>,
+    /// Uniform to pick random replication refactor
     pub uniform_rf: Uniform<usize>,
 }
 
@@ -117,6 +126,7 @@ impl Ring {
     pub fn send_global_random_replica(token: Token, request: ReporterEvent) {
         RING.with(|local| local.borrow_mut().sending().global_random_replica(token, request))
     }
+    /// Rebuild the Ring the most up to date version
     pub fn rebuild() {
         RING.with(|local| {
             let mut ring = local.borrow_mut();
@@ -330,13 +340,27 @@ impl Endpoints for Replicas {
         mut rng: &mut ThreadRng,
         uniform: Uniform<u8>,
     ) {
-        self.get_mut(data_center).unwrap()[replica_index].send_reporter(
-            token,
-            &mut registry,
-            &mut rng,
-            uniform,
-            request,
-        );
+        let replicas = self.get_mut(data_center).expect("Expected Replicas");
+        if let Some(replica) = replicas.get_mut(replica_index) {
+            replica.send_reporter(
+                token,
+                &mut registry,
+                &mut rng,
+                uniform,
+                request,
+            );
+        } else {
+            // send to a random node
+            let rf = Uniform::new(0, replicas.len());
+            let mut replica = replicas[rng.sample(rf)];
+            replica.send_reporter(
+                token,
+                &mut registry,
+                &mut rng,
+                uniform,
+                request,
+            );
+        }
     }
 }
 impl Endpoints for Option<Replicas> {
