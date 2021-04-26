@@ -342,24 +342,12 @@ impl Endpoints for Replicas {
     ) {
         let replicas = self.get_mut(data_center).expect("Expected Replicas");
         if let Some(replica) = replicas.get_mut(replica_index) {
-            replica.send_reporter(
-                token,
-                &mut registry,
-                &mut rng,
-                uniform,
-                request,
-            );
+            replica.send_reporter(token, &mut registry, &mut rng, uniform, request);
         } else {
             // send to a random node
             let rf = Uniform::new(0, replicas.len());
             let mut replica = replicas[rng.sample(rf)];
-            replica.send_reporter(
-                token,
-                &mut registry,
-                &mut rng,
-                uniform,
-                request,
-            );
+            replica.send_reporter(token, &mut registry, &mut rng, uniform, request);
         }
     }
 }
