@@ -78,7 +78,7 @@ where
     fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
+        reporter: Option<&mut ReporterHandle>,
     ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -160,7 +160,7 @@ pub fn handle_unprepared_error<W, S, K, V>(
     id: [u8; 16],
     page_size: Option<i32>,
     paging_state: &Option<Vec<u8>>,
-    reporter: &ReporterHandle,
+    reporter: &mut ReporterHandle,
 ) -> anyhow::Result<()>
 where
     W: 'static + Worker + Clone,

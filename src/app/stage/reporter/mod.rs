@@ -8,50 +8,72 @@ use crate::{
 };
 use anyhow::anyhow;
 use sender::SenderHandle;
-use std::{
-    collections::HashSet,
-    convert::TryFrom,
-    ops::{Deref, DerefMut},
-};
+use std::{borrow::Cow, collections::HashSet, convert::TryFrom};
 
-mod event_loop;
 mod init;
-mod terminating;
+mod run;
+mod shutdown;
 
 /// Workers Map holds all the workers_ids
 type Workers = HashMap<i16, Box<dyn Worker>>;
 
-// Reporter builder
-builder!(ReporterBuilder {
+#[build]
+#[derive(Clone)]
+pub fn build_reporter<StageEvent, StageHandle>(
+    service: Service,
     session_id: usize,
     reporter_id: u8,
     shard_id: u16,
     streams: HashSet<i16>,
     address: SocketAddr,
-    payloads: Payloads
-});
+    payloads: Payloads,
+) -> Reporter {
+    let (sender, inbox) = mpsc::unbounded_channel::<ReporterEvent>();
+    let handle = ReporterHandle { sender };
+
+    Reporter {
+        service,
+        address,
+        session_id,
+        reporter_id,
+        streams,
+        shard_id,
+        workers: HashMap::new(),
+        sender_handle: None,
+        payloads,
+        handle,
+        inbox,
+    }
+}
 
 /// ReporterHandle to be passed to the children (Stage)
 #[derive(Clone)]
 pub struct ReporterHandle {
-    tx: mpsc::UnboundedSender<ReporterEvent>,
-}
-/// NodeInbox is used to recv events
-pub struct ReporterInbox {
-    rx: mpsc::UnboundedReceiver<ReporterEvent>,
+    sender: mpsc::UnboundedSender<ReporterEvent>,
 }
 
-impl Deref for ReporterHandle {
-    type Target = mpsc::UnboundedSender<ReporterEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
+impl EventHandle<ReporterEvent> for ReporterHandle {
+    fn send(&mut self, message: ReporterEvent) -> anyhow::Result<()> {
+        self.sender.send(message).ok();
+        Ok(())
     }
-}
 
-impl DerefMut for ReporterHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
+    fn shutdown(mut self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        if let Ok(()) = self.send(ReporterEvent::Session(Session::Shutdown)) {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
+    fn update_status(&mut self, service: Service) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        todo!()
     }
 }
 
@@ -92,62 +114,27 @@ pub struct Reporter {
     workers: Workers,
     sender_handle: Option<SenderHandle>,
     payloads: Payloads,
-    handle: Option<ReporterHandle>,
-    inbox: ReporterInbox,
+    handle: ReporterHandle,
+    inbox: mpsc::UnboundedReceiver<ReporterEvent>,
 }
 
-impl Reporter {
-    pub fn clone_handle(&self) -> Option<ReporterHandle> {
-        self.handle.clone()
+impl ActorTypes for Reporter {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+    type Error = Cow<'static, str>;
+
+    fn service(&mut self) -> &mut Service {
+        &mut self.service
     }
 }
 
-impl ActorBuilder<StageHandle> for ReporterBuilder {}
+impl EventActor<StageEvent, StageHandle> for Reporter {
+    type Event = ReporterEvent;
 
-/// implementation of builder
-impl Builder for ReporterBuilder {
-    type State = Reporter;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<ReporterEvent>();
-        let handle = Some(ReporterHandle { tx });
-        let inbox = ReporterInbox { rx };
+    type Handle = ReporterHandle;
 
-        Self::State {
-            service: Service::new(),
-            address: self.address.unwrap(),
-            session_id: self.session_id.unwrap(),
-            reporter_id: self.reporter_id.unwrap(),
-            streams: self.streams.unwrap(),
-            shard_id: self.shard_id.unwrap(),
-            workers: HashMap::new(),
-            sender_handle: None,
-            payloads: self.payloads.unwrap(),
-            handle,
-            inbox,
-        }
-        .set_name()
-    }
-}
-
-/// impl name of the Reporter
-impl Name for Reporter {
-    fn set_name(mut self) -> Self {
-        // create name from the reporter_id
-        let name = self.reporter_id.to_string();
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl AknShutdown<Reporter> for StageHandle {
-    async fn aknowledge_shutdown(self, mut state: Reporter, _status: Result<(), Need>) {
-        state.service.update_status(ServiceStatus::Stopped);
-        let event = StageEvent::Reporter(state.service);
-        let _ = self.send(event);
+    fn handle(&mut self) -> &mut Self::Handle {
+        &mut self.handle
     }
 }
 
@@ -159,7 +146,7 @@ impl Reporter {
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
             worker_id
-                .handle_error(WorkerError::Lost, &self.handle)
+                .handle_error(WorkerError::Lost, Some(&mut self.handle))
                 .unwrap_or_else(|e| error!("{}", e));
         }
     }

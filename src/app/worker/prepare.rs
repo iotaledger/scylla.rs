@@ -72,7 +72,7 @@ impl Worker for PrepareWorker {
         info!("Successfully prepared statement: '{}'", self.statement);
         Ok(())
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&mut ReporterHandle>) -> anyhow::Result<()> {
         error!("Failed to prepare statement: {}, error: {}", self.statement, error);
         Ok(())
     }

@@ -27,7 +27,7 @@ impl Authenticator for AllowAllAuth {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// The password autentication structure with the user and password fields.
 pub struct PasswordAuth {
     user: String,

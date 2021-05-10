@@ -7,6 +7,7 @@ use crate::{
     cql::{Consistency, CqlError, Decoder, Prepare},
 };
 use anyhow::anyhow;
+use backstage::EventHandle;
 pub use delete::{handle_unprepared_error as handle_delete_unprepared_error, DeleteWorker};
 pub use insert::{handle_unprepared_error as handle_insert_unprepared_error, InsertWorker};
 use log::*;
@@ -28,7 +29,7 @@ pub trait Worker: Send {
     /// Reporter will invoke this method to Send the cql response to worker
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()>;
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: Option<&mut ReporterHandle>) -> anyhow::Result<()>;
 }
 
 #[derive(Error, Debug)]

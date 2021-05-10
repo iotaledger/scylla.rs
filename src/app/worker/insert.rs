@@ -50,8 +50,9 @@ where
     fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
+        reporter: Option<&mut ReporterHandle>,
     ) -> anyhow::Result<()> {
+        let reporter_running = reporter.is_some();
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
@@ -70,7 +71,7 @@ where
         } else {
             // no more retries
             // print error!
-            error!("{:?}, reporter running: {}", error, reporter.is_some());
+            error!("{:?}, reporter running: {}", error, reporter_running);
         }
         Ok(())
     }
@@ -85,7 +86,7 @@ pub fn handle_unprepared_error<W, S, K, V>(
     key: &K,
     value: &V,
     id: [u8; 16],
-    reporter: &ReporterHandle,
+    reporter: &mut ReporterHandle,
 ) -> anyhow::Result<()>
 where
     W: 'static + Worker + Clone,

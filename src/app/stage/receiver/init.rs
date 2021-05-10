@@ -4,8 +4,8 @@
 use super::*;
 
 #[async_trait::async_trait]
-impl Init<ReportersHandles> for Receiver {
-    async fn init(&mut self, status: Result<(), Need>, _supervisor: &mut Option<ReportersHandles>) -> Result<(), Need> {
-        status
+impl Init<ReporterEvent, ReportersHandles> for Receiver {
+    async fn init(&mut self, supervisor: &mut ReportersHandles) -> Result<(), <Self as ActorTypes>::Error> {
+        Ok(())
     }
 }

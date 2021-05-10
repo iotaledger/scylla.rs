@@ -6,20 +6,31 @@ use futures::{
     stream::{SplitSink, SplitStream},
     StreamExt,
 };
-
-use std::net::SocketAddr;
+use std::{borrow::Cow, net::SocketAddr};
 use tokio::net::TcpStream;
 pub(crate) use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream};
-pub(crate) mod client;
-mod event_loop;
-mod init;
-mod terminating;
 
-builder!(
-    WebsocketBuilder {
-        peer: SocketAddr,
-        stream: WebSocketStream<TcpStream>
-});
+pub(crate) mod client;
+mod init;
+mod run;
+mod shutdown;
+
+#[build]
+#[derive(Debug)]
+pub fn build_websocket<ScyllaEvent, ScyllaHandle>(
+    service: Service,
+    peer: SocketAddr,
+    stream: WebSocketStream<TcpStream>,
+) -> Websocket {
+    let (ws_tx, ws_rx) = stream.split();
+    Websocket {
+        service,
+        peer,
+        ws_rx,
+        opt_ws_tx: Some(ws_tx),
+    }
+}
+
 /// The writehalf of the webssocket
 pub type WsTx = SplitSink<WebSocketStream<TcpStream>, Message>;
 /// The readhalf of the webssocket
@@ -33,41 +44,12 @@ pub struct Websocket {
     opt_ws_tx: Option<WsTx>,
 }
 
-impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for WebsocketBuilder {}
+impl ActorTypes for Websocket {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-impl Builder for WebsocketBuilder {
-    type State = Websocket;
-    fn build(self) -> Self::State {
-        // split the websocket stream
-        let (ws_tx, ws_rx) = self.stream.unwrap().split();
-        Websocket {
-            service: Service::new(),
-            peer: self.peer.unwrap(),
-            ws_rx,
-            opt_ws_tx: Some(ws_tx),
-        }
-        .set_name()
-    }
-}
+    type Error = anyhow::Error;
 
-/// impl name of the Websocket
-impl Name for Websocket {
-    fn set_name(mut self) -> Self {
-        // TODO make sure the name is unique
-        let name: String = self.peer.to_string();
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl<H: ScyllaScope> AknShutdown<Websocket> for ScyllaHandle<H> {
-    async fn aknowledge_shutdown(mut self, mut _state: Websocket, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        let event = ScyllaEvent::Children(ScyllaChild::Websocket(_state.service.clone(), None));
-        let _ = self.send(event);
+    fn service(&mut self) -> &mut Service {
+        &mut self.service
     }
 }

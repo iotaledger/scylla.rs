@@ -4,17 +4,13 @@
 use super::*;
 
 #[async_trait::async_trait]
-impl Init<ReportersHandles> for Sender {
-    async fn init(&mut self, status: Result<(), Need>, supervisor: &mut Option<ReportersHandles>) -> Result<(), Need> {
+impl Init<ReporterEvent, ReportersHandles> for Sender {
+    async fn init(&mut self, reporter_handles: &mut ReportersHandles) -> Result<(), <Self as ActorTypes>::Error> {
         self.service.update_status(ServiceStatus::Initializing);
-        if let (Some(my_handle), Some(reporter_handles)) = (self.handle.take(), supervisor.as_ref()) {
-            for reporter_handle in reporter_handles.values() {
-                let event = ReporterEvent::Session(Session::New(self.service.clone(), my_handle.clone()));
-                let _ = reporter_handle.send(event);
-            }
-            status
-        } else {
-            Err(Need::Abort)
+        for reporter_handle in reporter_handles.values_mut() {
+            let event = ReporterEvent::Session(Session::New(self.service.clone(), self.handle.clone()));
+            reporter_handle.send(event).ok();
         }
+        Ok(())
     }
 }

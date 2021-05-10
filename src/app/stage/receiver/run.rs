@@ -4,44 +4,35 @@
 use super::*;
 
 #[async_trait::async_trait]
-impl EventLoop<ReportersHandles> for Receiver {
-    async fn event_loop(
-        &mut self,
-        status: Result<(), Need>,
-        supervisor: &mut Option<ReportersHandles>,
-    ) -> Result<(), Need> {
-        self.service.update_status(ServiceStatus::Running);
-        if let Some(reporter_handles) = supervisor.as_ref() {
-            for reporter_handle in reporter_handles.values() {
-                let event = ReporterEvent::Session(Session::Service(self.service.clone()));
-                reporter_handle.send(event).ok();
-            }
-            while let Ok(n) = self.socket.read(&mut self.buffer[self.i..]).await {
-                if n != 0 {
-                    self.current_length += n;
-                    if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
-                        self.i = self.current_length;
-                    } else {
-                        self.handle_frame_header(0)
-                            .and_then(|_| self.handle_frame(n, 0, reporter_handles))
-                            .map_err(|e| {
-                                error!("{}", e);
-                                Need::Abort
-                            })?;
-                    }
-                } else {
-                    break;
-                }
-            }
-            status
-        } else {
-            Err(Need::Abort)
+impl Run<ReporterEvent, ReportersHandles> for Receiver {
+    async fn run(&mut self, reporter_handles: &mut ReportersHandles) -> Result<(), Self::Error> {
+        for reporter_handle in reporter_handles.values_mut() {
+            let event = ReporterEvent::Session(Session::Service(self.service.clone()));
+            reporter_handle.send(event).ok();
         }
+        while let Ok(n) = self.socket.read(&mut self.buffer[self.i..]).await {
+            if n != 0 {
+                self.current_length += n;
+                if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
+                    self.i = self.current_length;
+                } else {
+                    self.handle_frame_header(0)
+                        .and_then(|_| self.handle_frame(n, 0, reporter_handles))
+                        .map_err(|e| {
+                            error!("{}", e);
+                            format!("{}", e)
+                        })?;
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 
 impl Receiver {
-    fn handle_remaining_buffer(&mut self, i: usize, reporters_handles: &ReportersHandles) -> anyhow::Result<()> {
+    fn handle_remaining_buffer(&mut self, i: usize, reporters_handles: &mut ReportersHandles) -> anyhow::Result<()> {
         if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
             self.buffer.copy_within(i..(i + self.current_length), self.i);
             self.i = self.current_length;
@@ -77,7 +68,7 @@ impl Receiver {
         &mut self,
         n: usize,
         mut padding: usize,
-        reporters_handles: &ReportersHandles,
+        reporters_handles: &mut ReportersHandles,
     ) -> anyhow::Result<()> {
         let start = self.current_length - n - self.i;
         if self.current_length >= self.total_length {
@@ -92,7 +83,7 @@ impl Receiver {
             giveload[start..self.total_length].copy_from_slice(&self.buffer[old_padding..padding]);
             // tell reporter that giveload is ready.
             let reporter_handle = reporters_handles
-                .get(&compute_reporter_num(self.stream_id, self.appends_num))
+                .get_mut(&compute_reporter_num(self.stream_id, self.appends_num))
                 .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
 
             reporter_handle

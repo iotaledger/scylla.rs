@@ -23,9 +23,17 @@ pub mod websocket;
 /// Workers which can be used when sending requests to handle the responses
 pub mod worker;
 
+use anyhow::{anyhow, bail};
 pub use application::*;
 use backstage::*;
 use log::*;
+use std::time::Duration;
+use thiserror::Error;
 use tokio::sync::mpsc;
 pub use websocket::client::add_nodes::add_nodes;
 pub use worker::{Worker, WorkerError};
+
+pub(crate) struct ChildHandle<T> {
+    pub event_handle: tokio::sync::mpsc::UnboundedSender<T>,
+    pub join_handle: tokio::task::JoinHandle<Result<ActorRequest, ActorError>>,
+}

@@ -3,22 +3,37 @@
 
 use super::{reporter::*, *};
 use anyhow::anyhow;
+use std::borrow::Cow;
 use tokio::{io::AsyncReadExt, net::tcp::OwnedReadHalf};
 
-mod event_loop;
 mod init;
-mod terminating;
+mod run;
+mod shutdown;
 
 const CQL_FRAME_HEADER_BYTES_LENGTH: usize = 9;
 
-// Receiver builder
-builder!(ReceiverBuilder {
+#[build]
+pub fn build_receiver<ReporterEvent, ReportersHandles>(
+    service: Service,
     socket: OwnedReadHalf,
     session_id: usize,
     payloads: Payloads,
     buffer_size: usize,
-    appends_num: i16
-});
+    appends_num: i16,
+) -> Receiver {
+    Receiver {
+        service,
+        socket,
+        stream_id: 0,
+        total_length: 0,
+        current_length: 0,
+        header: false,
+        buffer: vec![0; buffer_size],
+        i: 0,
+        appends_num,
+        payloads,
+    }
+}
 
 /// Receiver state
 pub struct Receiver {
@@ -34,48 +49,13 @@ pub struct Receiver {
     payloads: Payloads,
 }
 
-impl ActorBuilder<ReportersHandles> for ReceiverBuilder {}
+impl ActorTypes for Receiver {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// implementation of builder
-impl Builder for ReceiverBuilder {
-    type State = Receiver;
-    fn build(self) -> Self::State {
-        Self::State {
-            service: Service::new(),
-            socket: self.socket.unwrap(),
-            stream_id: 0,
-            total_length: 0,
-            current_length: 0,
-            header: false,
-            buffer: vec![0; self.buffer_size.unwrap()],
-            i: 0,
-            appends_num: self.appends_num.unwrap(),
-            payloads: self.payloads.unwrap(),
-        }
-        .set_name()
-    }
-}
+    type Error = Cow<'static, str>;
 
-/// impl name of the Receiver
-impl Name for Receiver {
-    fn set_name(mut self) -> Self {
-        let name = String::from("Receiver");
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl AknShutdown<Receiver> for ReportersHandles {
-    async fn aknowledge_shutdown(self, mut _state: Receiver, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        for reporter_handle in self.values() {
-            let event = ReporterEvent::Session(Session::Service(_state.service.clone()));
-            let _ = reporter_handle.send(event);
-        }
+    fn service(&mut self) -> &mut Service {
+        &mut self.service
     }
 }
 

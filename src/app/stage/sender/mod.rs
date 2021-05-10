@@ -1,42 +1,59 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
+
 use super::{reporter::*, *};
 use anyhow::anyhow;
 use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf};
 
-mod event_loop;
 mod init;
-mod terminating;
+mod run;
+mod shutdown;
 
-// Sender builder
-builder!(SenderBuilder {
+#[build]
+pub fn build_sender<ReporterEvent, ReportersHandles>(
+    service: Service,
     socket: OwnedWriteHalf,
     payloads: Payloads,
-    appends_num: i16
-});
+    appends_num: i16,
+) -> Sender {
+    let (sender, inbox) = mpsc::unbounded_channel::<SenderEvent>();
+    let handle = SenderHandle { sender };
+    Sender {
+        service,
+        payloads,
+        socket,
+        appends_num,
+        handle,
+        inbox,
+    }
+}
 
 /// SenderHandle to be passed to the supervisor (reporters)
 #[derive(Clone)]
 pub struct SenderHandle {
-    tx: mpsc::UnboundedSender<SenderEvent>,
-}
-/// SenderInbox is used to recv events
-pub struct SenderInbox {
-    rx: mpsc::UnboundedReceiver<SenderEvent>,
+    sender: mpsc::UnboundedSender<SenderEvent>,
 }
 
-impl Deref for SenderHandle {
-    type Target = mpsc::UnboundedSender<SenderEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
+impl EventHandle<SenderEvent> for SenderHandle {
+    fn send(&mut self, message: SenderEvent) -> anyhow::Result<()> {
+        self.sender.send(message).ok();
+        Ok(())
     }
-}
 
-impl DerefMut for SenderHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
+    fn shutdown(mut self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+
+    fn update_status(&mut self, service: Service) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        todo!()
     }
 }
 
@@ -47,53 +64,28 @@ type SenderEvent = i16;
 pub struct Sender {
     service: Service,
     socket: OwnedWriteHalf,
-    handle: Option<SenderHandle>,
-    inbox: SenderInbox,
+    handle: SenderHandle,
+    inbox: mpsc::UnboundedReceiver<SenderEvent>,
     payloads: Payloads,
     appends_num: i16,
 }
 
-impl ActorBuilder<ReportersHandles> for SenderBuilder {}
+impl ActorTypes for Sender {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// implementation of builder
-impl Builder for SenderBuilder {
-    type State = Sender;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<SenderEvent>();
-        let handle = Some(SenderHandle { tx });
-        let inbox = SenderInbox { rx };
+    type Error = Cow<'static, str>;
 
-        Self::State {
-            service: Service::new(),
-            payloads: self.payloads.unwrap(),
-            socket: self.socket.unwrap(),
-            appends_num: self.appends_num.unwrap(),
-            handle,
-            inbox,
-        }
-        .set_name()
+    fn service(&mut self) -> &mut Service {
+        &mut self.service
     }
 }
 
-/// impl name of the Sender
-impl Name for Sender {
-    fn set_name(mut self) -> Self {
-        let name = String::from("Sender");
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
+impl EventActor<ReporterEvent, ReportersHandles> for Sender {
+    type Event = SenderEvent;
 
-#[async_trait::async_trait]
-impl AknShutdown<Sender> for ReportersHandles {
-    async fn aknowledge_shutdown(self, mut _state: Sender, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        for reporter_handle in self.values() {
-            let event = ReporterEvent::Session(Session::Service(_state.service.clone()));
-            let _ = reporter_handle.send(event);
-        }
+    type Handle = SenderHandle;
+
+    fn handle(&mut self) -> &mut Self::Handle {
+        &mut self.handle
     }
 }

@@ -18,15 +18,15 @@ use std::{
 };
 use tokio::net::TcpStream;
 
-mod event_loop;
 mod init;
 mod receiver;
 mod reporter;
+mod run;
 mod sender;
-mod terminating;
+mod shutdown;
 
 /// The reporters of shard id to its corresponding sender of stage reporter events.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ReportersHandles(HashMap<u8, ReporterHandle>);
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
@@ -44,20 +44,35 @@ impl DerefMut for ReportersHandles {
     }
 }
 
-impl Shutdown for ReportersHandles {
-    fn shutdown(self) -> Option<Self>
+impl EventHandle<ReporterEvent> for ReportersHandles {
+    fn send(&mut self, message: ReporterEvent) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn shutdown(mut self) -> Option<Self>
     where
         Self: Sized,
     {
-        for reporter_handle in self.values() {
-            let _ = reporter_handle.send(ReporterEvent::Session(reporter::Session::Shutdown));
+        for reporter_handle in self.values_mut() {
+            reporter_handle
+                .send(ReporterEvent::Session(reporter::Session::Shutdown))
+                .ok();
         }
         None
     }
+
+    fn update_status(&mut self, service: Service) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        self.send(ReporterEvent::Session(reporter::Session::Service(service)))
+    }
 }
 
-// Stage builder
-builder!(StageBuilder {
+#[build]
+#[derive(Debug, Clone)]
+pub fn build_stage<NodeEvent, NodeHandle>(
+    service: Service,
     address: SocketAddr,
     authenticator: PasswordAuth,
     reporter_count: u8,
@@ -65,35 +80,80 @@ builder!(StageBuilder {
     buffer_size: usize,
     recv_buffer_size: Option<u32>,
     send_buffer_size: Option<u32>,
-    handle: StageHandle,
-    inbox: StageInbox
-});
-
-/// StageHandle to be passed to the children (reporter/s)
-#[derive(Clone)]
-pub struct StageHandle {
-    tx: mpsc::UnboundedSender<StageEvent>,
-}
-/// StageInbox is used to recv events
-pub struct StageInbox {
-    rx: mpsc::UnboundedReceiver<StageEvent>,
-}
-
-impl Deref for StageHandle {
-    type Target = mpsc::UnboundedSender<StageEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
+) -> Stage {
+    let (sender, inbox) = mpsc::unbounded_channel::<StageEvent>();
+    let handle = StageHandle { sender };
+    // create reusable payloads as giveload
+    let vector: Vec<Reusable> = Vec::new();
+    let payloads: Payloads = Arc::new(vector);
+    Stage {
+        service,
+        address,
+        authenticator,
+        appends_num: 32767 / (reporter_count as i16),
+        reporter_count,
+        reporters_handles: ReportersHandles(HashMap::with_capacity(reporter_count as usize)),
+        session_id: 0,
+        shard_id,
+        payloads,
+        buffer_size,
+        recv_buffer_size,
+        send_buffer_size,
+        handle,
+        inbox,
     }
 }
 
-impl DerefMut for StageHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
+#[derive(Error, Debug)]
+pub enum StageError {
+    #[error("Cannot acquire access to reusable payloads!")]
+    NoReusablePayloads,
+    #[error("Failed to create streams!")]
+    CannotCreateStreams,
+}
+
+impl Into<ActorError> for StageError {
+    fn into(self) -> ActorError {
+        match self {
+            StageError::NoReusablePayloads => ActorError::RuntimeError(ActorRequest::Panic),
+            StageError::CannotCreateStreams => ActorError::RuntimeError(ActorRequest::Panic),
+        }
+    }
+}
+
+/// StageHandle to be passed to the children (reporter/s)
+#[derive(Debug, Clone)]
+pub struct StageHandle {
+    sender: mpsc::UnboundedSender<StageEvent>,
+}
+
+impl EventHandle<StageEvent> for StageHandle {
+    fn send(&mut self, message: StageEvent) -> anyhow::Result<()> {
+        self.sender.send(message)?;
+        Ok(())
+    }
+
+    fn shutdown(mut self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        if let Ok(()) = self.send(StageEvent::Shutdown) {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
+    fn update_status(&mut self, service: Service) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        self.send(StageEvent::Reporter(service))
     }
 }
 
 /// Stage event enum.
+#[derive(Debug)]
 pub enum StageEvent {
     /// Reporter child status change
     Reporter(Service),
@@ -109,21 +169,37 @@ pub struct Stage {
     authenticator: PasswordAuth,
     appends_num: i16,
     reporter_count: u8,
-    reporters_handles: Option<ReportersHandles>,
+    reporters_handles: ReportersHandles,
     session_id: usize,
     shard_id: u16,
     payloads: Payloads,
     buffer_size: usize,
     recv_buffer_size: Option<u32>,
     send_buffer_size: Option<u32>,
-    handle: Option<StageHandle>,
-    inbox: StageInbox,
+    handle: StageHandle,
+    inbox: mpsc::UnboundedReceiver<StageEvent>,
 }
-impl Stage {
-    pub(crate) fn clone_handle(&self) -> Option<StageHandle> {
-        self.handle.clone()
+
+impl ActorTypes for Stage {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+    type Error = StageError;
+
+    fn service(&mut self) -> &mut Service {
+        &mut self.service
     }
 }
+
+impl EventActor<NodeEvent, NodeHandle> for Stage {
+    type Event = StageEvent;
+
+    type Handle = StageHandle;
+
+    fn handle(&mut self) -> &mut Self::Handle {
+        &mut self.handle
+    }
+}
+
 #[derive(Default)]
 /// The reusable sender payload.
 pub struct Reusable {
@@ -145,58 +221,3 @@ impl Reusable {
     }
 }
 unsafe impl Sync for Reusable {}
-
-impl ActorBuilder<NodeHandle> for StageBuilder {}
-
-/// implementation of builder
-impl Builder for StageBuilder {
-    type State = Stage;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<StageEvent>();
-        let handle = Some(StageHandle { tx });
-        let inbox = StageInbox { rx };
-        // create reusable payloads as giveload
-        let vector: Vec<Reusable> = Vec::new();
-        let payloads: Payloads = Arc::new(vector);
-        let reporter_count = self.reporter_count.unwrap();
-        Self::State {
-            service: Service::new(),
-            address: self.address.unwrap(),
-            authenticator: self.authenticator.unwrap(),
-            appends_num: 32767 / (reporter_count as i16),
-            reporter_count,
-            reporters_handles: Some(ReportersHandles(HashMap::with_capacity(reporter_count as usize))),
-            session_id: 0,
-            shard_id: self.shard_id.unwrap(),
-            payloads,
-            buffer_size: self.buffer_size.unwrap_or(1024000),
-            recv_buffer_size: self.recv_buffer_size.unwrap(),
-            send_buffer_size: self.send_buffer_size.unwrap(),
-            handle,
-            inbox,
-        }
-        .set_name()
-    }
-}
-
-/// impl name of the Node
-impl Name for Stage {
-    fn set_name(mut self) -> Self {
-        // create name from the shard_id
-        let name = self.shard_id.to_string();
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl AknShutdown<Stage> for NodeHandle {
-    async fn aknowledge_shutdown(self, mut _state: Stage, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        let event = NodeEvent::Service(_state.service.clone());
-        let _ = self.send(event);
-    }
-}

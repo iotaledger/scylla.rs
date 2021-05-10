@@ -13,7 +13,7 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
     // add scylla nodes
     for address in addresses {
         // add node
-        let msg = SocketMsg::Scylla(ScyllaThrough::Topology(Topology::AddNode(address)));
+        let msg = ScyllaWebsocketEvent::Topology(Topology::AddNode(address));
         let j = serde_json::to_string(&msg).map_err(|_| anyhow!("Invalid AddNode event"))?;
         let m = Message::text(j);
         ws_stream.send(m).await?;
@@ -21,8 +21,8 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
         while let Some(msg) = ws_stream.next().await {
             let msg = msg.map_err(|_| anyhow!("Expected message from the WebSocketStream while building a ring"))?;
             let msg = msg.to_text()?;
-            if let Ok(event) = serde_json::from_str::<SocketMsg<Result<Topology, Topology>>>(msg) {
-                if let SocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
+            if let Ok(event) = serde_json::from_str::<ScyllaSocketMsg<Result<Topology, Topology>>>(msg) {
+                if let ScyllaSocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
                     info!("Added scylla node: {}", address);
                     break;
                 } else {
@@ -33,11 +33,18 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                 }
             } else {
                 // ensure it's running
+                if let Ok(ScyllaSocketMsg::Scylla(service)) = serde_json::from_str::<ScyllaSocketMsg<Service>>(msg) {
+                    if !service.is_running() {
+                        bail!("Scylla is not running!");
+                    }
+                } else {
+                    bail!("Invalid message received after adding nodes: {}", msg);
+                }
             }
         }
     }
     // build the ring
-    let msg = SocketMsg::Scylla(ScyllaThrough::Topology(Topology::BuildRing(uniform_rf)));
+    let msg = ScyllaWebsocketEvent::Topology(Topology::BuildRing(uniform_rf));
     let j = serde_json::to_string(&msg)?;
     let m = Message::text(j);
     ws_stream.send(m).await?;
@@ -46,8 +53,8 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
     while let Some(msg) = ws_stream.next().await {
         let msg = msg.map_err(|_| anyhow!("Expected message from the WebSocketStream while building a ring"))?;
         let msg = msg.to_text()?;
-        if let Ok(event) = serde_json::from_str::<SocketMsg<Result<Topology, Topology>>>(msg) {
-            if let SocketMsg::<Result<Topology, Topology>>::Scylla(result) = event {
+        if let Ok(event) = serde_json::from_str::<ScyllaSocketMsg<Result<Topology, Topology>>>(msg) {
+            if let ScyllaSocketMsg::<Result<Topology, Topology>>::Scylla(result) = event {
                 match result {
                     Ok(Topology::BuildRing(_)) => {
                         info!("Succesfully Added Nodes and built cluster topology");
@@ -63,7 +70,7 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                     }
                 }
             }
-        } else if let Ok(SocketMsg::Scylla(service)) = serde_json::from_str::<SocketMsg<Service>>(msg) {
+        } else if let Ok(ScyllaSocketMsg::Scylla(service)) = serde_json::from_str::<ScyllaSocketMsg<Service>>(msg) {
             if break_once_ready && service.is_running() {
                 info!("All Nodes in Scylla Cluster are connected");
                 break;

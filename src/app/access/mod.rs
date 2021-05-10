@@ -34,6 +34,7 @@ use crate::{
         QueryOrPrepared, QueryStatement, QueryValues, RowsDecoder, Statements, Values, VoidDecoder,
     },
 };
+use backstage::EventHandle;
 pub use batch::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
 pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
@@ -305,7 +306,7 @@ pub mod tests {
         fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: &Option<crate::app::stage::ReporterHandle>,
+            reporter: Option<&mut ReporterHandle>,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -342,7 +343,7 @@ pub mod tests {
         fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: &Option<crate::app::stage::ReporterHandle>,
+            reporter: Option<&mut ReporterHandle>,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -383,7 +384,7 @@ pub mod tests {
         fn handle_error(
             self: Box<Self>,
             _error: WorkerError,
-            _reporter: &Option<ReporterHandle>,
+            _reporter: Option<&mut ReporterHandle>,
         ) -> anyhow::Result<()> {
             if self.retries > 0 {
                 let prepare_worker = PrepareWorker {

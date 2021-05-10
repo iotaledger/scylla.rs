@@ -9,60 +9,89 @@ use crate::app::{
     ring::{build_ring, initialize_ring, ArcRing, Registry, Ring, WeakRing},
     stage::ReportersHandles,
 };
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
-};
+use std::{collections::HashMap, net::SocketAddr};
 
-mod event_loop;
 mod init;
-mod terminating;
+mod run;
+mod shutdown;
 
 pub(crate) type Nodes = HashMap<SocketAddr, NodeInfo>;
 
-// Cluster builder
-builder!(ClusterBuilder {
+#[build]
+#[derive(Debug, Clone)]
+pub fn build_cluster<ScyllaEvent, ScyllaHandle>(
+    service: Service,
     reporter_count: u8,
     thread_count: usize,
     data_centers: Vec<String>,
     buffer_size: usize,
     recv_buffer_size: Option<u32>,
     send_buffer_size: Option<u32>,
-    authenticator: PasswordAuth
-});
+    authenticator: PasswordAuth,
+) -> Cluster {
+    let (sender, inbox) = mpsc::unbounded_channel::<ClusterEvent>();
+    let handle = ClusterHandle { sender };
+    let (arc_ring, _none) = initialize_ring(0, false);
+    Cluster {
+        service,
+        reporter_count,
+        thread_count,
+        data_centers,
+        buffer_size,
+        recv_buffer_size,
+        send_buffer_size,
+        authenticator,
+        nodes: HashMap::new(),
+        should_build: false,
+        version: 0,
+        registry: HashMap::new(),
+        arc_ring: Some(arc_ring),
+        weak_rings: Vec::new(),
+        handle,
+        inbox,
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ClusterError {}
+
+impl Into<ActorError> for ClusterError {
+    fn into(self) -> ActorError {
+        todo!()
+    }
+}
+
 /// ClusterHandle to be passed to the children (Node)
 #[derive(Clone)]
 pub struct ClusterHandle {
-    tx: mpsc::UnboundedSender<ClusterEvent>,
-}
-/// ClusterInbox is used to recv events
-pub struct ClusterInbox {
-    rx: mpsc::UnboundedReceiver<ClusterEvent>,
+    sender: mpsc::UnboundedSender<ClusterEvent>,
 }
 
-impl Deref for ClusterHandle {
-    type Target = mpsc::UnboundedSender<ClusterEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
+impl EventHandle<ClusterEvent> for ClusterHandle {
+    fn send(&mut self, message: ClusterEvent) -> anyhow::Result<()> {
+        self.sender.send(message).ok();
+        Ok(())
     }
-}
 
-impl DerefMut for ClusterHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
-    }
-}
-impl Shutdown for ClusterHandle {
-    fn shutdown(self) -> Option<Self>
+    fn shutdown(mut self) -> Option<Self>
     where
         Self: Sized,
     {
-        let _ = self.tx.send(ClusterEvent::Shutdown);
-        None
+        if let Ok(()) = self.send(ClusterEvent::Shutdown) {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
+    fn update_status(&mut self, service: Service) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        self.send(ClusterEvent::Service(service))
     }
 }
+
 /// Cluster state
 pub struct Cluster {
     service: Service,
@@ -79,15 +108,28 @@ pub struct Cluster {
     registry: Registry,
     arc_ring: Option<ArcRing>,
     weak_rings: Vec<Box<WeakRing>>,
-    handle: Option<ClusterHandle>,
-    inbox: ClusterInbox,
+    handle: ClusterHandle,
+    inbox: mpsc::UnboundedReceiver<ClusterEvent>,
 }
 
-impl Cluster {
-    pub(crate) fn clone_handle(&self) -> Option<ClusterHandle> {
-        self.handle.clone()
+impl ActorTypes for Cluster {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+    type Error = ClusterError;
+
+    fn service(&mut self) -> &mut Service {
+        &mut self.service
     }
 }
+
+impl EventActor<ScyllaEvent, ScyllaHandle> for Cluster {
+    type Event = ClusterEvent;
+    type Handle = ClusterHandle;
+
+    fn handle(&mut self) -> &mut Self::Handle {
+        &mut self.handle
+    }
+}
+
 /// Cluster Event type
 pub enum ClusterEvent {
     /// Used by the Node to register its reporters with the cluster
@@ -114,39 +156,6 @@ impl From<Topology> for ClusterEvent {
     }
 }
 
-impl<H: ScyllaScope> ActorBuilder<ScyllaHandle<H>> for ClusterBuilder {}
-
-/// implementation of builder
-impl Builder for ClusterBuilder {
-    type State = Cluster;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<ClusterEvent>();
-        let handle = Some(ClusterHandle { tx });
-        let inbox = ClusterInbox { rx };
-        // initialize global_ring
-        let (arc_ring, _none) = initialize_ring(0, false);
-        Self::State {
-            service: Service::new(),
-            reporter_count: self.reporter_count.unwrap(),
-            thread_count: self.thread_count.unwrap(),
-            data_centers: self.data_centers.unwrap(),
-            buffer_size: self.buffer_size.unwrap(),
-            recv_buffer_size: self.recv_buffer_size.unwrap(),
-            send_buffer_size: self.send_buffer_size.unwrap(),
-            authenticator: self.authenticator.unwrap(),
-            nodes: HashMap::new(),
-            should_build: false,
-            version: 0,
-            registry: HashMap::new(),
-            arc_ring: Some(arc_ring),
-            weak_rings: Vec::new(),
-            handle,
-            inbox,
-        }
-        .set_name()
-    }
-}
-
 /// `NodeInfo` contains the field to identify a ScyllaDB node.
 pub struct NodeInfo {
     pub(crate) address: SocketAddr,
@@ -160,24 +169,4 @@ pub struct NodeInfo {
     pub(crate) shard_count: u16,
     /// the most significant bit
     pub(crate) msb: u8,
-}
-
-/// impl name of the Cluster
-impl Name for Cluster {
-    fn set_name(mut self) -> Self {
-        self.service.update_name("Cluster".to_string());
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl<H: ScyllaScope> AknShutdown<Cluster> for ScyllaHandle<H> {
-    async fn aknowledge_shutdown(self, mut _state: Cluster, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        let event = ScyllaEvent::Children(ScyllaChild::Cluster(_state.service.clone()));
-        let _ = self.send(event);
-    }
 }

@@ -90,7 +90,7 @@ where
     fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
+        reporter: Option<&mut ReporterHandle>,
     ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
