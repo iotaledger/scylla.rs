@@ -1,6 +1,6 @@
 [package]
 name = "scylla-rs"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["IOTA Stiftung"]
 edition = "2018"
 license-file = "LICENSE"
