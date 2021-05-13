@@ -74,6 +74,14 @@ impl Metadata {
     pub fn take_paging_state(&mut self) -> Option<Vec<u8>> {
         self.paging_state.paging_state.take()
     }
+    /// Get reference to the paging state of the metadata.
+    pub fn get_paging_state(&self) -> Option<&Vec<u8>> {
+        self.paging_state.paging_state.as_ref()
+    }
+    /// Check if it has more pages to request
+    pub fn has_more_pages(&self) -> bool {
+        self.flags.has_more_pages()
+    }
 }
 
 /// Rows trait to decode the final result from scylla
@@ -119,6 +127,18 @@ impl<T: Row> Iter<T> {
     /// Check if the iterator doesn't have any row
     pub fn is_empty(&self) -> bool {
         self.rows_count == 0
+    }
+    /// Get the iterator rows count
+    pub fn rows_count(&self) -> usize {
+        self.rows_count
+    }
+    /// Get the iterator remaining rows count
+    pub fn remaining_rows_count(&self) -> usize {
+        self.remaining_rows_count
+    }
+    /// Check if it has more pages to request
+    pub fn has_more_pages(&self) -> bool {
+        self.metadata.has_more_pages()
     }
 }
 impl<T: Row> Rows for Iter<T> {
