@@ -1,0 +1,34 @@
+digraph Architecture {
+    splines="true";
+
+    scylla [shape="square"]
+    cluster
+    listener
+    "node" [shape="doublecircle"]
+    stage [shape="doublecircle"]
+    websocket [shape="doublecircle"]
+    ring [shape="square"]
+
+    websocket -> scylla [dir=both arrowhead=dot arrowtail=odot]
+    scylla -> { cluster, listener }
+    cluster -> "node" [label="on add" arrowhead=diamond]
+    listener -> websocket [label="on connection" arrowhead=diamond]
+    ring -> reporter [arrowhead=dot]
+
+    "node" -> stage [label="N=num_shards" arrowhead=diamond]
+    subgraph cluster_stage { 
+        stage
+        receiver
+        reporter [shape="doublecircle"]
+        sender
+        send_recv [shape=point]
+
+        stage -> reporter [label="N=num_reporters" arrowhead=diamond]
+        stage -> send_recv [dir=none label="on scylla connection"] 
+        send_recv -> { sender, receiver }
+        sender -> reporter [dir=both arrowhead=dot arrowtail=odot]
+        receiver -> reporter [arrowhead=dot]
+    }
+
+    { rank=same; scylla; ring }
+}

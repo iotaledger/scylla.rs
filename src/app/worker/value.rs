@@ -8,9 +8,9 @@ use super::*;
 pub struct ValueWorker<H, S: Select<K, V>, K, V>
 where
     S: 'static + Select<K, V> + Clone,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
 {
     /// A handle which can be used to return the queried value
     pub handle: H,
@@ -30,9 +30,9 @@ where
 impl<H, S: Select<K, V>, K, V> ValueWorker<H, S, K, V>
 where
     S: 'static + Select<K, V> + Clone,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
 {
     /// Create a new value selecting worker with a number of retries and a response handle
     pub fn new(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Self {
@@ -60,24 +60,25 @@ where
 
 impl<H, S, K, V> DecodeResponse<Option<V>> for ValueWorker<H, S, K, V>
 where
-    H: Send + HandleResponse<Self, Response = Option<V>> + HandleError<ValueWorker<H, S, K, V>> + Clone,
+    H: Send + Sync + HandleResponse<Self, Response = Option<V>> + HandleError<ValueWorker<H, S, K, V>> + Clone,
     S: Select<K, V> + Clone,
-    K: Send + Clone,
-    V: Send + Clone,
+    K: Send + Sync + Clone,
+    V: Send + Sync + Clone,
 {
     fn decode_response(decoder: Decoder) -> anyhow::Result<Option<V>> {
         S::try_decode(decoder)
     }
 }
 
+#[async_trait]
 impl<S, H, K, V> Worker for ValueWorker<H, S, K, V>
 where
     S: 'static + Select<K, V> + Clone,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
             Ok(decoder) => match Self::decode_response(decoder) {
                 Ok(res) => H::handle_response(self, res),
@@ -87,10 +88,10 @@ where
         }
     }
 
-    fn handle_error(
+    async fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: Option<&mut ReporterHandle>,
+        reporter: Option<&mut Act<Reporter>>,
     ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -103,6 +104,7 @@ where
                     &self.paging_state,
                     reporter,
                 )
+                .await
                 .or_else(|e| {
                     error!("Error trying to prepare query: {}", e);
                     H::handle_error(self, error)
@@ -132,8 +134,8 @@ impl<S, K, V> HandleResponse<ValueWorker<UnboundedSender<Result<Option<V>, Worke
     for UnboundedSender<Result<Option<V>, WorkerError>>
 where
     S: 'static + Send + Select<K, V> + Clone,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
     type Response = Option<V>;
     fn handle_response(
@@ -148,8 +150,8 @@ impl<S, K, V> HandleError<ValueWorker<UnboundedSender<Result<Option<V>, WorkerEr
     for UnboundedSender<Result<Option<V>, WorkerError>>
 where
     S: 'static + Send + Select<K, V> + Clone,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
     fn handle_error(
         worker: Box<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>,

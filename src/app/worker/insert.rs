@@ -36,26 +36,28 @@ where
     }
 }
 
+#[async_trait]
 impl<S, K, V> Worker for InsertWorker<S, K, V>
 where
     S: 'static + Insert<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         Self::decode_response(giveload.try_into()?)?;
         Ok(())
     }
 
-    fn handle_error(
+    async fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: Option<&mut ReporterHandle>,
+        reporter: Option<&mut Act<Reporter>>,
     ) -> anyhow::Result<()> {
         let reporter_running = reporter.is_some();
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
+                    .await
                     .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
             }
         }
@@ -80,13 +82,13 @@ where
 /// Handle an unprepared CQL error by sending a prepare
 /// request and resubmitting the original query as an
 /// unprepared statement
-pub fn handle_unprepared_error<W, S, K, V>(
+pub async fn handle_unprepared_error<W, S, K, V>(
     worker: &Box<W>,
     keyspace: &S,
     key: &K,
     value: &V,
     id: [u8; 16],
-    reporter: &mut ReporterHandle,
+    reporter: &mut Act<Reporter>,
 ) -> anyhow::Result<()>
 where
     W: 'static + Worker + Clone,
@@ -102,7 +104,7 @@ where
         worker: prepare_worker,
         payload,
     };
-    reporter.send(prepare_request).ok();
+    reporter.send(prepare_request).await.ok();
     let req = keyspace
         .insert_query(&key, &value)
         .consistency(Consistency::One)
@@ -112,6 +114,6 @@ where
         worker: worker.clone(),
         payload,
     };
-    reporter.send(retry_request).ok();
+    reporter.send(retry_request).await.ok();
     Ok(())
 }

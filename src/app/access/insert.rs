@@ -241,8 +241,8 @@ impl<K, V, S: Insert<K, V> + Clone> CreateRequest<InsertRequest<S, K, V>> for S 
 impl<S, K, V> Request for InsertRequest<S, K, V>
 where
     S: Insert<K, V>,
-    K: Send,
-    V: Send,
+    K: Send + Sync,
+    V: Send + Sync,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.insert_statement::<K, V>()

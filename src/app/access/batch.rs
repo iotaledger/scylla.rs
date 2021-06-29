@@ -10,7 +10,7 @@ use dyn_clone::DynClone;
 use std::{any::Any, collections::HashMap, marker::PhantomData};
 
 /// An aggregation trait which defines a statement marker of any type
-pub trait AnyStatement<S>: Any + Statement<S> + Send + DynClone {}
+pub trait AnyStatement<S>: Any + Statement<S> + Send + Sync + DynClone {}
 
 dyn_clone::clone_trait_object!(<S> AnyStatement<S>);
 
@@ -47,8 +47,8 @@ impl<S: Insert<K, V>, K, V> Statement<S> for InsertStatement<S, K, V> {
 impl<S, K, V> AnyStatement<S> for InsertStatement<S, K, V>
 where
     S: 'static + Insert<K, V> + Clone,
-    K: 'static + Clone + Send,
-    V: 'static + Clone + Send,
+    K: 'static + Clone + Send + Sync,
+    V: 'static + Clone + Send + Sync,
 {
 }
 
@@ -67,8 +67,8 @@ impl<S: Update<K, V>, K, V> Statement<S> for UpdateStatement<S, K, V> {
 impl<S, K, V> AnyStatement<S> for UpdateStatement<S, K, V>
 where
     S: 'static + Update<K, V> + Clone,
-    K: 'static + Clone + Send,
-    V: 'static + Clone + Send,
+    K: 'static + Clone + Send + Sync,
+    V: 'static + Clone + Send + Sync,
 {
 }
 
@@ -87,8 +87,8 @@ impl<S: Delete<K, V>, K, V> Statement<S> for DeleteStatement<S, K, V> {
 impl<S, K, V> AnyStatement<S> for DeleteStatement<S, K, V>
 where
     S: 'static + Delete<K, V> + Clone,
-    K: 'static + Clone + Send,
-    V: 'static + Clone + Send,
+    K: 'static + Clone + Send + Sync,
+    V: 'static + Clone + Send + Sync,
 {
 }
 
@@ -229,8 +229,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Insert<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -268,8 +268,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Insert<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map
         let id = self.keyspace.insert_id();
@@ -293,8 +293,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Update<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -332,8 +332,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Update<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map
         let id = self.keyspace.update_id();
@@ -357,8 +357,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Delete<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -396,8 +396,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Delete<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map
         let id = self.keyspace.delete_id();
@@ -423,8 +423,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Insert<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -462,8 +462,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Insert<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map
         let id = self.keyspace.insert_id();
@@ -487,8 +487,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Update<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -526,8 +526,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Update<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map
         let id = self.keyspace.update_id();
@@ -551,8 +551,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Delete<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -590,8 +590,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
     where
         S: 'static + Delete<K, V>,
-        K: 'static + Clone + Send,
-        V: 'static + Clone + Send,
+        K: 'static + Clone + Send + Sync,
+        V: 'static + Clone + Send + Sync,
     {
         // Add PreparedId to map
         let id = self.keyspace.delete_id();

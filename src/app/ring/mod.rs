@@ -1,15 +1,15 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
-
 use crate::app::{
     cluster::{NodeInfo, Nodes},
-    stage::{ReporterEvent, ReportersHandles},
+    stage::Reporter,
+    stage::ReporterEvent,
     worker::WorkerError,
 };
-use backstage::EventHandle;
+use async_trait::async_trait;
+use backstage::{actor::Sender, prelude::Act};
+use rand::{distributions::Uniform, prelude::StdRng, thread_rng, Rng, SeedableRng};
 use std::net::SocketAddr;
-
-use rand::{distributions::Uniform, prelude::ThreadRng, thread_rng, Rng};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -36,7 +36,7 @@ type Replicas = HashMap<DC, Vec<Replica>>;
 type Replica = (SocketAddr, Msb, ShardCount);
 type Vcell = Box<dyn Vnode>;
 /// The registry of `SocketAddr` to its reporters.
-pub type Registry = HashMap<SocketAddr, ReportersHandles>;
+pub type Registry = HashMap<SocketAddr, HashMap<u8, Act<Reporter>>>;
 /// The global ring  of ScyllaDB.
 pub type GlobalRing = (
     Vec<DC>,
@@ -61,7 +61,7 @@ pub struct Ring {
     pub registry: Registry,
     pub root: Vcell,
     pub uniform: Uniform<u8>,
-    pub rng: ThreadRng,
+    pub rng: StdRng,
     pub dcs: Vec<DC>,
     pub uniform_dcs: Uniform<usize>,
     pub uniform_rf: Uniform<usize>,
@@ -72,7 +72,7 @@ static mut GLOBAL_RING: Option<AtomicRing> = None;
 
 thread_local! {
     static RING: RefCell<Ring> = {
-        let rng = thread_rng();
+        let rng = StdRng::from_rng(thread_rng()).unwrap();
         let uniform: Uniform<u8> = Uniform::new(0,1);
         let registry: Registry = HashMap::new();
         let root: Vcell = DeadEnd::initial_vnode();
@@ -258,7 +258,7 @@ trait SmartId {
         &mut self,
         token: Token,
         registry: &mut Registry,
-        rng: &mut ThreadRng,
+        rng: &mut StdRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
     );
@@ -268,7 +268,7 @@ impl SmartId for Replica {
         &mut self,
         token: Token,
         registry: &mut Registry,
-        rng: &mut ThreadRng,
+        rng: &mut StdRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
     ) {
@@ -285,16 +285,17 @@ impl SmartId for Replica {
 }
 
 /// Endpoints trait which should be implemented by `Replicas`.
+#[async_trait]
 pub trait Endpoints: EndpointsClone + Send + Sync {
     /// Send the request through the endpoints.
-    fn send(
+    async fn send(
         &mut self,
         data_center: &str,
         replica_index: usize,
         token: Token,
         request: ReporterEvent,
         registry: &mut Registry,
-        rng: &mut ThreadRng,
+        rng: &mut StdRng,
         uniform: Uniform<u8>,
     );
 }
@@ -320,15 +321,16 @@ impl Clone for Box<dyn Endpoints> {
     }
 }
 
+#[async_trait]
 impl Endpoints for Replicas {
-    fn send(
+    async fn send(
         &mut self,
         data_center: &str,
         replica_index: usize,
         token: Token,
         request: ReporterEvent,
         mut registry: &mut Registry,
-        mut rng: &mut ThreadRng,
+        mut rng: &mut StdRng,
         uniform: Uniform<u8>,
     ) {
         self.get_mut(data_center).unwrap()[replica_index].send_reporter(
@@ -340,23 +342,26 @@ impl Endpoints for Replicas {
         );
     }
 }
+
+#[async_trait]
 impl Endpoints for Option<Replicas> {
     // this method will be invoked when we store Replicas as None.
     // used for initial ring to simulate the reporter and respond to worker(self) with NoRing error
-    fn send(
+    async fn send(
         &mut self,
         _: &str,
         _: usize,
         _: Token,
         request: ReporterEvent,
         _: &mut Registry,
-        _: &mut ThreadRng,
+        _: &mut StdRng,
         _uniform: Uniform<u8>,
     ) {
         // simulate reporter,
         if let ReporterEvent::Request { worker, .. } = request {
             worker
                 .handle_error(WorkerError::NoRing, None)
+                .await
                 .unwrap_or_else(|e| log::error!("{}", e));
         };
     }

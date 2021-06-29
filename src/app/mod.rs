@@ -10,8 +10,6 @@ mod application;
 pub mod access;
 /// Cluster application
 pub mod cluster;
-/// Listener application which monitors for incoming connections
-pub mod listener;
 /// Node application which manages scylla nodes
 pub mod node;
 /// The ring, which manages scylla access
@@ -23,14 +21,14 @@ pub mod websocket;
 /// Workers which can be used when sending requests to handle the responses
 pub mod worker;
 
-use anyhow::{anyhow, bail};
 pub use application::*;
-use backstage::*;
+use async_trait::async_trait;
+use backstage::prelude::*;
 use log::*;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::mpsc;
-pub use websocket::client::add_nodes::add_nodes;
+pub use websocket::add_nodes::add_nodes;
 pub use worker::{Worker, WorkerError};
 
 pub(crate) struct ChildHandle<T> {

@@ -8,9 +8,9 @@ use super::*;
 pub struct SelectWorker<H, S: Select<K, V>, K, V>
 where
     S: 'static + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
     /// A handle which can be used to return the queried value decoder
     pub handle: H,
@@ -30,9 +30,9 @@ where
 impl<H, S: Select<K, V>, K, V> SelectWorker<H, S, K, V>
 where
     S: 'static + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
     /// Create a new value selecting worker with a number of retries and a response handle
     pub fn new(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Self {
@@ -58,14 +58,15 @@ where
     }
 }
 
+#[async_trait]
 impl<H, S, K, V> Worker for SelectWorker<H, S, K, V>
 where
     S: 'static + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
             Ok(decoder) => match Self::decode_response(decoder) {
                 Ok(res) => H::handle_response(self, res),
@@ -75,10 +76,10 @@ where
         }
     }
 
-    fn handle_error(
+    async fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: Option<&mut ReporterHandle>,
+        reporter: Option<&mut Act<Reporter>>,
     ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -91,6 +92,7 @@ where
                     &self.paging_state,
                     reporter,
                 )
+                .await
                 .or_else(|e| {
                     error!("Error trying to prepare query: {}", e);
                     H::handle_error(self, error)
@@ -120,8 +122,8 @@ impl<S, K, V> HandleResponse<SelectWorker<UnboundedSender<Result<Decoder, Worker
     for UnboundedSender<Result<Decoder, WorkerError>>
 where
     S: 'static + Send + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
     type Response = Decoder;
     fn handle_response(
@@ -136,8 +138,8 @@ impl<S, K, V> HandleError<SelectWorker<UnboundedSender<Result<Decoder, WorkerErr
     for UnboundedSender<Result<Decoder, WorkerError>>
 where
     S: 'static + Send + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
     fn handle_error(
         worker: Box<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>,
@@ -153,14 +155,14 @@ where
 /// Handle an unprepared CQL error by sending a prepare
 /// request and resubmitting the original query as an
 /// unprepared statement
-pub fn handle_unprepared_error<W, S, K, V>(
+pub async fn handle_unprepared_error<W, S, K, V>(
     worker: &Box<W>,
     keyspace: &S,
     key: &K,
     id: [u8; 16],
     page_size: Option<i32>,
     paging_state: &Option<Vec<u8>>,
-    reporter: &mut ReporterHandle,
+    reporter: &mut Act<Reporter>,
 ) -> anyhow::Result<()>
 where
     W: 'static + Worker + Clone,
@@ -176,7 +178,7 @@ where
         worker: prepare_worker,
         payload,
     };
-    reporter.send(prepare_request).ok();
+    reporter.send(prepare_request).await.ok();
     let req = keyspace.select_query::<V>(&key).consistency(Consistency::One);
     let req = if let Some(page_size) = page_size {
         req.page_size(page_size).paging_state(&paging_state)
@@ -189,6 +191,6 @@ where
         worker: worker.clone(),
         payload,
     };
-    reporter.send(retry_request).ok();
+    reporter.send(retry_request).await.ok();
     Ok(())
 }

@@ -3,6 +3,8 @@
 
 use super::*;
 use anyhow::{anyhow, bail};
+use std::net::SocketAddr;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[allow(irrefutable_let_patterns)]
 /// Add new ScyllaDB nodes.
@@ -21,8 +23,8 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
         while let Some(msg) = ws_stream.next().await {
             let msg = msg.map_err(|_| anyhow!("Expected message from the WebSocketStream while building a ring"))?;
             let msg = msg.to_text()?;
-            if let Ok(event) = serde_json::from_str::<ScyllaSocketMsg<Result<Topology, Topology>>>(msg) {
-                if let ScyllaSocketMsg::Scylla(Ok(Topology::AddNode(_))) = event {
+            if let Ok(event) = serde_json::from_str::<Result<Topology, Topology>>(msg) {
+                if let Ok(Topology::AddNode(_)) = event {
                     info!("Added scylla node: {}", address);
                     break;
                 } else {
@@ -30,15 +32,6 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
                     // parallel.
                     ws_stream.close(None).await?;
                     bail!("Unable to reach scylla node(s)");
-                }
-            } else {
-                // ensure it's running
-                if let Ok(ScyllaSocketMsg::Scylla(service)) = serde_json::from_str::<ScyllaSocketMsg<Service>>(msg) {
-                    if !service.is_running() {
-                        bail!("Scylla is not running!");
-                    }
-                } else {
-                    bail!("Invalid message received after adding nodes: {}", msg);
                 }
             }
         }
@@ -48,32 +41,23 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
     let j = serde_json::to_string(&msg)?;
     let m = Message::text(j);
     ws_stream.send(m).await?;
-    // await till the ring is built
-    let mut break_once_ready: bool = false;
     while let Some(msg) = ws_stream.next().await {
         let msg = msg.map_err(|_| anyhow!("Expected message from the WebSocketStream while building a ring"))?;
         let msg = msg.to_text()?;
-        if let Ok(event) = serde_json::from_str::<ScyllaSocketMsg<Result<Topology, Topology>>>(msg) {
-            if let ScyllaSocketMsg::<Result<Topology, Topology>>::Scylla(result) = event {
-                match result {
-                    Ok(Topology::BuildRing(_)) => {
-                        info!("Succesfully Added Nodes and built cluster topology");
-                        break_once_ready = true;
-                    }
-                    Err(Topology::BuildRing(_)) => {
-                        error!("Unable to build cluster topology, please try again");
-                        break_once_ready = true;
-                    }
-                    _ => {
-                        error!("Currently we don't support concurrent admins managing the cluster simultaneously");
-                        break;
-                    }
+        if let Ok(result) = serde_json::from_str::<Result<Topology, Topology>>(msg) {
+            match result {
+                Ok(Topology::BuildRing(_)) => {
+                    info!("Succesfully Added Nodes and built cluster topology");
+                    break;
                 }
-            }
-        } else if let Ok(ScyllaSocketMsg::Scylla(service)) = serde_json::from_str::<ScyllaSocketMsg<Service>>(msg) {
-            if break_once_ready && service.is_running() {
-                info!("All Nodes in Scylla Cluster are connected");
-                break;
+                Err(Topology::BuildRing(_)) => {
+                    error!("Unable to build cluster topology, please try again");
+                    break;
+                }
+                _ => {
+                    error!("Currently we don't support concurrent admins managing the cluster simultaneously");
+                    break;
+                }
             }
         }
     }

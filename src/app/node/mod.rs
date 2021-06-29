@@ -2,20 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    cluster::{ClusterEvent, ClusterHandle},
-    stage::{ReportersHandles, StageBuilder, StageEvent, StageHandle},
+    cluster::{Cluster, ClusterEvent},
+    stage::{Reporter, Stage},
     *,
 };
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr};
 
-mod init;
-mod run;
-mod shutdown;
+/// Node state
+pub struct Node {
+    address: SocketAddr,
+    reporter_count: u8,
+    stages: HashMap<u16, Act<Stage>>,
+    shard_count: u16,
+    buffer_size: usize,
+    recv_buffer_size: Option<u32>,
+    send_buffer_size: Option<u32>,
+    authenticator: PasswordAuth,
+}
 
 #[build]
 #[derive(Debug, Clone)]
-pub fn build_node<ClusterEvent, ClusterHandle>(
-    service: Service,
+pub fn build_node(
     address: SocketAddr,
     data_center: String,
     reporter_count: u8,
@@ -25,12 +32,8 @@ pub fn build_node<ClusterEvent, ClusterHandle>(
     send_buffer_size: Option<u32>,
     authenticator: PasswordAuth,
 ) -> Node {
-    let (sender, inbox) = mpsc::unbounded_channel::<NodeEvent>();
-    let handle = NodeHandle { sender };
     Node {
-        service,
         address,
-        reporters_handles: Some(HashMap::new()),
         reporter_count,
         stages: HashMap::new(),
         shard_count,
@@ -38,83 +41,116 @@ pub fn build_node<ClusterEvent, ClusterHandle>(
         recv_buffer_size,
         send_buffer_size,
         authenticator,
-        handle,
-        inbox,
     }
 }
 
-/// NodeHandle to be passed to the children (Stage)
-#[derive(Clone)]
-pub struct NodeHandle {
-    sender: mpsc::UnboundedSender<NodeEvent>,
-}
+#[async_trait]
+impl Actor for Node {
+    type Dependencies = Act<Cluster>;
+    type Event = NodeEvent;
+    type Channel = TokioChannel<Self::Event>;
 
-impl EventHandle<NodeEvent> for NodeHandle {
-    fn send(&mut self, message: NodeEvent) -> anyhow::Result<()> {
-        self.sender.send(message).ok();
-        Ok(())
-    }
-
-    fn shutdown(mut self) -> Option<Self>
+    async fn run<'a, Reg: RegistryAccess + Send + Sync>(
+        &mut self,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg>,
+        mut cluster: Self::Dependencies,
+    ) -> Result<(), ActorError>
     where
         Self: Sized,
     {
-        if let Ok(()) = self.send(NodeEvent::Shutdown) {
-            None
-        } else {
-            Some(self)
+        rt.update_status(ServiceStatus::Initializing).await;
+        let my_handle = rt.my_handle().await;
+        let mut my_reporter_handles: Option<HashMap<SocketAddr, HashMap<u8, Act<Reporter>>>> = None;
+        // spawn stages
+        for shard_id in 0..self.shard_count {
+            let stage = stage::StageBuilder::new()
+                .address(self.address.clone())
+                .shard_id(shard_id)
+                .reporter_count(self.reporter_count)
+                .buffer_size(self.buffer_size)
+                .recv_buffer_size(self.recv_buffer_size)
+                .send_buffer_size(self.send_buffer_size)
+                .authenticator(self.authenticator.clone())
+                .build();
+            let (_, stage_handle) = rt.spawn_into_pool(stage, my_handle.clone()).await;
+            self.stages.insert(shard_id, stage_handle);
         }
-    }
-
-    fn update_status(&mut self, service: Service) -> anyhow::Result<()>
-    where
-        Self: Sized,
-    {
-        self.send(NodeEvent::Service(service))
+        rt.update_status(ServiceStatus::Running).await;
+        while let Some(event) = rt.next_event().await {
+            match event {
+                NodeEvent::RegisterReporters(shard_id, reporter_handles) => {
+                    let mut socket_addr = self.address.clone();
+                    // assign shard_id to socket_addr as it's going be used later as key in registry
+                    socket_addr.set_port(shard_id);
+                    if let Some(reporters_handles_ref) = my_reporter_handles.as_mut() {
+                        reporters_handles_ref.insert(socket_addr, reporter_handles);
+                        // check if we pushed all reporters of the node.
+                        if reporters_handles_ref.len() == self.shard_count as usize {
+                            // reporters_handles should be passed to cluster supervisor
+                            if let Some(reporters_handles) = my_reporter_handles.take() {
+                                info!("Sending register reporters event to cluster!");
+                                let event = ClusterEvent::RegisterReporters(reporters_handles);
+                                cluster.send(event).await.ok();
+                            }
+                        }
+                    } else {
+                        error!("Tried to register reporters more than once!")
+                    }
+                }
+                NodeEvent::Report(res) => match res {
+                    Ok(s) => break,
+                    Err(e) => match e.error.request() {
+                        ActorRequest::Restart => {
+                            rt.spawn_actor(e.state, my_handle.clone()).await;
+                        }
+                        ActorRequest::Reschedule(dur) => {
+                            let mut handle_clone = my_handle.clone();
+                            let evt = NodeEvent::report_err(ErrorReport::new(
+                                e.state,
+                                e.service,
+                                ActorError::RuntimeError(ActorRequest::Restart),
+                            ))
+                            .unwrap();
+                            let dur = *dur;
+                            tokio::spawn(async move {
+                                tokio::time::sleep(dur).await;
+                                handle_clone.send(evt).await;
+                            });
+                        }
+                        ActorRequest::Finish => {
+                            log::error!("{}", e.error);
+                            break;
+                        }
+                        ActorRequest::Panic => panic!("{}", e.error),
+                    },
+                },
+                NodeEvent::Status(_) => (),
+                NodeEvent::Shutdown => break,
+            }
+        }
+        rt.update_status(ServiceStatus::Stopped).await;
+        Ok(())
     }
 }
 
 /// Node event enum.
 pub enum NodeEvent {
-    /// Shutdown the node.
-    Shutdown,
     /// Register the stage reporters.
-    RegisterReporters(Service, ReportersHandles),
-    /// To keep the node with up to date stage service
-    Service(Service),
-}
-/// Node state
-pub struct Node {
-    service: Service,
-    address: SocketAddr,
-    reporters_handles: Option<HashMap<SocketAddr, ReportersHandles>>,
-    reporter_count: u8,
-    stages: HashMap<u16, StageHandle>,
-    shard_count: u16,
-    buffer_size: usize,
-    recv_buffer_size: Option<u32>,
-    send_buffer_size: Option<u32>,
-    authenticator: PasswordAuth,
-    handle: NodeHandle,
-    inbox: mpsc::UnboundedReceiver<NodeEvent>,
+    RegisterReporters(u16, HashMap<u8, Act<Reporter>>),
+    Report(Result<SuccessReport<Stage>, ErrorReport<Stage>>),
+    Status(Service),
+    Shutdown,
 }
 
-impl ActorTypes for Node {
-    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-
-    type Error = Cow<'static, str>;
-
-    fn service(&mut self) -> &mut Service {
-        &mut self.service
+impl SupervisorEvent<Stage> for NodeEvent {
+    fn report(res: Result<SuccessReport<Stage>, ErrorReport<Stage>>) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Self::Report(res))
     }
-}
 
-impl EventActor<ClusterEvent, ClusterHandle> for Node {
-    type Event = NodeEvent;
-
-    type Handle = NodeHandle;
-
-    fn handle(&mut self) -> &mut Self::Handle {
-        &mut self.handle
+    fn status(service: Service) -> Self {
+        Self::Status(service)
     }
 }

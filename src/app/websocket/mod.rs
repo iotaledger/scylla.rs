@@ -1,55 +1,117 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::*;
-use futures::{
-    stream::{SplitSink, SplitStream},
-    StreamExt,
+use super::{
+    cluster::{Cluster, ClusterEvent},
+    *,
 };
-use std::{borrow::Cow, net::SocketAddr};
-use tokio::net::TcpStream;
-pub(crate) use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream};
+use backstage::prefabs::websocket::WebsocketChildren;
+use futures::{SinkExt, StreamExt};
+use std::net::SocketAddr;
+use tokio_tungstenite::tungstenite::Message;
+use url::Url;
 
-pub(crate) mod client;
-mod init;
-mod run;
-mod shutdown;
+pub(crate) mod add_nodes;
 
-#[build]
-#[derive(Debug)]
-pub fn build_websocket<ScyllaEvent, ScyllaHandle>(
-    service: Service,
-    peer: SocketAddr,
-    stream: WebSocketStream<TcpStream>,
-) -> Websocket {
-    let (ws_tx, ws_rx) = stream.split();
-    Websocket {
-        service,
-        peer,
-        ws_rx,
-        opt_ws_tx: Some(ws_tx),
+pub struct Websocket {
+    pub listen_address: SocketAddr,
+}
+
+#[async_trait]
+impl Actor for Websocket {
+    type Dependencies = Act<Cluster>;
+    type Event = WebsocketRequest;
+    type Channel = TokioChannel<Self::Event>;
+
+    async fn run<'a, Reg: RegistryAccess + Send + Sync>(
+        &mut self,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg>,
+        mut cluster: Self::Dependencies,
+    ) -> Result<(), ActorError>
+    where
+        Self: Sized,
+    {
+        rt.update_status(ServiceStatus::Initializing).await;
+        let my_handle = rt.my_handle().await;
+        let websocket = backstage::prefabs::websocket::WebsocketBuilder::new()
+            .listen_address(self.listen_address)
+            .supervisor_handle(my_handle)
+            .build();
+        let (_, mut websocket) = rt.spawn_actor_unsupervised(websocket).await;
+        rt.update_status(ServiceStatus::Running).await;
+        while let Some(WebsocketRequest(addr, msg)) = rt.next_event().await {
+            if let Some(msg) = {
+                if let Message::Text(t) = msg {
+                    serde_json::from_str::<ScyllaWebsocketEvent>(&t).ok()
+                } else {
+                    None
+                }
+            } {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                match msg {
+                    ScyllaWebsocketEvent::Topology(t) => match t {
+                        Topology::AddNode(addr) => {
+                            cluster.send(ClusterEvent::AddNode(addr, sender));
+                        }
+                        Topology::RemoveNode(addr) => {
+                            cluster.send(ClusterEvent::RemoveNode(addr, sender));
+                        }
+                        Topology::BuildRing(uniform_rf) => {
+                            cluster.send(ClusterEvent::BuildRing(uniform_rf, sender));
+                        }
+                    },
+                }
+                // This will wait for the response before processing the next websocket event
+                if let Ok(res) = receiver.await {
+                    websocket
+                        .send(WebsocketChildren::Response(
+                            addr,
+                            serde_json::to_string(&res).unwrap().into(),
+                        ))
+                        .await;
+                }
+            }
+        }
+        rt.update_status(ServiceStatus::Stopped).await;
+        Ok(())
     }
 }
 
-/// The writehalf of the webssocket
-pub type WsTx = SplitSink<WebSocketStream<TcpStream>, Message>;
-/// The readhalf of the webssocket
-pub type WsRx = SplitStream<WebSocketStream<TcpStream>>;
+pub struct WebsocketRequest(SocketAddr, Message);
 
-/// Client Websocket struct
-pub struct Websocket {
-    service: Service,
-    peer: SocketAddr,
-    ws_rx: WsRx,
-    opt_ws_tx: Option<WsTx>,
+#[derive(Serialize, Deserialize, Debug)]
+pub enum ScyllaWebsocketEvent {
+    Topology(Topology),
 }
 
-impl ActorTypes for Websocket {
-    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+impl<T> SupervisorEvent<T> for WebsocketRequest {
+    fn report(res: Result<SuccessReport<T>, ErrorReport<T>>) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
 
-    type Error = anyhow::Error;
+    fn status(service: Service) -> Self {
+        todo!()
+    }
+}
 
-    fn service(&mut self) -> &mut Service {
-        &mut self.service
+#[derive(Deserialize, Serialize, Debug)]
+/// Topology event
+pub enum Topology {
+    /// AddNode json to add new scylla node
+    AddNode(SocketAddr),
+    /// RemoveNode json to remove an existing scylla node
+    RemoveNode(SocketAddr),
+    /// BuildRing json to re/build the cluster topology,
+    /// Current limitation: for now the admin supposed to define uniform replication factor among all DataCenter and
+    /// all keyspaces
+    BuildRing(u8),
+}
+
+impl From<(SocketAddr, Message)> for WebsocketRequest {
+    fn from((addr, msg): (SocketAddr, Message)) -> Self {
+        WebsocketRequest(addr, msg)
     }
 }

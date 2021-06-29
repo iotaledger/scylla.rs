@@ -25,16 +25,13 @@ pub(crate) mod update;
 
 use super::{Worker, WorkerError};
 use crate::{
-    app::{
-        ring::Ring,
-        stage::{ReporterEvent, ReporterHandle},
-    },
+    app::{ring::Ring, stage::ReporterEvent},
     cql::{
         Consistency, Decoder, Prepare, PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency,
         QueryOrPrepared, QueryStatement, QueryValues, RowsDecoder, Statements, Values, VoidDecoder,
     },
 };
-use backstage::EventHandle;
+
 pub use batch::*;
 pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
 pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
@@ -66,7 +63,7 @@ pub trait CreateRequest<T>: Keyspace {
 }
 
 /// Unifying trait for requests which defines shared functionality
-pub trait Request: Send {
+pub trait Request: Send + Sync {
     /// Get the statement that was used to create this request
     fn statement(&self) -> Cow<'static, str>;
 
@@ -185,9 +182,9 @@ impl<T> Deref for DecodeResult<T> {
 #[doc(hidden)]
 pub mod tests {
 
-    use crate::app::worker::InsertWorker;
-
     use super::*;
+    use crate::{app::worker::InsertWorker, prelude::stage::Reporter};
+    use backstage::{actor::Sender, prelude::Act};
 
     #[derive(Default, Clone, Debug)]
     pub struct MyKeyspace {
@@ -297,16 +294,17 @@ pub mod tests {
         request: Box<dyn Request>,
     }
 
+    #[async_trait::async_trait]
     impl Worker for TestWorker {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
 
-        fn handle_error(
+        async fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: Option<&mut ReporterHandle>,
+            reporter: Option<&mut Act<Reporter>>,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -319,10 +317,10 @@ pub mod tests {
                             worker: Box::new(prepare_worker),
                             payload: prepare.0,
                         };
-                        reporter.send(prepare_request).ok();
+                        reporter.send(prepare_request).await.ok();
                         let payload = self.request.payload().clone();
                         let retry_request = ReporterEvent::Request { worker: self, payload };
-                        reporter.send(retry_request).ok();
+                        reporter.send(retry_request).await.ok();
                     }
                 }
             }
@@ -334,16 +332,17 @@ pub mod tests {
         request: BatchRequest<S>,
     }
 
+    #[async_trait::async_trait]
     impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
-        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
 
-        fn handle_error(
+        async fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: Option<&mut ReporterHandle>,
+            reporter: Option<&mut Act<Reporter>>,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -357,10 +356,10 @@ pub mod tests {
                                 worker: Box::new(prepare_worker),
                                 payload: prepare.0,
                             };
-                            reporter.send(prepare_request).ok();
+                            reporter.send(prepare_request).await.ok();
                             let payload = self.request.payload().clone();
                             let retry_request = ReporterEvent::Request { worker: self, payload };
-                            reporter.send(retry_request).ok();
+                            reporter.send(retry_request).await.ok();
                         }
                     }
                 }
@@ -375,16 +374,17 @@ pub mod tests {
         pub payload: Vec<u8>,
     }
 
+    #[async_trait::async_trait]
     impl Worker for PrepareWorker {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
+        async fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
 
-        fn handle_error(
+        async fn handle_error(
             self: Box<Self>,
             _error: WorkerError,
-            _reporter: Option<&mut ReporterHandle>,
+            _reporter: Option<&mut Act<Reporter>>,
         ) -> anyhow::Result<()> {
             if self.retries > 0 {
                 let prepare_worker = PrepareWorker {

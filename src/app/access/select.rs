@@ -310,8 +310,8 @@ impl<K, V, S: Select<K, V> + Clone> CreateRequest<SelectRequest<S, K, V>> for S 
 impl<S, K, V> Request for SelectRequest<S, K, V>
 where
     S: Select<K, V>,
-    K: Send,
-    V: Send,
+    K: Send + Sync,
+    V: Send + Sync,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.select_statement::<K, V>()

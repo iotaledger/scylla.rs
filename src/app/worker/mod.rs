@@ -1,13 +1,15 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-pub use crate::app::stage::{ReporterEvent, ReporterHandle};
+use super::*;
+use crate::app::stage::Reporter;
+pub use crate::app::stage::ReporterEvent;
 use crate::{
     app::access::*,
     cql::{Consistency, CqlError, Decoder, Prepare},
 };
 use anyhow::anyhow;
-use backstage::EventHandle;
+use backstage::prelude::Act;
 pub use delete::{handle_unprepared_error as handle_delete_unprepared_error, DeleteWorker};
 pub use insert::{handle_unprepared_error as handle_insert_unprepared_error, InsertWorker};
 use log::*;
@@ -25,11 +27,16 @@ mod select;
 mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
-pub trait Worker: Send {
+#[async_trait]
+pub trait Worker: Send + Sync {
     /// Reporter will invoke this method to Send the cql response to worker
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
+    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: Option<&mut ReporterHandle>) -> anyhow::Result<()>;
+    async fn handle_error(
+        self: Box<Self>,
+        error: WorkerError,
+        reporter: Option<&mut Act<Reporter>>,
+    ) -> anyhow::Result<()>;
 }
 
 #[derive(Error, Debug)]
