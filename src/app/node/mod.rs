@@ -3,7 +3,7 @@
 
 use super::{
     cluster::{Cluster, ClusterEvent},
-    stage::{Reporter, Stage},
+    stage::{Reporter, ReporterId, Stage},
     *,
 };
 use std::{collections::HashMap, net::SocketAddr};
@@ -60,7 +60,7 @@ impl Actor for Node {
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
-        let mut my_reporter_handles: Option<HashMap<SocketAddr, HashMap<u8, Act<Reporter>>>> = None;
+        let mut reporter_pools = Some(HashMap::new());
         // spawn stages
         for shard_id in 0..self.shard_count {
             let stage = stage::StageBuilder::new()
@@ -78,20 +78,16 @@ impl Actor for Node {
         rt.update_status(ServiceStatus::Running).await;
         while let Some(event) = rt.next_event().await {
             match event {
-                NodeEvent::RegisterReporters(shard_id, reporter_handles) => {
+                NodeEvent::RegisterReporters(shard_id, reporter_pool) => {
                     let mut socket_addr = self.address.clone();
                     // assign shard_id to socket_addr as it's going be used later as key in registry
                     socket_addr.set_port(shard_id);
-                    if let Some(reporters_handles_ref) = my_reporter_handles.as_mut() {
-                        reporters_handles_ref.insert(socket_addr, reporter_handles);
-                        // check if we pushed all reporters of the node.
-                        if reporters_handles_ref.len() == self.shard_count as usize {
-                            // reporters_handles should be passed to cluster supervisor
-                            if let Some(reporters_handles) = my_reporter_handles.take() {
-                                info!("Sending register reporters event to cluster!");
-                                let event = ClusterEvent::RegisterReporters(reporters_handles);
-                                cluster.send(event).await.ok();
-                            }
+                    if let Some(pools) = reporter_pools.as_mut() {
+                        pools.insert(socket_addr, reporter_pool);
+                        if pools.len() == self.shard_count as usize {
+                            info!("Sending register reporters event to cluster!");
+                            let event = ClusterEvent::RegisterReporters(reporter_pools.take().unwrap());
+                            cluster.send(event).await.ok();
                         }
                     } else {
                         error!("Tried to register reporters more than once!")
@@ -101,7 +97,7 @@ impl Actor for Node {
                     Ok(s) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
-                            rt.spawn_actor(e.state, my_handle.clone()).await;
+                            rt.spawn_into_pool(e.state, my_handle.clone()).await;
                         }
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
@@ -136,7 +132,7 @@ impl Actor for Node {
 /// Node event enum.
 pub enum NodeEvent {
     /// Register the stage reporters.
-    RegisterReporters(u16, HashMap<u8, Act<Reporter>>),
+    RegisterReporters(u16, Pool<Reporter, ReporterId>),
     Report(Result<SuccessReport<Stage>, ErrorReport<Stage>>),
     Status(Service),
     Shutdown,

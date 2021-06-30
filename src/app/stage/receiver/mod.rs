@@ -23,13 +23,7 @@ pub struct Receiver {
 }
 
 #[build]
-pub fn build_receiver(
-    socket: OwnedReadHalf,
-    session_id: usize,
-    payloads: Payloads,
-    buffer_size: usize,
-    appends_num: i16,
-) -> Receiver {
+pub fn build_receiver(socket: OwnedReadHalf, payloads: Payloads, buffer_size: usize, appends_num: i16) -> Receiver {
     Receiver {
         socket,
         stream_id: 0,
@@ -45,14 +39,14 @@ pub fn build_receiver(
 
 #[async_trait]
 impl Actor for Receiver {
-    type Dependencies = (Pool<Reporter>, Res<Arc<RwLock<HashMap<u8, Act<Reporter>>>>>);
+    type Dependencies = Pool<Reporter, ReporterId>;
     type Event = ();
     type Channel = TokioChannel<()>;
 
     async fn run<'a, Reg: RegistryAccess + Send + Sync>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg>,
-        (reporter_pool, reporter_handles): Self::Dependencies,
+        reporter_pool: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -70,7 +64,7 @@ impl Actor for Receiver {
                             e
                         })
                         .await?;
-                    self.handle_frame(n, 0, &reporter_handles)
+                    self.handle_frame(n, 0, &reporter_pool)
                         .map_err(|e| {
                             error!("{}", e);
                             e
@@ -90,7 +84,7 @@ impl Receiver {
     async fn handle_remaining_buffer(
         &mut self,
         i: usize,
-        reporters_handles: &Res<Arc<RwLock<HashMap<u8, Act<Reporter>>>>>,
+        reporters_handles: &Pool<Reporter, ReporterId>,
     ) -> anyhow::Result<()> {
         if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
             self.buffer.copy_within(i..(i + self.current_length), self.i);
@@ -130,7 +124,7 @@ impl Receiver {
         &mut self,
         n: usize,
         mut padding: usize,
-        reporters_handles: &Res<Arc<RwLock<HashMap<u8, Act<Reporter>>>>>,
+        reporters_handles: &Pool<Reporter, ReporterId>,
     ) -> anyhow::Result<()> {
         let start = self.current_length - n - self.i;
         if self.current_length >= self.total_length {
@@ -146,7 +140,7 @@ impl Receiver {
             // tell reporter that giveload is ready.
             let mut handles = reporters_handles.write().await;
             let reporter_handle = handles
-                .get_mut(&compute_reporter_num(self.stream_id, self.appends_num))
+                .get_by_metric(&compute_reporter_num(self.stream_id, self.appends_num))
                 .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
 
             reporter_handle

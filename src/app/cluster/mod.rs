@@ -75,7 +75,7 @@ impl Actor for Cluster {
         Self: Sized,
     {
         rt.update_status(ServiceStatus::Running).await;
-        let my_handle = rt.my_handle().await;
+        let mut my_handle = rt.my_handle().await;
         while let Some(event) = rt.next_event().await {
             match event {
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster
@@ -133,6 +133,7 @@ impl Actor for Cluster {
                             }
                         }
                         Err(_) => {
+                            error!("Scylla node at {} is unavailable!", address);
                             responder.send(Err(Topology::AddNode(address)));
                         }
                     }
@@ -202,7 +203,8 @@ impl Actor for Cluster {
                         // reply to scylla/dashboard
                         responder.send(Ok(Topology::BuildRing(uniform_rf)));
                     } else {
-                        responder.send(Err(Topology::BuildRing(uniform_rf)));
+                        my_handle.send(ClusterEvent::BuildRing(uniform_rf, responder)).await;
+                        //responder.send(Err(Topology::BuildRing(uniform_rf)));
                     }
                 }
                 ClusterEvent::Report(_) => todo!("handle shutdown nodes"),
@@ -268,7 +270,7 @@ impl Into<ActorError> for ClusterError {
 /// Cluster Event type
 pub enum ClusterEvent {
     /// Used by the Node to register its reporters with the cluster
-    RegisterReporters(HashMap<SocketAddr, HashMap<u8, Act<Reporter>>>),
+    RegisterReporters(HashMap<SocketAddr, Pool<Reporter, u8>>),
     /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
     AddNode(SocketAddr, oneshot::Sender<Result<Topology, Topology>>),
     /// Used by Scylla/dashboard to remove/disconnect from existing scylla node in the cluster

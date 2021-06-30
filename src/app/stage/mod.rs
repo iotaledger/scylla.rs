@@ -5,9 +5,10 @@ use super::{
     node::{Node, NodeEvent},
     *,
 };
+pub use reporter::ReporterId;
 pub use reporter::{Reporter, ReporterEvent};
 use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
-use tokio::{net::TcpStream, sync::RwLock};
+use tokio::net::TcpStream;
 
 mod receiver;
 mod reporter;
@@ -22,7 +23,6 @@ pub struct Stage {
     authenticator: PasswordAuth,
     appends_num: i16,
     reporter_count: u8,
-    session_id: usize,
     shard_id: u16,
     payloads: Payloads,
     buffer_size: usize,
@@ -49,7 +49,6 @@ pub fn build_stage(
         authenticator,
         appends_num: 32767 / (reporter_count as i16),
         reporter_count,
-        session_id: 0,
         shard_id,
         payloads,
         buffer_size,
@@ -74,7 +73,6 @@ impl Actor for Stage {
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let mut my_handle = rt.my_handle().await;
-        let mut reporter_handles = HashMap::with_capacity(self.reporter_count as usize);
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
         let last_range = self.appends_num * (self.reporter_count as i16);
@@ -95,7 +93,6 @@ impl Actor for Stage {
             if let Some(streams) = streams_iter.next() {
                 // build reporter
                 let reporter = reporter::ReporterBuilder::new()
-                    .session_id(self.session_id)
                     .reporter_id(reporter_id)
                     .shard_id(self.shard_id)
                     .address(self.address.clone())
@@ -103,19 +100,21 @@ impl Actor for Stage {
                     .streams(streams.to_owned().into_iter().collect())
                     .build();
 
-                let (_, reporter_handle) = rt.spawn_into_pool(reporter, my_handle.clone()).await;
-                reporter_handles.insert(reporter_id, reporter_handle);
+                rt.spawn_into_pool_with_metric(reporter, reporter_id, my_handle.clone())
+                    .await;
             } else {
                 error!("Failed to create streams!");
                 return Err(StageError::CannotCreateStreams.into());
             }
         }
 
-        rt.add_resource(Arc::new(RwLock::new(reporter_handles.clone()))).await;
+        let reporter_pool = rt.pool_with_metric::<Reporter, ReporterId>().await.unwrap();
 
         info!("Sending register reporters event to node!");
-        let event = NodeEvent::RegisterReporters(self.shard_id, reporter_handles);
+        let event = NodeEvent::RegisterReporters(self.shard_id, reporter_pool);
         node.send(event).await.ok();
+
+        my_handle.send(StageEvent::Connect).await.ok();
 
         rt.update_status(ServiceStatus::Running).await;
         while let Some(event) = rt.next_event().await {
@@ -131,7 +130,6 @@ impl Actor for Stage {
                         .build();
                     match cql_builder.await {
                         Ok(cql_conn) => {
-                            self.session_id += 1;
                             // Split the stream
                             let stream: TcpStream = cql_conn.into();
                             let (socket_rx, socket_tx) = stream.into_split();
@@ -147,7 +145,6 @@ impl Actor for Stage {
                                 .socket(socket_rx)
                                 .appends_num(self.appends_num)
                                 .payloads(self.payloads.clone())
-                                .session_id(self.session_id)
                                 .buffer_size(self.buffer_size)
                                 .build();
                             rt.spawn_actor(receiver, my_handle.clone()).await;
@@ -164,8 +161,9 @@ impl Actor for Stage {
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => match e.state {
                             StageChild::Reporter(r) => {
-                                todo!("Unregister/reregister the reporter?");
-                                rt.spawn_into_pool(r, my_handle.clone()).await;
+                                //todo!("Unregister/reregister the reporter?");
+                                let reporter_id = r.reporter_id;
+                                rt.spawn_into_pool_with_metric(r, reporter_id, my_handle.clone()).await;
                             }
                             StageChild::Receiver(r) => {
                                 rt.spawn_actor(r, my_handle.clone()).await;

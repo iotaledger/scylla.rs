@@ -7,7 +7,7 @@ use crate::app::{
     worker::WorkerError,
 };
 use async_trait::async_trait;
-use backstage::{actor::Sender, prelude::Act};
+use backstage::{actor::Sender, prelude::Pool};
 use rand::{distributions::Uniform, prelude::StdRng, thread_rng, Rng, SeedableRng};
 use std::net::SocketAddr;
 use std::{
@@ -19,6 +19,8 @@ use std::{
         Arc, Weak,
     },
 };
+
+use super::stage::ReporterId;
 // types
 /// The token of Ring.
 pub type Token = i64;
@@ -36,7 +38,7 @@ type Replicas = HashMap<DC, Vec<Replica>>;
 type Replica = (SocketAddr, Msb, ShardCount);
 type Vcell = Box<dyn Vnode>;
 /// The registry of `SocketAddr` to its reporters.
-pub type Registry = HashMap<SocketAddr, HashMap<u8, Act<Reporter>>>;
+pub type Registry = HashMap<SocketAddr, Pool<Reporter, ReporterId>>;
 /// The global ring  of ScyllaDB.
 pub type GlobalRing = (
     Vec<DC>,
@@ -253,8 +255,10 @@ impl Ring {
         }
     }
 }
+
+#[async_trait]
 trait SmartId {
-    fn send_reporter(
+    async fn send_reporter(
         &mut self,
         token: Token,
         registry: &mut Registry,
@@ -263,8 +267,10 @@ trait SmartId {
         request: ReporterEvent,
     );
 }
+
+#[async_trait]
 impl SmartId for Replica {
-    fn send_reporter(
+    async fn send_reporter(
         &mut self,
         token: Token,
         registry: &mut Registry,
@@ -278,7 +284,9 @@ impl SmartId for Replica {
         let _ = registry
             .get_mut(&self.0)
             .unwrap()
-            .get_mut(&rng.sample(uniform))
+            .write()
+            .await
+            .get_by_metric(&rng.sample(uniform))
             .unwrap()
             .send(request);
     }

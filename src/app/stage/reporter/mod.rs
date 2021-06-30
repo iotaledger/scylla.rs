@@ -12,11 +12,12 @@ use std::{collections::HashSet, convert::TryFrom};
 /// Workers Map holds all the workers_ids
 type Workers = HashMap<i16, Box<dyn Worker>>;
 
+pub type ReporterId = u8;
+
 /// Reporter state
 pub struct Reporter {
     address: SocketAddr,
-    session_id: usize,
-    reporter_id: u8,
+    pub reporter_id: ReporterId,
     streams: HashSet<i16>,
     shard_id: u16,
     workers: Workers,
@@ -26,8 +27,7 @@ pub struct Reporter {
 #[build]
 #[derive(Clone)]
 pub fn build_reporter(
-    session_id: usize,
-    reporter_id: u8,
+    reporter_id: ReporterId,
     shard_id: u16,
     streams: HashSet<i16>,
     address: SocketAddr,
@@ -35,7 +35,6 @@ pub fn build_reporter(
 ) -> Reporter {
     Reporter {
         address,
-        session_id,
         reporter_id,
         streams,
         shard_id,
@@ -59,15 +58,14 @@ impl Actor for Reporter {
         Self: Sized,
     {
         rt.update_status(ServiceStatus::Running).await;
-        let mut sender_handle: Option<Act<super::sender::Sender>> = None;
         let mut my_handle = rt.my_handle().await;
         while let Some(event) = rt.next_event().await {
             match event {
                 ReporterEvent::Request { worker, mut payload } => {
                     if let Some(stream) = self.streams.iter().next().cloned() {
                         // Send the event
-                        match sender_handle.as_mut() {
-                            Some(sender) => {
+                        match rt.actor_event_handle::<super::sender::Sender>().await {
+                            Some(mut sender) => {
                                 self.streams.remove(&stream);
                                 // Assign stream_id to the payload
                                 assign_stream_to_payload(stream, &mut payload);
@@ -103,60 +101,6 @@ impl Actor for Reporter {
                         .await
                         .unwrap_or_else(|e| error!("{}", e));
                 }
-                ReporterEvent::Session(session) => {
-                    match session {
-                        Session::New => {
-                            self.session_id += 1;
-                            sender_handle = rt.actor_event_handle::<super::sender::Sender>().await;
-                            info!(
-                                "address: {}, shard_id: {}, reporter_id: {}, received session: {:?}",
-                                &self.address, self.shard_id, self.reporter_id, self.session_id
-                            );
-                            if !rt.service().await.is_stopping() {
-                                // degraded service
-                                rt.update_status(ServiceStatus::Degraded).await;
-                            }
-                        }
-                        Session::Service => {
-                            //if rt.service().await.is_stopped() {
-                            //    // drop the sender_handle
-                            //    sender_handle = None;
-                            //} else {
-                            //    // do not update the status if service is_stopping
-                            //    if !self.service.is_stopping() {
-                            //        // degraded service
-                            //        rt.update_status(ServiceStatus::Degraded).await;
-                            //    }
-                            //}
-                            //let microservices_len = self.service.microservices.len();
-                            //// check if all microservices are stopped
-                            //if self.service.microservices.values().all(|ms| ms.is_stopped()) && microservices_len == 2 {
-                            //    // first we drain workers map from stucked requests, to force_consistency of
-                            //    // the old_session requests
-                            //    self.force_consistency();
-                            //    warn!(
-                            //        "address: {}, shard_id: {}, reporter_id: {}, closing session: {:?}",
-                            //        &self.address, self.shard_id, self.reporter_id, self.session_id
-                            //    );
-                            //    if !self.service.is_stopping() {
-                            //        // Maintenance service mode
-                            //        rt.update_status(ServiceStatus::Maintenance).await;
-                            //    }
-                            //} else if self.service.microservices.values().all(|ms| ms.is_running())
-                            //    && microservices_len == 2
-                            //{
-                            //    if !self.service.is_stopping() {
-                            //        // running service
-                            //        rt.update_status(ServiceStatus::Running).await;
-                            //    }
-                            //};
-                        }
-                        Session::Shutdown => {
-                            // drop the sender_handle to gracefully shut it down
-                            sender_handle = None;
-                        }
-                    }
-                }
             }
         }
         rt.update_status(ServiceStatus::Stopping).await;
@@ -186,26 +130,6 @@ pub enum ReporterEvent {
     },
     /// The stream error.
     Err(anyhow::Error, i16),
-    /// The stage session.
-    Session(Session),
-}
-
-impl Clone for ReporterEvent {
-    fn clone(&self) -> Self {
-        match self {
-            ReporterEvent::Request { worker: _, payload: _ } => panic!("Cannot clone reporter request!"),
-            ReporterEvent::Response { stream_id } => Self::Response { stream_id: *stream_id },
-            ReporterEvent::Err(_, _) => panic!("Cannot clone reporter error!"),
-            ReporterEvent::Session(s) => Self::Session(*s),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum Session {
-    New,
-    Service,
-    Shutdown,
 }
 
 impl Reporter {
@@ -268,8 +192,8 @@ impl Reporter {
     }
 }
 
-pub fn compute_reporter_num(stream_id: i16, appends_num: i16) -> u8 {
-    (stream_id / appends_num) as u8
+pub fn compute_reporter_num(stream_id: i16, appends_num: i16) -> ReporterId {
+    (stream_id / appends_num) as ReporterId
 }
 
 // private functions

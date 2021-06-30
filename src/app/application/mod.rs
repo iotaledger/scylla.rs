@@ -124,6 +124,7 @@ impl Actor for Scylla {
                         ActorRequest::Panic => panic!("{}", e.error),
                     },
                 },
+                ScyllaEvent::Shutdown => break,
             }
         }
         rt.update_status(ServiceStatus::Stopped).await;
@@ -164,6 +165,7 @@ pub enum ScyllaChild {
 pub enum ScyllaEvent {
     Status(Service),
     Report(Result<SuccessReport<ScyllaChild>, ErrorReport<ScyllaChild>>),
+    Shutdown,
 }
 
 impl From<Cluster> for ScyllaChild {
