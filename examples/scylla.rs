@@ -28,6 +28,8 @@ async fn main() {
             }
             if let Err(e) = init_database().await {
                 log::error!("{}", e);
+            } else {
+                scope.print_root().await;
             }
         }
         .boxed()
