@@ -46,7 +46,7 @@ impl Actor for Sender {
                     // send to reporter ReporterEvent::Err(io_error, stream_id)
                     let mut handles = reporter_pool.write().await;
                     if let Some(reporter_handle) =
-                        handles.get_by_metric(&compute_reporter_num(stream_id, self.appends_num))
+                        handles.get_by_metric_mut(&compute_reporter_num(stream_id, self.appends_num))
                     {
                         backstage::actor::Sender::send(
                             reporter_handle,

@@ -167,7 +167,7 @@ impl Actor for Cluster {
                             .write()
                             .await
                             .iter_with_metrics()
-                            .map(|(id, h)| (id, h.into_inner().into_inner()))
+                            .map(|(id, h)| (*id, h.clone().into_inner().into_inner()))
                             .collect::<HashMap<_, _>>();
 
                         self.registry.insert(addr, handles);

@@ -140,7 +140,7 @@ impl Receiver {
             // tell reporter that giveload is ready.
             let mut handles = reporters_handles.write().await;
             let reporter_handle = handles
-                .get_by_metric(&compute_reporter_num(self.stream_id, self.appends_num))
+                .get_by_metric_mut(&compute_reporter_num(self.stream_id, self.appends_num))
                 .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
 
             reporter_handle
