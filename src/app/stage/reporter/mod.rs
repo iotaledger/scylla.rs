@@ -45,14 +45,14 @@ pub fn build_reporter(
 
 #[async_trait]
 impl Actor for Reporter {
-    type Dependencies = ();
+    type Dependencies = Act<super::sender::Sender>;
     type Event = ReporterEvent;
     type Channel = TokioChannel<Self::Event>;
 
     async fn run<'a, Reg: RegistryAccess + Send + Sync>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg>,
-        _deps: Self::Dependencies,
+        mut sender: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -62,49 +62,38 @@ impl Actor for Reporter {
         while let Some(event) = rt.next_event().await {
             match event {
                 ReporterEvent::Request { worker, mut payload } => {
+                    log::warn!("Reporter received request");
                     if let Some(stream) = self.streams.iter().next().cloned() {
                         // Send the event
-                        match rt.actor_event_handle::<super::sender::Sender>().await {
-                            Some(mut sender) => {
-                                self.streams.remove(&stream);
-                                // Assign stream_id to the payload
-                                assign_stream_to_payload(stream, &mut payload);
-                                // store payload as reusable at payloads[stream]
-                                self.payloads[stream as usize].as_mut().replace(payload);
-                                self.workers.insert(stream, worker);
-                                sender.send(stream).await.unwrap_or_else(|e| error!("{}", e));
-                            }
-                            None => {
-                                // This means the sender_tx had been droped as a result of checkpoint from
-                                // receiver
-                                worker
-                                    .handle_error(WorkerError::Other(anyhow!("No Sender!")), Some(&mut my_handle))
-                                    .await
-                                    .unwrap_or_else(|e| error!("{}", e));
-                            }
-                        }
+                        self.streams.remove(&stream);
+                        // Assign stream_id to the payload
+                        assign_stream_to_payload(stream, &mut payload);
+                        // store payload as reusable at payloads[stream]
+                        self.payloads[stream as usize].as_mut().replace(payload);
+                        self.workers.insert(stream, worker);
+                        sender.send(stream).await.unwrap_or_else(|e| error!("{}", e));
                     } else {
                         // Send overload to the worker in-case we don't have anymore streams
                         worker
-                            .handle_error(WorkerError::Overload, Some(&mut my_handle))
-                            .await
+                            .handle_error(
+                                WorkerError::Overload,
+                                Some(&mut my_handle.clone().into_inner().into_inner()),
+                            )
                             .unwrap_or_else(|e| error!("{}", e));
                     }
                 }
                 ReporterEvent::Response { stream_id } => {
                     self.handle_response(stream_id, &mut my_handle)
-                        .await
                         .unwrap_or_else(|e| error!("{}", e));
                 }
                 ReporterEvent::Err(io_error, stream_id) => {
                     self.handle_error(stream_id, WorkerError::Other(io_error), &mut my_handle)
-                        .await
                         .unwrap_or_else(|e| error!("{}", e));
                 }
             }
         }
         rt.update_status(ServiceStatus::Stopping).await;
-        self.force_consistency(&mut my_handle).await;
+        self.force_consistency(&mut my_handle);
         warn!(
             "reporter_id: {} of shard_id: {} in node: {}, gracefully shutting down.",
             self.reporter_id, self.shard_id, &self.address
@@ -133,7 +122,7 @@ pub enum ReporterEvent {
 }
 
 impl Reporter {
-    async fn handle_response(&mut self, stream: i16, handle: &mut Act<Reporter>) -> anyhow::Result<()> {
+    fn handle_response(&mut self, stream: i16, handle: &mut Act<Reporter>) -> anyhow::Result<()> {
         // push the stream_id back to streams vector.
         self.streams.insert(stream);
         // remove the worker from workers.
@@ -143,9 +132,9 @@ impl Reporter {
                     let error = Decoder::try_from(payload)
                         .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
                         .unwrap_or_else(|e| WorkerError::Other(e));
-                    worker.handle_error(error, Some(handle)).await?;
+                    worker.handle_error(error, Some(&mut handle.clone().into_inner().into_inner()))?;
                 } else {
-                    worker.handle_response(payload).await?;
+                    worker.handle_response(payload)?;
                 }
             } else {
                 error!("No payload found while handling response for stream {}!", stream);
@@ -156,19 +145,14 @@ impl Reporter {
         Ok(())
     }
 
-    async fn handle_error(
-        &mut self,
-        stream: i16,
-        error: WorkerError,
-        handle: &mut Act<Reporter>,
-    ) -> anyhow::Result<()> {
+    fn handle_error(&mut self, stream: i16, error: WorkerError, handle: &mut Act<Reporter>) -> anyhow::Result<()> {
         // push the stream_id back to streams vector.
         self.streams.insert(stream);
         // remove the worker from workers and send error.
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.
             if let Some(_payload) = self.payloads[stream as usize].as_mut().take() {
-                worker.handle_error(error, Some(handle)).await?;
+                worker.handle_error(error, Some(&mut handle.clone().into_inner().into_inner()))?;
             } else {
                 error!("No payload found while handling error for stream {}!", stream);
             }
@@ -178,15 +162,14 @@ impl Reporter {
         Ok(())
     }
 
-    async fn force_consistency(&mut self, handle: &mut Act<Reporter>) {
+    fn force_consistency(&mut self, handle: &mut Act<Reporter>) {
         for (stream_id, worker_id) in self.workers.drain() {
             // push the stream_id back into the streams vector
             self.streams.insert(stream_id);
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
             worker_id
-                .handle_error(WorkerError::Lost, Some(handle))
-                .await
+                .handle_error(WorkerError::Lost, Some(&mut handle.clone().into_inner().into_inner()))
                 .unwrap_or_else(|e| error!("{}", e));
         }
     }

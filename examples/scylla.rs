@@ -1,10 +1,9 @@
-use anyhow::bail;
-use async_trait::async_trait;
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
+use anyhow::bail;
 use backstage::prelude::*;
 use futures::FutureExt;
-use scylla_rs::prelude::*;
+use scylla_rs::prelude::{stage::Reporter, *};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 #[tokio::main]
@@ -176,17 +175,16 @@ impl BatchWorker {
     }
 }
 
-#[async_trait]
 impl Worker for BatchWorker {
-    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         self.sender.send(Ok(()))?;
         Ok(())
     }
 
-    async fn handle_error(
+    fn handle_error(
         self: Box<Self>,
         error: WorkerError,
-        reporter: Option<&mut Act<stage::Reporter>>,
+        reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {
         self.sender.send(Err(error))?;
         Ok(())

@@ -68,16 +68,15 @@ impl PrepareWorker {
     }
 }
 
-#[async_trait]
 impl Worker for PrepareWorker {
-    async fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
         info!("Successfully prepared statement: '{}'", self.statement);
         Ok(())
     }
-    async fn handle_error(
+    fn handle_error(
         self: Box<Self>,
         error: WorkerError,
-        _reporter: Option<&mut Act<Reporter>>,
+        _reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {
         error!("Failed to prepare statement: {}, error: {}", self.statement, error);
         Ok(())

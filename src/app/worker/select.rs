@@ -58,7 +58,6 @@ where
     }
 }
 
-#[async_trait]
 impl<H, S, K, V> Worker for SelectWorker<H, S, K, V>
 where
     S: 'static + Select<K, V>,
@@ -66,7 +65,7 @@ where
     V: 'static + Send + Sync + Clone,
     H: 'static + Send + Sync + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
 {
-    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
             Ok(decoder) => match Self::decode_response(decoder) {
                 Ok(res) => H::handle_response(self, res),
@@ -76,10 +75,10 @@ where
         }
     }
 
-    async fn handle_error(
+    fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: Option<&mut Act<Reporter>>,
+        reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -92,7 +91,6 @@ where
                     &self.paging_state,
                     reporter,
                 )
-                .await
                 .or_else(|e| {
                     error!("Error trying to prepare query: {}", e);
                     H::handle_error(self, error)
@@ -155,14 +153,14 @@ where
 /// Handle an unprepared CQL error by sending a prepare
 /// request and resubmitting the original query as an
 /// unprepared statement
-pub async fn handle_unprepared_error<W, S, K, V>(
+pub fn handle_unprepared_error<W, S, K, V>(
     worker: &Box<W>,
     keyspace: &S,
     key: &K,
     id: [u8; 16],
     page_size: Option<i32>,
     paging_state: &Option<Vec<u8>>,
-    reporter: &mut Act<Reporter>,
+    reporter: &mut UnboundedSender<<Reporter as Actor>::Event>,
 ) -> anyhow::Result<()>
 where
     W: 'static + Worker + Clone,
@@ -178,7 +176,7 @@ where
         worker: prepare_worker,
         payload,
     };
-    reporter.send(prepare_request).await.ok();
+    reporter.send(prepare_request).ok();
     let req = keyspace.select_query::<V>(&key).consistency(Consistency::One);
     let req = if let Some(page_size) = page_size {
         req.page_size(page_size).paging_state(&paging_state)
@@ -191,6 +189,6 @@ where
         worker: worker.clone(),
         payload,
     };
-    reporter.send(retry_request).await.ok();
+    reporter.send(retry_request).ok();
     Ok(())
 }

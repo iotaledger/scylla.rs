@@ -184,7 +184,8 @@ pub mod tests {
 
     use super::*;
     use crate::{app::worker::InsertWorker, prelude::stage::Reporter};
-    use backstage::{actor::Sender, prelude::Act};
+    use backstage::actor::{Actor, Sender};
+    use tokio::sync::mpsc::UnboundedSender;
 
     #[derive(Default, Clone, Debug)]
     pub struct MyKeyspace {
@@ -294,17 +295,16 @@ pub mod tests {
         request: Box<dyn Request>,
     }
 
-    #[async_trait::async_trait]
     impl Worker for TestWorker {
-        async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
 
-        async fn handle_error(
+        fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: Option<&mut Act<Reporter>>,
+            reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -317,10 +317,10 @@ pub mod tests {
                             worker: Box::new(prepare_worker),
                             payload: prepare.0,
                         };
-                        reporter.send(prepare_request).await.ok();
+                        reporter.send(prepare_request).ok();
                         let payload = self.request.payload().clone();
                         let retry_request = ReporterEvent::Request { worker: self, payload };
-                        reporter.send(retry_request).await.ok();
+                        reporter.send(retry_request).ok();
                     }
                 }
             }
@@ -332,17 +332,16 @@ pub mod tests {
         request: BatchRequest<S>,
     }
 
-    #[async_trait::async_trait]
     impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
-        async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
 
-        async fn handle_error(
+        fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: Option<&mut Act<Reporter>>,
+            reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
                 if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -356,10 +355,10 @@ pub mod tests {
                                 worker: Box::new(prepare_worker),
                                 payload: prepare.0,
                             };
-                            reporter.send(prepare_request).await.ok();
+                            reporter.send(prepare_request).ok();
                             let payload = self.request.payload().clone();
                             let retry_request = ReporterEvent::Request { worker: self, payload };
-                            reporter.send(retry_request).await.ok();
+                            reporter.send(retry_request).ok();
                         }
                     }
                 }
@@ -374,17 +373,16 @@ pub mod tests {
         pub payload: Vec<u8>,
     }
 
-    #[async_trait::async_trait]
     impl Worker for PrepareWorker {
-        async fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
+        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
             // Do nothing
             Ok(())
         }
 
-        async fn handle_error(
+        fn handle_error(
             self: Box<Self>,
             _error: WorkerError,
-            _reporter: Option<&mut Act<Reporter>>,
+            _reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
         ) -> anyhow::Result<()> {
             if self.retries > 0 {
                 let prepare_worker = PrepareWorker {

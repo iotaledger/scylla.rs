@@ -70,7 +70,6 @@ where
     }
 }
 
-#[async_trait]
 impl<S, H, K, V> Worker for ValueWorker<H, S, K, V>
 where
     S: 'static + Select<K, V> + Clone,
@@ -78,7 +77,7 @@ where
     V: 'static + Send + Sync + Clone,
     H: 'static + Send + Sync + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone,
 {
-    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
             Ok(decoder) => match Self::decode_response(decoder) {
                 Ok(res) => H::handle_response(self, res),
@@ -88,10 +87,10 @@ where
         }
     }
 
-    async fn handle_error(
+    fn handle_error(
         mut self: Box<Self>,
         mut error: WorkerError,
-        reporter: Option<&mut Act<Reporter>>,
+        reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
@@ -104,7 +103,6 @@ where
                     &self.paging_state,
                     reporter,
                 )
-                .await
                 .or_else(|e| {
                     error!("Error trying to prepare query: {}", e);
                     H::handle_error(self, error)

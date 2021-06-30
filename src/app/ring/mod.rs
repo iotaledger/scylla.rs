@@ -6,9 +6,8 @@ use crate::app::{
     stage::ReporterEvent,
     worker::WorkerError,
 };
-use async_trait::async_trait;
-use backstage::{actor::Sender, prelude::Pool};
-use rand::{distributions::Uniform, prelude::StdRng, thread_rng, Rng, SeedableRng};
+use backstage::actor::Actor;
+use rand::{distributions::Uniform, prelude::ThreadRng, thread_rng, Rng};
 use std::net::SocketAddr;
 use std::{
     cell::RefCell,
@@ -38,7 +37,8 @@ type Replicas = HashMap<DC, Vec<Replica>>;
 type Replica = (SocketAddr, Msb, ShardCount);
 type Vcell = Box<dyn Vnode>;
 /// The registry of `SocketAddr` to its reporters.
-pub type Registry = HashMap<SocketAddr, Pool<Reporter, ReporterId>>;
+pub type Registry =
+    HashMap<SocketAddr, HashMap<ReporterId, tokio::sync::mpsc::UnboundedSender<<Reporter as Actor>::Event>>>;
 /// The global ring  of ScyllaDB.
 pub type GlobalRing = (
     Vec<DC>,
@@ -63,7 +63,7 @@ pub struct Ring {
     pub registry: Registry,
     pub root: Vcell,
     pub uniform: Uniform<u8>,
-    pub rng: StdRng,
+    pub rng: ThreadRng,
     pub dcs: Vec<DC>,
     pub uniform_dcs: Uniform<usize>,
     pub uniform_rf: Uniform<usize>,
@@ -74,7 +74,7 @@ static mut GLOBAL_RING: Option<AtomicRing> = None;
 
 thread_local! {
     static RING: RefCell<Ring> = {
-        let rng = StdRng::from_rng(thread_rng()).unwrap();
+        let rng = thread_rng();
         let uniform: Uniform<u8> = Uniform::new(0,1);
         let registry: Registry = HashMap::new();
         let root: Vcell = DeadEnd::initial_vnode();
@@ -256,25 +256,23 @@ impl Ring {
     }
 }
 
-#[async_trait]
 trait SmartId {
-    async fn send_reporter(
+    fn send_reporter(
         &mut self,
         token: Token,
         registry: &mut Registry,
-        rng: &mut StdRng,
+        rng: &mut ThreadRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
     );
 }
 
-#[async_trait]
 impl SmartId for Replica {
-    async fn send_reporter(
+    fn send_reporter(
         &mut self,
         token: Token,
         registry: &mut Registry,
-        rng: &mut StdRng,
+        rng: &mut ThreadRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
     ) {
@@ -284,26 +282,23 @@ impl SmartId for Replica {
         let _ = registry
             .get_mut(&self.0)
             .unwrap()
-            .write()
-            .await
-            .get_by_metric(&rng.sample(uniform))
+            .get_mut(&rng.sample(uniform))
             .unwrap()
             .send(request);
     }
 }
 
 /// Endpoints trait which should be implemented by `Replicas`.
-#[async_trait]
 pub trait Endpoints: EndpointsClone + Send + Sync {
     /// Send the request through the endpoints.
-    async fn send(
+    fn send(
         &mut self,
         data_center: &str,
         replica_index: usize,
         token: Token,
         request: ReporterEvent,
         registry: &mut Registry,
-        rng: &mut StdRng,
+        rng: &mut ThreadRng,
         uniform: Uniform<u8>,
     );
 }
@@ -329,16 +324,15 @@ impl Clone for Box<dyn Endpoints> {
     }
 }
 
-#[async_trait]
 impl Endpoints for Replicas {
-    async fn send(
+    fn send(
         &mut self,
         data_center: &str,
         replica_index: usize,
         token: Token,
         request: ReporterEvent,
         mut registry: &mut Registry,
-        mut rng: &mut StdRng,
+        mut rng: &mut ThreadRng,
         uniform: Uniform<u8>,
     ) {
         self.get_mut(data_center).unwrap()[replica_index].send_reporter(
@@ -351,25 +345,23 @@ impl Endpoints for Replicas {
     }
 }
 
-#[async_trait]
 impl Endpoints for Option<Replicas> {
     // this method will be invoked when we store Replicas as None.
     // used for initial ring to simulate the reporter and respond to worker(self) with NoRing error
-    async fn send(
+    fn send(
         &mut self,
         _: &str,
         _: usize,
         _: Token,
         request: ReporterEvent,
         _: &mut Registry,
-        _: &mut StdRng,
+        _: &mut ThreadRng,
         _uniform: Uniform<u8>,
     ) {
         // simulate reporter,
         if let ReporterEvent::Request { worker, .. } = request {
             worker
                 .handle_error(WorkerError::NoRing, None)
-                .await
                 .unwrap_or_else(|e| log::error!("{}", e));
         };
     }

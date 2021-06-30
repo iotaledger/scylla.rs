@@ -27,15 +27,14 @@ mod select;
 mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
-#[async_trait]
 pub trait Worker: Send + Sync {
     /// Reporter will invoke this method to Send the cql response to worker
-    async fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    async fn handle_error(
+    fn handle_error(
         self: Box<Self>,
         error: WorkerError,
-        reporter: Option<&mut Act<Reporter>>,
+        reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()>;
 }
 

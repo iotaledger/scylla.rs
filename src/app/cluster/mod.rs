@@ -160,9 +160,18 @@ impl Actor for Cluster {
                         responder.send(Err(Topology::RemoveNode(address)));
                     };
                 }
-                ClusterEvent::RegisterReporters(reporters_handles) => {
+                ClusterEvent::RegisterReporters(reporter_handles) => {
                     // merge/add reporters_handles of that node to registry
-                    self.registry.extend(reporters_handles);
+                    for (addr, pool) in reporter_handles {
+                        let handles = pool
+                            .write()
+                            .await
+                            .iter_with_metrics()
+                            .map(|(id, h)| (id, h.into_inner().into_inner()))
+                            .collect::<HashMap<_, _>>();
+
+                        self.registry.insert(addr, handles);
+                    }
                     // update waiting for build to true
                     self.should_build = true;
                 }
