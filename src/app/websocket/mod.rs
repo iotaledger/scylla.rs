@@ -23,13 +23,14 @@ impl Actor for Websocket {
     type Event = WebsocketRequest;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg>,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         mut cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
+        Sup::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
@@ -87,19 +88,6 @@ pub struct WebsocketRequest(SocketAddr, Message);
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ScyllaWebsocketEvent {
     Topology(Topology),
-}
-
-impl<T> SupervisorEvent<T> for WebsocketRequest {
-    fn report(res: Result<SuccessReport<T>, ErrorReport<T>>) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        todo!()
-    }
-
-    fn status(service: Service) -> Self {
-        todo!()
-    }
 }
 
 #[derive(Deserialize, Serialize, Debug)]

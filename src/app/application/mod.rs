@@ -53,13 +53,14 @@ impl Actor for Scylla {
     type Event = ScyllaEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg>,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         _deps: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
+        Sup::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
@@ -99,16 +100,16 @@ impl Actor for Scylla {
                     Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => match e.state {
-                            ScyllaChild::Cluster(c) => {
+                            ScyllaChildState::Cluster(c) => {
                                 rt.spawn_actor(c, my_handle.clone()).await;
                             }
-                            ScyllaChild::Websocket(w) => {
+                            ScyllaChildState::Websocket(w) => {
                                 rt.spawn_actor(w, my_handle.clone()).await;
                             }
                         },
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
-                            let evt = ScyllaEvent::report_err(ErrorReport::new(
+                            let evt = Self::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
                                 ActorError::RuntimeError(ActorRequest::Restart),
@@ -156,48 +157,66 @@ impl Into<ActorError> for ScyllaError {
 }
 
 /// SubEvent type, indicated the children
-pub enum ScyllaChild {
+pub enum ScyllaChildState {
     Cluster(Cluster),
     Websocket(Websocket),
 }
 
+#[derive(Clone, Copy)]
+pub enum ScyllaChild {
+    Cluster,
+    Websocket,
+}
+
+impl From<PhantomData<Cluster>> for ScyllaChild {
+    fn from(_: PhantomData<Cluster>) -> Self {
+        Self::Cluster
+    }
+}
+
+impl From<PhantomData<Websocket>> for ScyllaChild {
+    fn from(_: PhantomData<Websocket>) -> Self {
+        Self::Websocket
+    }
+}
+
 /// Event type of the Scylla Application
 pub enum ScyllaEvent {
-    Status(Service),
-    Report(Result<SuccessReport<ScyllaChild>, ErrorReport<ScyllaChild>>),
+    Status(StatusChange<ScyllaChild>),
+    Report(Result<SuccessReport<ScyllaChildState>, ErrorReport<ScyllaChildState>>),
     Shutdown,
 }
 
-impl From<Cluster> for ScyllaChild {
+impl From<Cluster> for ScyllaChildState {
     fn from(cluster: Cluster) -> Self {
         Self::Cluster(cluster)
     }
 }
 
-impl From<Websocket> for ScyllaChild {
+impl From<Websocket> for ScyllaChildState {
     fn from(websocket: Websocket) -> Self {
         Self::Websocket(websocket)
     }
 }
 
-impl<T: Into<ScyllaChild>> SupervisorEvent<T> for ScyllaEvent {
-    fn report(res: Result<SuccessReport<T>, ErrorReport<T>>) -> anyhow::Result<Self>
+impl Supervisor for Scylla {
+    type ChildStates = ScyllaChildState;
+
+    type Children = ScyllaChild;
+
+    fn report(
+        res: Result<SuccessReport<Self::ChildStates>, ErrorReport<Self::ChildStates>>,
+    ) -> anyhow::Result<Self::Event>
     where
         Self: Sized,
     {
-        Ok(Self::Report(
-            res.map(|s| SuccessReport::new(s.state.into(), s.service))
-                .map_err(|e| ErrorReport::new(e.state.into(), e.service, e.error)),
-        ))
+        Ok(ScyllaEvent::Report(res))
     }
 
-    fn status(service: Service) -> Self {
-        Self::Status(service)
-    }
-}
-
-impl From<()> for ScyllaEvent {
-    fn from(_: ()) -> Self {
-        panic!()
+    fn status_change(status_change: StatusChange<Self::Children>) -> anyhow::Result<Self::Event>
+    where
+        Self: Sized,
+    {
+        Ok(ScyllaEvent::Status(status_change))
     }
 }

@@ -50,13 +50,14 @@ impl Actor for Node {
     type Event = NodeEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg>,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         mut cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
+        Sup::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
@@ -97,7 +98,7 @@ impl Actor for Node {
                         }
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
-                            let evt = NodeEvent::report_err(ErrorReport::new(
+                            let evt = Self::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
                                 ActorError::RuntimeError(ActorRequest::Restart),
@@ -130,19 +131,27 @@ pub enum NodeEvent {
     /// Register the stage reporters.
     RegisterReporters(u16, Pool<Reporter, ReporterId>),
     Report(Result<SuccessReport<Stage>, ErrorReport<Stage>>),
-    Status(Service),
+    Status(StatusChange<NullChildren>),
     Shutdown,
 }
 
-impl SupervisorEvent<Stage> for NodeEvent {
-    fn report(res: Result<SuccessReport<Stage>, ErrorReport<Stage>>) -> anyhow::Result<Self>
+impl Supervisor for Node {
+    type ChildStates = Stage;
+    type Children = NullChildren;
+
+    fn report(
+        res: Result<SuccessReport<Self::ChildStates>, ErrorReport<Self::ChildStates>>,
+    ) -> anyhow::Result<Self::Event>
     where
         Self: Sized,
     {
-        Ok(Self::Report(res))
+        Ok(NodeEvent::Report(res))
     }
 
-    fn status(service: Service) -> Self {
-        Self::Status(service)
+    fn status_change(status_change: StatusChange<Self::Children>) -> anyhow::Result<Self::Event>
+    where
+        Self: Sized,
+    {
+        Ok(NodeEvent::Status(status_change))
     }
 }

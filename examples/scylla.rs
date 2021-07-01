@@ -26,15 +26,17 @@ async fn main() {
             let nodes = vec![([127, 0, 0, 1], 9042).into()];
             match add_nodes(&ws, nodes, 1).await {
                 Ok(_) => match init_database().await {
-                    Ok(_) => scope.print_root().await,
+                    Ok(_) => log::debug!("{}", scope.service_tree().await),
                     Err(e) => {
                         error!("{}", e);
-                        scope.print_root().await;
+                        //scope.print_root().await;
+                        log::debug!("{}", scope.service_tree().await);
                     }
                 },
                 Err(e) => {
                     error!("{}", e);
-                    scope.print_root().await;
+                    //scope.print_root().await;
+                    log::debug!("{}", scope.service_tree().await);
                 }
             }
         }
