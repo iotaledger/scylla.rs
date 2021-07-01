@@ -10,7 +10,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 /// Node state
 pub struct Node {
-    address: SocketAddr,
+    pub(crate) address: SocketAddr,
     reporter_count: u8,
     stages: HashMap<u16, Act<Stage>>,
     shard_count: u16,
@@ -60,7 +60,7 @@ impl Actor for Node {
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
-        let mut reporter_pools = Some(HashMap::new());
+        let mut reporter_pools = HashMap::new();
         // spawn stages
         for shard_id in 0..self.shard_count {
             let stage = stage::StageBuilder::new()
@@ -79,22 +79,18 @@ impl Actor for Node {
         while let Some(event) = rt.next_event().await {
             match event {
                 NodeEvent::RegisterReporters(shard_id, reporter_pool) => {
-                    let mut socket_addr = self.address.clone();
+                    let mut socket_addr = self.address;
                     // assign shard_id to socket_addr as it's going be used later as key in registry
                     socket_addr.set_port(shard_id);
-                    if let Some(pools) = reporter_pools.as_mut() {
-                        pools.insert(socket_addr, reporter_pool);
-                        if pools.len() == self.shard_count as usize {
-                            info!("Sending register reporters event to cluster!");
-                            let event = ClusterEvent::RegisterReporters(reporter_pools.take().unwrap());
-                            cluster.send(event).await.ok();
-                        }
-                    } else {
-                        error!("Tried to register reporters more than once!")
+                    reporter_pools.insert(socket_addr, reporter_pool);
+                    if reporter_pools.len() == self.shard_count as usize {
+                        debug!("Sending register reporters event to cluster!");
+                        let event = ClusterEvent::RegisterReporters(reporter_pools.clone());
+                        cluster.send(event).await.ok();
                     }
                 }
                 NodeEvent::Report(res) => match res {
-                    Ok(s) => break,
+                    Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
                             rt.spawn_into_pool(e.state, my_handle.clone()).await;
@@ -110,11 +106,11 @@ impl Actor for Node {
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
-                                handle_clone.send(evt).await;
+                                handle_clone.send(evt).await.ok();
                             });
                         }
                         ActorRequest::Finish => {
-                            log::error!("{}", e.error);
+                            error!("{}", e.error);
                             break;
                         }
                         ActorRequest::Panic => panic!("{}", e.error),

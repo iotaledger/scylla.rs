@@ -3,6 +3,7 @@
 use anyhow::bail;
 use backstage::prelude::*;
 use futures::FutureExt;
+use log::*;
 use scylla_rs::prelude::{stage::Reporter, *};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
@@ -24,10 +25,10 @@ async fn main() {
             let ws = format!("ws://{}/", "127.0.0.1:8080");
             let nodes = vec![([127, 0, 0, 1], 9042).into()];
             if let Err(e) = add_nodes(&ws, nodes, 1).await {
-                log::error!("{}", e);
+                error!("{}", e);
             }
             if let Err(e) = init_database().await {
-                log::error!("{}", e);
+                error!("{}", e);
             } else {
                 scope.print_root().await;
             }
@@ -178,7 +179,7 @@ impl BatchWorker {
 }
 
 impl Worker for BatchWorker {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
         self.sender.send(Ok(()))?;
         Ok(())
     }
@@ -186,7 +187,7 @@ impl Worker for BatchWorker {
     fn handle_error(
         self: Box<Self>,
         error: WorkerError,
-        reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
+        _reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {
         self.sender.send(Err(error))?;
         Ok(())

@@ -40,7 +40,7 @@ impl Actor for Websocket {
         let (_, mut websocket) = rt.spawn_actor_unsupervised(websocket).await;
         rt.update_status(ServiceStatus::Running).await;
         while let Some(WebsocketRequest(addr, msg)) = rt.next_event().await {
-            log::debug!("Received message {} from {}", msg, addr);
+            debug!("Received message {} from {}", msg, addr);
             if let Some(msg) = {
                 if let Message::Text(t) = msg {
                     serde_json::from_str::<ScyllaWebsocketEvent>(&t).ok()
@@ -52,13 +52,16 @@ impl Actor for Websocket {
                 match msg {
                     ScyllaWebsocketEvent::Topology(t) => match t {
                         Topology::AddNode(addr) => {
-                            cluster.send(ClusterEvent::AddNode(addr, sender)).await;
+                            cluster.send(ClusterEvent::AddNode(addr, Some(sender))).await.ok();
                         }
                         Topology::RemoveNode(addr) => {
-                            cluster.send(ClusterEvent::RemoveNode(addr, sender)).await;
+                            cluster.send(ClusterEvent::RemoveNode(addr, Some(sender))).await.ok();
                         }
                         Topology::BuildRing(uniform_rf) => {
-                            cluster.send(ClusterEvent::BuildRing(uniform_rf, sender)).await;
+                            cluster
+                                .send(ClusterEvent::BuildRing(uniform_rf, Some(sender)))
+                                .await
+                                .ok();
                         }
                     },
                 }
@@ -69,7 +72,8 @@ impl Actor for Websocket {
                             addr,
                             serde_json::to_string(&res).unwrap().into(),
                         ))
-                        .await;
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Websocket error: {}", e))?;
                 }
             }
         }

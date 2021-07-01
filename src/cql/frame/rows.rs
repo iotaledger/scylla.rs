@@ -491,7 +491,7 @@ macro_rules! rows {
                 if self.remaining_rows_count > 0 {
                     self.remaining_rows_count -= 1;
                     if self.decoder.buffer_as_ref().len() < self.column_start + 4 {
-                        log::error!("Buffer is too small!");
+                        error!("Buffer is too small!");
                         return None;
                     }
                     let length = i32::from_be_bytes(
@@ -504,9 +504,9 @@ macro_rules! rows {
                         let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
                         // update the next column_start to start from next column
                         self.column_start += (length as usize);
-                        <$row>::try_decode(col_slice).map_err(|e| log::error!("{}", e)).ok().into()
+                        <$row>::try_decode(col_slice).map_err(|e| error!("{}", e)).ok().into()
                     } else {
-                        <$row>::try_decode(&[]).map_err(|e| log::error!("{}", e)).ok().into()
+                        <$row>::try_decode(&[]).map_err(|e| error!("{}", e)).ok().into()
                     }
                 } else {
                     None

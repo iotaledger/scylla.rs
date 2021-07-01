@@ -7,6 +7,7 @@ use crate::app::{
     worker::WorkerError,
 };
 use backstage::actor::Actor;
+use log::*;
 use rand::{distributions::Uniform, prelude::ThreadRng, thread_rng, Rng};
 use std::net::SocketAddr;
 use std::{
@@ -362,7 +363,7 @@ impl Endpoints for Option<Replicas> {
         if let ReporterEvent::Request { worker, .. } = request {
             worker
                 .handle_error(WorkerError::NoRing, None)
-                .unwrap_or_else(|e| log::error!("{}", e));
+                .unwrap_or_else(|e| error!("{}", e));
         };
     }
 }

@@ -76,6 +76,8 @@ impl Actor for Cluster {
     {
         rt.update_status(ServiceStatus::Running).await;
         let mut my_handle = rt.my_handle().await;
+        let mut reporter_pools: Option<HashMap<SocketAddr, Pool<Reporter, u8>>> = None;
+        let mut last_uniform_rf = None;
         while let Some(event) = rt.next_event().await {
             match event {
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster
@@ -84,7 +86,7 @@ impl Actor for Cluster {
                     info!("Received add node event!");
                     // make sure it doesn't already exist in our cluster
                     if self.nodes.contains_key(&address) {
-                        responder.send(Err(Topology::AddNode(address)));
+                        responder.map(|r| r.send(Err(Topology::AddNode(address))));
                         continue;
                     }
                     // to spawn node we first make sure it's online;
@@ -126,15 +128,15 @@ impl Actor for Cluster {
                                 };
                                 // add node_info to nodes
                                 self.nodes.insert(address, node_info);
-                                responder.send(Ok(Topology::AddNode(address)));
+                                responder.map(|r| r.send(Ok(Topology::AddNode(address))));
                             } else {
-                                responder.send(Err(Topology::AddNode(address)));
+                                responder.map(|r| r.send(Err(Topology::AddNode(address))));
                                 error!("Failed to retrieve data from CQL Connection!");
                             }
                         }
                         Err(_) => {
                             error!("Scylla node at {} is unavailable!", address);
-                            responder.send(Err(Topology::AddNode(address)));
+                            responder.map(|r| r.send(Err(Topology::AddNode(address))));
                         }
                     }
                 }
@@ -148,41 +150,46 @@ impl Actor for Cluster {
                             // remove the shard_reporters for "address" node in shard_id from registry
                             self.registry.remove(&node_info.address);
                         }
-                        node_info.node_handle.send(NodeEvent::Shutdown).await;
+                        node_info.node_handle.send(NodeEvent::Shutdown).await.ok();
                         // update waiting for build to true
                         self.should_build = true;
                         // note: the node tree will not get shutdown unless we drop the ring
                         // but we cannot drop the ring unless we build a new one and atomically swap it,
                         // therefore dashboard admin supposed to BuildRing
-                        responder.send(Ok(Topology::RemoveNode(address)));
+                        responder.map(|r| r.send(Ok(Topology::RemoveNode(address))));
                     } else {
                         // Cannot remove non-existing node.
-                        responder.send(Err(Topology::RemoveNode(address)));
+                        responder.map(|r| r.send(Err(Topology::RemoveNode(address))));
                     };
                 }
-                ClusterEvent::RegisterReporters(reporter_handles) => {
-                    // merge/add reporters_handles of that node to registry
-                    for (addr, pool) in reporter_handles {
-                        let handles = pool
-                            .write()
-                            .await
-                            .iter_with_metrics()
-                            .map(|(id, h)| (*id, h.clone().into_inner().into_inner()))
-                            .collect::<HashMap<_, _>>();
-
-                        self.registry.insert(addr, handles);
+                ClusterEvent::RegisterReporters(pools) => {
+                    match reporter_pools {
+                        Some(ref mut map) => {
+                            map.extend(pools);
+                        }
+                        None => {
+                            reporter_pools = Some(pools);
+                        }
                     }
                     // update waiting for build to true
                     self.should_build = true;
                 }
                 ClusterEvent::BuildRing(uniform_rf, responder) => {
                     info!("Received build ring event!");
-                    // do cleanup on weaks
-                    self.cleanup();
-                    let service_tree = rt.service_tree().await;
-                    let mut microservices = service_tree.children.iter().map(|t| &t.service);
-                    // make sure non of the nodes is still starting, and ensure should_build is true
-                    if !microservices.any(|ms| ms.is_starting()) && self.should_build {
+                    if self.should_build {
+                        last_uniform_rf = Some(uniform_rf);
+                        for (addr, pool) in reporter_pools.as_ref().unwrap() {
+                            let handles = pool
+                                .write()
+                                .await
+                                .iter_with_metrics()
+                                .map(|(id, h)| (*id, h.clone().into_inner().into_inner()))
+                                .collect::<HashMap<_, _>>();
+
+                            self.registry.insert(*addr, handles);
+                        }
+                        // do cleanup on weaks
+                        self.cleanup();
                         // re/build
                         let version = self.new_version();
                         if self.nodes.is_empty() {
@@ -210,13 +217,57 @@ impl Actor for Cluster {
                         // incase of another BuildRing event
                         self.should_build = false;
                         // reply to scylla/dashboard
-                        responder.send(Ok(Topology::BuildRing(uniform_rf)));
+                        responder.map(|r| r.send(Ok(Topology::BuildRing(uniform_rf))));
                     } else {
-                        my_handle.send(ClusterEvent::BuildRing(uniform_rf, responder)).await;
+                        my_handle
+                            .send(ClusterEvent::BuildRing(uniform_rf, responder))
+                            .await
+                            .ok();
                         //responder.send(Err(Topology::BuildRing(uniform_rf)));
                     }
                 }
-                ClusterEvent::Report(_) => todo!("handle shutdown nodes"),
+                ClusterEvent::Report(res) => match res {
+                    Ok(s) => {
+                        my_handle
+                            .send(ClusterEvent::RemoveNode(s.state.address, None))
+                            .await
+                            .ok();
+                        my_handle
+                            .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
+                            .await
+                            .ok();
+                    }
+                    Err(e) => match e.error.request() {
+                        ActorRequest::Restart => {
+                            let address = e.state.address;
+                            my_handle.send(ClusterEvent::RemoveNode(address, None)).await.ok();
+                            my_handle.send(ClusterEvent::AddNode(address, None)).await.ok();
+                            my_handle
+                                .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
+                                .await
+                                .ok();
+                        }
+                        ActorRequest::Reschedule(dur) => {
+                            let mut handle_clone = my_handle.clone();
+                            let address = e.state.address;
+                            my_handle.send(ClusterEvent::RemoveNode(address, None)).await.ok();
+                            let dur = *dur;
+                            tokio::spawn(async move {
+                                tokio::time::sleep(dur).await;
+                                handle_clone.send(ClusterEvent::AddNode(address, None)).await.ok();
+                                handle_clone
+                                    .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
+                                    .await
+                                    .ok();
+                            });
+                        }
+                        ActorRequest::Finish => {
+                            error!("{}", e.error);
+                            break;
+                        }
+                        ActorRequest::Panic => panic!("{}", e.error),
+                    },
+                },
                 ClusterEvent::Status(_) => todo!("handle service changes"),
             }
         }
@@ -231,7 +282,6 @@ impl Actor for Cluster {
                 // remove the shard_reporters for "address" node in shard_id from registry
                 self.registry.remove(&node_info.address);
             }
-            node_info.node_handle.send(NodeEvent::Shutdown).await;
         }
         // build empty ring to enable other threads to build empty ring(eventually)
         let version = self.new_version();
@@ -281,11 +331,11 @@ pub enum ClusterEvent {
     /// Used by the Node to register its reporters with the cluster
     RegisterReporters(HashMap<SocketAddr, Pool<Reporter, u8>>),
     /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
-    AddNode(SocketAddr, oneshot::Sender<Result<Topology, Topology>>),
+    AddNode(SocketAddr, Option<oneshot::Sender<Result<Topology, Topology>>>),
     /// Used by Scylla/dashboard to remove/disconnect from existing scylla node in the cluster
-    RemoveNode(SocketAddr, oneshot::Sender<Result<Topology, Topology>>),
+    RemoveNode(SocketAddr, Option<oneshot::Sender<Result<Topology, Topology>>>),
     /// Used by Scylla/dashboard to build new ring and expose the recent cluster topology
-    BuildRing(u8, oneshot::Sender<Result<Topology, Topology>>),
+    BuildRing(u8, Option<oneshot::Sender<Result<Topology, Topology>>>),
     Report(Result<SuccessReport<Node>, ErrorReport<Node>>),
     Status(Service),
 }

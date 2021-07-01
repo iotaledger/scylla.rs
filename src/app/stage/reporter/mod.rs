@@ -6,18 +6,17 @@ use crate::{
     app::worker::{Worker, WorkerError},
     cql::{CqlError, Decoder},
 };
-use anyhow::anyhow;
 use std::{collections::HashSet, convert::TryFrom};
 
 /// Workers Map holds all the workers_ids
 type Workers = HashMap<i16, Box<dyn Worker>>;
 
-pub type ReporterId = u8;
+pub(crate) type ReporterId = u8;
 
 /// Reporter state
 pub struct Reporter {
     address: SocketAddr,
-    pub reporter_id: ReporterId,
+    pub(crate) reporter_id: ReporterId,
     streams: HashSet<i16>,
     shard_id: u16,
     workers: Workers,
@@ -62,7 +61,7 @@ impl Actor for Reporter {
         while let Some(event) = rt.next_event().await {
             match event {
                 ReporterEvent::Request { worker, mut payload } => {
-                    log::warn!("Reporter received request");
+                    warn!("Reporter received request");
                     if let Some(stream) = self.streams.iter().next().cloned() {
                         // Send the event
                         self.streams.remove(&stream);

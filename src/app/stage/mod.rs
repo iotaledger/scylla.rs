@@ -5,7 +5,7 @@ use super::{
     node::{Node, NodeEvent},
     *,
 };
-pub use reporter::ReporterId;
+pub(crate) use reporter::ReporterId;
 pub use reporter::{Reporter, ReporterEvent};
 use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::net::TcpStream;
@@ -23,7 +23,7 @@ pub struct Stage {
     authenticator: PasswordAuth,
     appends_num: i16,
     reporter_count: u8,
-    shard_id: u16,
+    pub(crate) shard_id: u16,
     payloads: Payloads,
     buffer_size: usize,
     recv_buffer_size: Option<u32>,
@@ -158,36 +158,12 @@ impl Actor for Stage {
                 }
                 StageEvent::Report(res) => match res {
                     Ok(s) => break,
-                    Err(e) => match e.error.request() {
-                        ActorRequest::Restart => match e.state {
-                            StageChild::Reporter(r) => {
-                                //todo!("Unregister/reregister the reporter?");
-                                let reporter_id = r.reporter_id;
-                                rt.spawn_into_pool_with_metric(r, reporter_id, my_handle.clone()).await;
-                            }
-                            StageChild::Receiver(r) => {
-                                rt.spawn_actor(r, my_handle.clone()).await;
-                            }
-                            StageChild::Sender(s) => {
-                                rt.spawn_actor(s, my_handle.clone()).await;
-                            }
-                        },
-                        ActorRequest::Reschedule(dur) => {
-                            let mut handle_clone = my_handle.clone();
-                            let evt = StageEvent::report_err(ErrorReport::new(
-                                e.state,
-                                e.service,
-                                ActorError::RuntimeError(ActorRequest::Restart),
-                            ))
-                            .unwrap();
-                            let dur = *dur;
-                            tokio::spawn(async move {
-                                tokio::time::sleep(dur).await;
-                                handle_clone.send(evt).await;
-                            });
-                        }
-                        ActorRequest::Finish => log::error!("{}", e.error),
-                        ActorRequest::Panic => panic!("{}", e.error),
+                    Err(e) => match e.state {
+                        // Shouldn't happen
+                        StageChild::Reporter(_) => break,
+                        StageChild::Receiver(_) => return Err(e.error),
+                        // Shouldn't happen
+                        StageChild::Sender(_) => break,
                     },
                 },
                 StageEvent::Status(_) => todo!(),

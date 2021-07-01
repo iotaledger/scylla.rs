@@ -96,7 +96,7 @@ impl Actor for Scylla {
                     }
                 }
                 ScyllaEvent::Report(res) => match res {
-                    Ok(s) => break,
+                    Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => match e.state {
                             ScyllaChild::Cluster(c) => {
@@ -117,10 +117,10 @@ impl Actor for Scylla {
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
-                                handle_clone.send(evt).await;
+                                handle_clone.send(evt).await.ok();
                             });
                         }
-                        ActorRequest::Finish => log::error!("{}", e.error),
+                        ActorRequest::Finish => error!("{}", e.error),
                         ActorRequest::Panic => panic!("{}", e.error),
                     },
                 },

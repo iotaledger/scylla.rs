@@ -9,7 +9,6 @@ use crate::{
     cql::{Consistency, CqlError, Decoder, Prepare},
 };
 use anyhow::anyhow;
-use backstage::prelude::Act;
 pub use delete::{handle_unprepared_error as handle_delete_unprepared_error, DeleteWorker};
 pub use insert::{handle_unprepared_error as handle_insert_unprepared_error, InsertWorker};
 use log::*;

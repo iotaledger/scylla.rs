@@ -30,8 +30,3 @@ use std::time::Duration;
 use thiserror::Error;
 pub use websocket::add_nodes::add_nodes;
 pub use worker::{Worker, WorkerError};
-
-pub(crate) struct ChildHandle<T> {
-    pub event_handle: tokio::sync::mpsc::UnboundedSender<T>,
-    pub join_handle: tokio::task::JoinHandle<Result<ActorRequest, ActorError>>,
-}
