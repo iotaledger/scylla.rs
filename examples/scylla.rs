@@ -24,13 +24,18 @@ async fn main() {
             tokio::task::spawn(ctrl_c(handle.into_inner()));
             let ws = format!("ws://{}/", "127.0.0.1:8080");
             let nodes = vec![([127, 0, 0, 1], 9042).into()];
-            if let Err(e) = add_nodes(&ws, nodes, 1).await {
-                error!("{}", e);
-            }
-            if let Err(e) = init_database().await {
-                error!("{}", e);
-            } else {
-                scope.print_root().await;
+            match add_nodes(&ws, nodes, 1).await {
+                Ok(_) => match init_database().await {
+                    Ok(_) => scope.print_root().await,
+                    Err(e) => {
+                        error!("{}", e);
+                        scope.print_root().await;
+                    }
+                },
+                Err(e) => {
+                    error!("{}", e);
+                    scope.print_root().await;
+                }
             }
         }
         .boxed()
