@@ -78,7 +78,7 @@ impl Actor for Receiver {
             }
         }
         rt.update_status(ServiceStatus::Stopped).await;
-        Ok(())
+        Err(ActorError::RuntimeError(ActorRequest::Restart))
     }
 }
 

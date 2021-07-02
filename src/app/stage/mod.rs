@@ -152,7 +152,8 @@ impl Actor for Stage {
                             rt.spawn_actor(receiver, my_handle.clone()).await;
                         }
                         Err(_) => {
-                            tokio::time::sleep(Duration::from_millis(5000)).await;
+                            warn!("Waiting to reconnect after 5 seconds");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
                             // try to reconnect
                             my_handle.send(StageEvent::Connect).await.ok();
                         }
