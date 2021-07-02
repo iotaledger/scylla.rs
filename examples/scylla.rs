@@ -9,6 +9,9 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 #[tokio::main]
 async fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("{}", info);
+    }));
     std::env::set_var("RUST_LOG", "debug");
     // start the logger
     env_logger::init();

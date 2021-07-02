@@ -63,14 +63,15 @@ impl Actor for Stage {
     type Event = StageEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         mut node: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
-        Sup::Children: From<PhantomData<Self>>,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let mut my_handle = rt.my_handle().await;
@@ -157,21 +158,21 @@ impl Actor for Stage {
                         }
                     }
                 }
-                StageEvent::Report(res) => match res {
+                StageEvent::ReportExit(res) => match res {
                     Ok(s) => break,
                     Err(e) => match e.state {
                         // Shouldn't happen
-                        StageChildState::Reporter(_) => break,
-                        StageChildState::Receiver(_) => return Err(e.error),
+                        ChildStates::Reporter(_) => break,
+                        ChildStates::Receiver(_) => return Err(e.error),
                         // Shouldn't happen
-                        StageChildState::Sender(_) => break,
+                        ChildStates::Sender(_) => break,
                     },
                 },
-                StageEvent::Status(s) => match s.actor_type {
+                StageEvent::StatusChange(s) => match s.actor_type {
                     // TODO
-                    StageChild::Reporter => (),
-                    StageChild::Receiver => (),
-                    StageChild::Sender => (),
+                    Children::Reporter => (),
+                    Children::Receiver => (),
+                    Children::Sender => (),
                 },
             }
         }
@@ -198,82 +199,10 @@ impl Into<ActorError> for StageError {
 }
 
 /// Stage event enum.
+#[supervise(Reporter, receiver::Receiver, sender::Sender)]
 pub enum StageEvent {
     /// Establish connection to scylla shard.
     Connect,
-    Report(Result<SuccessReport<StageChildState>, ErrorReport<StageChildState>>),
-    Status(StatusChange<StageChild>),
-}
-
-pub enum StageChildState {
-    Reporter(Reporter),
-    Receiver(receiver::Receiver),
-    Sender(sender::Sender),
-}
-
-#[derive(Clone, Copy)]
-pub enum StageChild {
-    Reporter,
-    Receiver,
-    Sender,
-}
-
-impl From<PhantomData<Reporter>> for StageChild {
-    fn from(_: PhantomData<Reporter>) -> Self {
-        Self::Reporter
-    }
-}
-
-impl From<PhantomData<receiver::Receiver>> for StageChild {
-    fn from(_: PhantomData<receiver::Receiver>) -> Self {
-        Self::Receiver
-    }
-}
-
-impl From<PhantomData<sender::Sender>> for StageChild {
-    fn from(_: PhantomData<sender::Sender>) -> Self {
-        Self::Sender
-    }
-}
-
-impl From<Reporter> for StageChildState {
-    fn from(r: Reporter) -> Self {
-        Self::Reporter(r)
-    }
-}
-
-impl From<receiver::Receiver> for StageChildState {
-    fn from(r: receiver::Receiver) -> Self {
-        Self::Receiver(r)
-    }
-}
-
-impl From<sender::Sender> for StageChildState {
-    fn from(s: sender::Sender) -> Self {
-        Self::Sender(s)
-    }
-}
-
-impl Supervisor for Stage {
-    type ChildStates = StageChildState;
-
-    type Children = StageChild;
-
-    fn report(
-        res: Result<SuccessReport<Self::ChildStates>, ErrorReport<Self::ChildStates>>,
-    ) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(StageEvent::Report(res))
-    }
-
-    fn status_change(status_change: StatusChange<Self::Children>) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(StageEvent::Status(status_change))
-    }
 }
 
 #[derive(Default)]

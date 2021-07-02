@@ -66,14 +66,15 @@ impl Actor for Cluster {
     type Event = ClusterEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         _deps: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
-        Sup::Children: From<PhantomData<Self>>,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await;
         let mut my_handle = rt.my_handle().await;
@@ -227,7 +228,7 @@ impl Actor for Cluster {
                         //responder.send(Err(Topology::BuildRing(uniform_rf)));
                     }
                 }
-                ClusterEvent::Report(res) => match res {
+                ClusterEvent::ReportExit(res) => match res {
                     Ok(s) => {
                         my_handle
                             .send(ClusterEvent::RemoveNode(s.state.address, None))
@@ -269,7 +270,7 @@ impl Actor for Cluster {
                         ActorRequest::Panic => panic!("{}", e.error),
                     },
                 },
-                ClusterEvent::Status(s) => {
+                ClusterEvent::StatusChange(s) => {
                     // TODO
                 }
             }
@@ -321,6 +322,7 @@ impl Cluster {
 }
 
 /// Cluster Event type
+#[supervise(Node)]
 pub enum ClusterEvent {
     /// Used by the Node to register its reporters with the cluster
     RegisterReporters(HashMap<SocketAddr, Pool<Reporter, u8>>),
@@ -330,29 +332,6 @@ pub enum ClusterEvent {
     RemoveNode(SocketAddr, Option<oneshot::Sender<Result<Topology, Topology>>>),
     /// Used by Scylla/dashboard to build new ring and expose the recent cluster topology
     BuildRing(u8, Option<oneshot::Sender<Result<Topology, Topology>>>),
-    Report(Result<SuccessReport<Node>, ErrorReport<Node>>),
-    Status(StatusChange<NullChildren>),
-}
-
-impl Supervisor for Cluster {
-    type ChildStates = Node;
-    type Children = NullChildren;
-
-    fn report(
-        res: Result<SuccessReport<Self::ChildStates>, ErrorReport<Self::ChildStates>>,
-    ) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(ClusterEvent::Report(res))
-    }
-
-    fn status_change(status_change: StatusChange<Self::Children>) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(ClusterEvent::Status(status_change))
-    }
 }
 /// `NodeInfo` contains the field to identify a ScyllaDB node.
 pub struct NodeInfo {

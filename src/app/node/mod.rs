@@ -50,14 +50,15 @@ impl Actor for Node {
     type Event = NodeEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         mut cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
-        Sup::Children: From<PhantomData<Self>>,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
@@ -90,7 +91,7 @@ impl Actor for Node {
                         cluster.send(event).await.ok();
                     }
                 }
-                NodeEvent::Report(res) => match res {
+                NodeEvent::ReportExit(res) => match res {
                     Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
@@ -98,12 +99,11 @@ impl Actor for Node {
                         }
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
-                            let evt = Self::report_err(ErrorReport::new(
+                            let evt = Self::Event::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
                                 ActorError::RuntimeError(ActorRequest::Restart),
-                            ))
-                            .unwrap();
+                            ));
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
@@ -117,7 +117,7 @@ impl Actor for Node {
                         ActorRequest::Panic => panic!("{}", e.error),
                     },
                 },
-                NodeEvent::Status(_) => (),
+                NodeEvent::StatusChange(_) => (),
                 NodeEvent::Shutdown => break,
             }
         }
@@ -127,31 +127,9 @@ impl Actor for Node {
 }
 
 /// Node event enum.
+#[supervise(Stage)]
 pub enum NodeEvent {
     /// Register the stage reporters.
     RegisterReporters(u16, Pool<Reporter, ReporterId>),
-    Report(Result<SuccessReport<Stage>, ErrorReport<Stage>>),
-    Status(StatusChange<NullChildren>),
     Shutdown,
-}
-
-impl Supervisor for Node {
-    type ChildStates = Stage;
-    type Children = NullChildren;
-
-    fn report(
-        res: Result<SuccessReport<Self::ChildStates>, ErrorReport<Self::ChildStates>>,
-    ) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(NodeEvent::Report(res))
-    }
-
-    fn status_change(status_change: StatusChange<Self::Children>) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(NodeEvent::Status(status_change))
-    }
 }

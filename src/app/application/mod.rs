@@ -53,14 +53,15 @@ impl Actor for Scylla {
     type Event = ScyllaEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven + Supervisor>(
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
         _deps: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
-        Sup::Children: From<PhantomData<Self>>,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await;
         let my_handle = rt.my_handle().await;
@@ -84,7 +85,7 @@ impl Actor for Scylla {
         rt.update_status(ServiceStatus::Running).await;
         while let Some(event) = rt.next_event().await {
             match event {
-                ScyllaEvent::Status(_) => {
+                ScyllaEvent::StatusChange(_) => {
                     let service_tree = rt.service_tree().await;
                     if service_tree.children.iter().any(|s| s.service.is_initializing()) {
                         rt.update_status(ServiceStatus::Initializing).await;
@@ -96,25 +97,24 @@ impl Actor for Scylla {
                         rt.update_status(ServiceStatus::Running).await;
                     }
                 }
-                ScyllaEvent::Report(res) => match res {
+                ScyllaEvent::ReportExit(res) => match res {
                     Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => match e.state {
-                            ScyllaChildState::Cluster(c) => {
+                            ChildStates::Cluster(c) => {
                                 rt.spawn_actor(c, my_handle.clone()).await;
                             }
-                            ScyllaChildState::Websocket(w) => {
+                            ChildStates::Websocket(w) => {
                                 rt.spawn_actor(w, my_handle.clone()).await;
                             }
                         },
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
-                            let evt = Self::report_err(ErrorReport::new(
+                            let evt = Self::Event::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
                                 ActorError::RuntimeError(ActorRequest::Restart),
-                            ))
-                            .unwrap();
+                            ));
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
@@ -156,67 +156,8 @@ impl Into<ActorError> for ScyllaError {
     }
 }
 
-/// SubEvent type, indicated the children
-pub enum ScyllaChildState {
-    Cluster(Cluster),
-    Websocket(Websocket),
-}
-
-#[derive(Clone, Copy)]
-pub enum ScyllaChild {
-    Cluster,
-    Websocket,
-}
-
-impl From<PhantomData<Cluster>> for ScyllaChild {
-    fn from(_: PhantomData<Cluster>) -> Self {
-        Self::Cluster
-    }
-}
-
-impl From<PhantomData<Websocket>> for ScyllaChild {
-    fn from(_: PhantomData<Websocket>) -> Self {
-        Self::Websocket
-    }
-}
-
 /// Event type of the Scylla Application
+#[supervise(Cluster, Websocket)]
 pub enum ScyllaEvent {
-    Status(StatusChange<ScyllaChild>),
-    Report(Result<SuccessReport<ScyllaChildState>, ErrorReport<ScyllaChildState>>),
     Shutdown,
-}
-
-impl From<Cluster> for ScyllaChildState {
-    fn from(cluster: Cluster) -> Self {
-        Self::Cluster(cluster)
-    }
-}
-
-impl From<Websocket> for ScyllaChildState {
-    fn from(websocket: Websocket) -> Self {
-        Self::Websocket(websocket)
-    }
-}
-
-impl Supervisor for Scylla {
-    type ChildStates = ScyllaChildState;
-
-    type Children = ScyllaChild;
-
-    fn report(
-        res: Result<SuccessReport<Self::ChildStates>, ErrorReport<Self::ChildStates>>,
-    ) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(ScyllaEvent::Report(res))
-    }
-
-    fn status_change(status_change: StatusChange<Self::Children>) -> anyhow::Result<Self::Event>
-    where
-        Self: Sized,
-    {
-        Ok(ScyllaEvent::Status(status_change))
-    }
 }
