@@ -46,12 +46,14 @@ impl Actor for Sender {
             if let Some(payload) = self.payloads[stream_id as usize].as_ref_payload() {
                 if let Err(io_error) = self.socket.write_all(payload).await {
                     // send to reporter ReporterEvent::Err(io_error, stream_id)
-                    let mut handles = reporter_pool.write().await;
-                    if let Some(reporter_handle) =
-                        handles.get_by_metric_mut(&compute_reporter_num(stream_id, self.appends_num))
+                    if let Some(mut reporter_handle) = reporter_pool
+                        .read()
+                        .await
+                        .get_by_metric(&compute_reporter_num(stream_id, self.appends_num))
+                        .cloned()
                     {
                         backstage::actor::Sender::send(
-                            reporter_handle,
+                            &mut reporter_handle,
                             ReporterEvent::Err(anyhow!(io_error), stream_id),
                         )
                         .await
