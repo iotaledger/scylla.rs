@@ -76,7 +76,7 @@ impl Actor for Cluster {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         let mut my_handle = rt.my_handle().await;
         let mut reporter_pools: Option<HashMap<SocketAddr, Pool<Reporter, u8>>> = None;
         let mut last_uniform_rf = None;
@@ -177,7 +177,6 @@ impl Actor for Cluster {
                     self.should_build = true;
                 }
                 ClusterEvent::BuildRing(uniform_rf, responder) => {
-                    info!("Received build ring event!");
                     if self.should_build {
                         last_uniform_rf = Some(uniform_rf);
                         for (addr, pool) in reporter_pools.as_ref().unwrap() {
@@ -275,7 +274,7 @@ impl Actor for Cluster {
                 }
             }
         }
-        rt.update_status(ServiceStatus::Stopping).await;
+        rt.update_status(ServiceStatus::Stopping).await.ok();
         // do self cleanup on weaks
         self.cleanup();
         // shutdown everything and drop self.tx
@@ -297,7 +296,7 @@ impl Actor for Cluster {
         Ring::rebuild();
         // redo self cleanup on weaks
         self.cleanup();
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
 }

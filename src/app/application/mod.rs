@@ -63,7 +63,7 @@ impl Actor for Scylla {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Initializing).await;
+        rt.update_status(ServiceStatus::Initializing).await.ok();
         let my_handle = rt.my_handle().await;
         let websocket = Websocket {
             listen_address: self.listen_address,
@@ -82,19 +82,19 @@ impl Actor for Scylla {
         };
         rt.spawn_actor(cluster_builder.build(), my_handle.clone()).await;
 
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(event) = rt.next_event().await {
             match event {
                 ScyllaEvent::StatusChange(_) => {
                     let service_tree = rt.service_tree().await;
                     if service_tree.children.iter().any(|s| s.service.is_initializing()) {
-                        rt.update_status(ServiceStatus::Initializing).await;
+                        rt.update_status(ServiceStatus::Initializing).await.ok();
                     } else if service_tree.children.iter().any(|s| s.service.is_maintenance()) {
-                        rt.update_status(ServiceStatus::Maintenance).await;
+                        rt.update_status(ServiceStatus::Maintenance).await.ok();
                     } else if service_tree.children.iter().any(|s| s.service.is_degraded()) {
-                        rt.update_status(ServiceStatus::Degraded).await;
+                        rt.update_status(ServiceStatus::Degraded).await.ok();
                     } else if service_tree.children.iter().all(|s| s.service.is_running()) {
-                        rt.update_status(ServiceStatus::Running).await;
+                        rt.update_status(ServiceStatus::Running).await.ok();
                     }
                 }
                 ScyllaEvent::ReportExit(res) => match res {
@@ -128,7 +128,7 @@ impl Actor for Scylla {
                 ScyllaEvent::Shutdown => break,
             }
         }
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
 }

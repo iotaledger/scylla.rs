@@ -40,7 +40,7 @@ impl Actor for Sender {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(stream_id) = rt.next_event().await {
             // write the payload to the socket, make sure the result is valid
             if let Some(payload) = self.payloads[stream_id as usize].as_ref_payload() {
@@ -66,7 +66,7 @@ impl Actor for Sender {
                 error!("No payload found for stream {}!", stream_id);
             }
         }
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
 }

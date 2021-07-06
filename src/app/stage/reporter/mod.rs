@@ -58,7 +58,7 @@ impl Actor for Reporter {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         let mut my_handle = rt.my_handle().await;
         while let Some(event) = rt.next_event().await {
             match event {
@@ -92,13 +92,13 @@ impl Actor for Reporter {
                 }
             }
         }
-        rt.update_status(ServiceStatus::Stopping).await;
+        rt.update_status(ServiceStatus::Stopping).await.ok();
         self.force_consistency(&mut my_handle);
         warn!(
             "reporter_id: {} of shard_id: {} in node: {}, gracefully shutting down.",
             self.reporter_id, self.shard_id, &self.address
         );
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
 }

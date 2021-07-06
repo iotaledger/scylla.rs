@@ -73,7 +73,7 @@ impl Actor for Stage {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Initializing).await;
+        rt.update_status(ServiceStatus::Initializing).await.ok();
         let mut my_handle = rt.my_handle().await;
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
@@ -118,7 +118,7 @@ impl Actor for Stage {
 
         my_handle.send(StageEvent::Connect).await.ok();
 
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(event) = rt.next_event().await {
             match event {
                 StageEvent::Connect => {
@@ -177,7 +177,7 @@ impl Actor for Stage {
                 },
             }
         }
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
 }

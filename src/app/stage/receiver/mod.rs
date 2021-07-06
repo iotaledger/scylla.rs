@@ -53,7 +53,7 @@ impl Actor for Receiver {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         while let Ok(n) = self.socket.read(&mut self.buffer[self.i..]).await {
             if n != 0 {
                 self.current_length += n;
@@ -77,7 +77,7 @@ impl Actor for Receiver {
                 break;
             }
         }
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Err(ActorError::RuntimeError(ActorRequest::Restart))
     }
 }

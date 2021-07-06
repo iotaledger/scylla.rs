@@ -1,5 +1,3 @@
-use std::{borrow::Cow, marker::PhantomData, time::SystemTime};
-
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use anyhow::bail;
@@ -7,7 +5,11 @@ use backstage::prelude::*;
 use futures::FutureExt;
 use log::*;
 use scylla_rs::prelude::{stage::Reporter, *};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use std::{borrow::Cow, marker::PhantomData, sync::Arc, time::SystemTime};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedSender},
+    Mutex,
+};
 
 #[tokio::main]
 async fn main() {
@@ -17,32 +19,60 @@ async fn main() {
     std::env::set_var("RUST_LOG", "debug");
     // start the logger
     env_logger::init();
-    let scylla_builder = ScyllaBuilder::new()
-        .listen_address(([127, 0, 0, 1], 8080).into())
-        .thread_count(num_cpus::get())
-        .reporter_count(2)
-        .local_dc("datacenter1".to_owned());
-    // create apps_builder and build apps
-    RuntimeScope::<ActorRegistry>::launch(|scope| {
+
+    let combinations = vec![10i32, 100, 1000, 10000]
+        .into_iter()
+        .map(|n| std::iter::repeat(n).take(4))
+        .flatten()
+        .zip(std::iter::repeat(vec![2u8, 4, 8, 16].into_iter()).flatten());
+
+    let timings = combinations
+        .map(|(n, r)| (n, r, Arc::new(Mutex::new(0u128))))
+        .collect::<Vec<_>>();
+
+    RuntimeScope::<ActorRegistry>::launch(move |scope| {
         async move {
-            let (_, handle) = scope.spawn_actor_unsupervised(scylla_builder.build()).await;
-            tokio::task::spawn(ctrl_c(handle.into_inner()));
-            let ws = format!("ws://{}/", "127.0.0.1:8080");
-            let nodes = vec![([127, 0, 0, 1], 9042).into()];
-            match add_nodes(&ws, nodes, 1).await {
-                Ok(_) => match init_database().await {
-                    Ok(_) => log::debug!("{}", scope.service_tree().await),
-                    Err(e) => {
-                        error!("{}", e);
-                        //scope.print_root().await;
-                        log::debug!("{}", scope.service_tree().await);
-                    }
-                },
-                Err(e) => {
-                    error!("{}", e);
-                    //scope.print_root().await;
-                    log::debug!("{}", scope.service_tree().await);
-                }
+            let scylla_builder = ScyllaBuilder::new()
+                .listen_address(([127, 0, 0, 1], 8080).into())
+                .thread_count(num_cpus::get())
+                .local_dc("datacenter1".to_owned());
+            for (n, r, t) in timings.iter().cloned() {
+                let scylla = scylla_builder.clone().reporter_count(r).build();
+                scope
+                    .scope(|scope| {
+                        async move {
+                            warn!("Spawning scylla with ({}, {})", n, r);
+                            let (_, mut handle) = scope.spawn_actor_unsupervised(scylla).await;
+                            let ws = format!("ws://{}/", "127.0.0.1:8080");
+                            let nodes = vec![([127, 0, 0, 1], 9042).into()];
+                            match add_nodes(&ws, nodes, 1).await {
+                                Ok(_) => match init_database(n).await {
+                                    Ok(time) => {
+                                        *t.lock().await = time;
+                                    }
+                                    Err(e) => {
+                                        error!("{}", e);
+                                        //scope.print_root().await;
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("{}", e);
+                                    //scope.print_root().await;
+                                }
+                            }
+                            handle.send(ScyllaEvent::Shutdown).await.ok();
+                            handle.into_inner().into_inner().closed().await;
+                        }
+                        .boxed()
+                    })
+                    .await
+                    .ok();
+                log::debug!("\n{}", scope.service_tree().await);
+            }
+            info!("Timings:");
+            info!("N\tR\tTime");
+            for (n, r, t) in timings.iter() {
+                info!("{}\t{}\t{}", n, r, *t.lock().await);
             }
         }
         .boxed()
@@ -53,11 +83,11 @@ async fn main() {
 
 async fn ctrl_c(mut sender: TokioSender<ScyllaEvent>) {
     tokio::signal::ctrl_c().await.unwrap();
-    let exit_program_event = ScyllaEvent::Shutdown;
-    sender.send(exit_program_event).await.ok();
+    sender.send(ScyllaEvent::Shutdown).await.ok();
 }
 
-async fn init_database() -> anyhow::Result<()> {
+async fn init_database(n: i32) -> anyhow::Result<u128> {
+    warn!("Initializing database");
     let (sender, mut inbox) = unbounded_channel::<Result<(), WorkerError>>();
     let worker = BatchWorker::boxed(sender.clone());
     let token = 1;
@@ -80,6 +110,7 @@ async fn init_database() -> anyhow::Result<()> {
     } else {
         bail!("Could not verify if keyspace was created!")
     }
+    warn!("Dropping table");
     let worker = BatchWorker::boxed(sender.clone());
     let drop_statement = Query::new()
         .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
@@ -94,6 +125,8 @@ async fn init_database() -> anyhow::Result<()> {
     } else {
         bail!("Could not verify if table was dropped!")
     }
+
+    warn!("Creating table");
 
     let table_query = format!(
         "CREATE TABLE IF NOT EXISTS {}.test (
@@ -139,7 +172,6 @@ async fn init_database() -> anyhow::Result<()> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let start = SystemTime::now();
-    let n = 10000;
     for i in 0..n {
         let worker = InsertWorker::boxed(keyspace.clone(), format!("Key {}", i), i, 3);
         let request = keyspace
@@ -171,12 +203,12 @@ async fn init_database() -> anyhow::Result<()> {
             Err(e) => error!("Select error: {}", e),
         }
     }
+    let t = start.elapsed().unwrap().as_millis();
     info!(
         "Finished benchmark. Total time: {} ms",
         start.elapsed().unwrap().as_millis()
     );
-
-    Ok(())
+    Ok(t)
 }
 
 struct BatchWorker {

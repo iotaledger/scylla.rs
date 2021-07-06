@@ -33,14 +33,14 @@ impl Actor for Websocket {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Initializing).await;
+        rt.update_status(ServiceStatus::Initializing).await.ok();
         let my_handle = rt.my_handle().await;
         let websocket = backstage::prefabs::websocket::WebsocketBuilder::new()
             .listen_address(self.listen_address)
             .supervisor_handle(my_handle)
             .build();
         let (_, mut websocket) = rt.spawn_actor_unsupervised(websocket).await;
-        rt.update_status(ServiceStatus::Running).await;
+        rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(WebsocketRequest(addr, msg)) = rt.next_event().await {
             debug!("Received message {} from {}", msg, addr);
             if let Some(msg) = {
@@ -79,7 +79,7 @@ impl Actor for Websocket {
                 }
             }
         }
-        rt.update_status(ServiceStatus::Stopped).await;
+        rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
 }
