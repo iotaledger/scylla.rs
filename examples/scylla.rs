@@ -16,7 +16,7 @@ async fn main() {
     std::panic::set_hook(Box::new(|info| {
         log::error!("{}", info);
     }));
-    std::env::set_var("RUST_LOG", "debug");
+    std::env::set_var("RUST_LOG", "info");
     // start the logger
     env_logger::init();
 
@@ -110,7 +110,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
     } else {
         bail!("Could not verify if keyspace was created!")
     }
-    warn!("Dropping table");
+
     let worker = BatchWorker::boxed(sender.clone());
     let drop_statement = Query::new()
         .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
@@ -125,8 +125,6 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
     } else {
         bail!("Could not verify if table was dropped!")
     }
-
-    warn!("Creating table");
 
     let table_query = format!(
         "CREATE TABLE IF NOT EXISTS {}.test (

@@ -121,6 +121,15 @@ impl Ring {
     pub fn send_global_random_replica(token: Token, request: ReporterEvent) {
         RING.with(|local| local.borrow_mut().sending().global_random_replica(token, request))
     }
+
+    pub fn version() -> u8 {
+        RING.with(|local| local.borrow_mut().version)
+    }
+
+    pub fn is_initialized() -> bool {
+        unsafe { GLOBAL_RING.is_some() }
+    }
+
     pub fn rebuild() {
         RING.with(|local| {
             let mut ring = local.borrow_mut();

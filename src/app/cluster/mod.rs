@@ -42,7 +42,11 @@ pub fn build_cluster(
     send_buffer_size: Option<u32>,
     authenticator: PasswordAuth,
 ) -> Cluster {
-    let (arc_ring, _none) = initialize_ring(0, false);
+    let (version, arc_ring) = if Ring::is_initialized() {
+        (Ring::version(), None)
+    } else {
+        (0, Some(initialize_ring(0, false).0))
+    };
     Cluster {
         reporter_count,
         thread_count,
@@ -53,9 +57,9 @@ pub fn build_cluster(
         authenticator,
         nodes: HashMap::new(),
         should_build: false,
-        version: 0,
+        version,
         registry: HashMap::new(),
-        arc_ring: Some(arc_ring),
+        arc_ring,
         weak_rings: Vec::new(),
     }
 }
@@ -178,6 +182,7 @@ impl Actor for Cluster {
                 }
                 ClusterEvent::BuildRing(uniform_rf, responder) => {
                     if self.should_build {
+                        warn!("Rebuilding RING");
                         last_uniform_rf = Some(uniform_rf);
                         for (addr, pool) in reporter_pools.as_ref().unwrap() {
                             let handles = pool
