@@ -123,11 +123,7 @@ impl Ring {
     }
 
     pub fn version() -> u8 {
-        RING.with(|local| local.borrow_mut().version)
-    }
-
-    pub fn is_initialized() -> bool {
-        unsafe { GLOBAL_RING.is_some() }
+        unsafe { VERSION }
     }
 
     pub fn rebuild() {

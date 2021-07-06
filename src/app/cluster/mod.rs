@@ -42,11 +42,8 @@ pub fn build_cluster(
     send_buffer_size: Option<u32>,
     authenticator: PasswordAuth,
 ) -> Cluster {
-    let (version, arc_ring) = if Ring::is_initialized() {
-        (Ring::version(), None)
-    } else {
-        (0, Some(initialize_ring(0, false).0))
-    };
+    let version = Ring::version();
+    let arc_ring = Some(initialize_ring(version, false).0);
     Cluster {
         reporter_count,
         thread_count,
