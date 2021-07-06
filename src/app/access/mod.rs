@@ -184,7 +184,7 @@ pub mod tests {
 
     use super::*;
     use crate::{app::worker::InsertWorker, prelude::stage::Reporter};
-    use backstage::actor::{Actor, Sender};
+    use backstage::actor::Actor;
     use tokio::sync::mpsc::UnboundedSender;
 
     #[derive(Default, Clone, Debug)]

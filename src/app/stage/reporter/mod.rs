@@ -63,7 +63,6 @@ impl Actor for Reporter {
         while let Some(event) = rt.next_event().await {
             match event {
                 ReporterEvent::Request { worker, mut payload } => {
-                    warn!("Reporter received request");
                     if let Some(stream) = self.streams.iter().next().cloned() {
                         // Send the event
                         self.streams.remove(&stream);

@@ -16,8 +16,8 @@ pub struct DeleteWorker<S: Delete<K, V>, K, V> {
 impl<S: Delete<K, V>, K, V> DeleteWorker<S, K, V>
 where
     S: 'static + Delete<K, V>,
-    K: 'static + Send,
-    V: 'static + Send,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
     /// Create a new delete worker with a number of retries
     pub fn new(keyspace: S, key: K, retries: usize) -> Self {
@@ -31,6 +31,20 @@ where
     /// Create a new boxed delete worker with a number of retries
     pub fn boxed(keyspace: S, key: K, retries: usize) -> Box<Self> {
         Box::new(Self::new(keyspace, key, retries))
+    }
+
+    fn handle_error(mut self: Box<DeleteWorker<S, K, V>>, _worker_error: WorkerError) -> anyhow::Result<()> {
+        if self.retries > 0 {
+            self.retries -= 1;
+            // currently we assume all cql/worker errors are retryable, but we might change this in future
+            let req = self
+                .keyspace
+                .delete_query::<V>(&self.key)
+                .consistency(Consistency::One)
+                .build()?;
+            tokio::spawn(async { req.send_global(self) });
+        }
+        Ok(())
     }
 }
 
@@ -46,30 +60,19 @@ where
     }
 
     fn handle_error(
-        mut self: Box<Self>,
+        self: Box<Self>,
         mut error: WorkerError,
         reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {
-        let reporter_running = reporter.is_some();
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 return handle_unprepared_error(&self, &self.keyspace, &self.key, id, reporter)
                     .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
+            } else {
+                self.handle_error(error)?;
             }
-        }
-        if self.retries > 0 {
-            self.retries -= 1;
-            // currently we assume all cql/worker errors are retryable, but we might change this in future
-            let req = self
-                .keyspace
-                .delete_query(&self.key)
-                .consistency(Consistency::One)
-                .build()?;
-            tokio::spawn(async { req.send_global(self) });
         } else {
-            // no more retries
-            // print error!
-            error!("{:?}, reporter running: {}", error, reporter_running);
+            self.handle_error(error)?;
         }
         Ok(())
     }

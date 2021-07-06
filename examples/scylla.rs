@@ -1,3 +1,5 @@
+use std::{borrow::Cow, marker::PhantomData, time::SystemTime};
+
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use anyhow::bail;
@@ -78,102 +80,101 @@ async fn init_database() -> anyhow::Result<()> {
     } else {
         bail!("Could not verify if keyspace was created!")
     }
-    let table_queries = format!(
-        "CREATE TABLE IF NOT EXISTS {0}.messages (
-            message_id text PRIMARY KEY,
-            message blob,
-            metadata blob,
-        );
+    let worker = BatchWorker::boxed(sender.clone());
+    let drop_statement = Query::new()
+        .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
+        .consistency(Consistency::One)
+        .build()?;
+    send_local(token, drop_statement.0, worker, keyspace.clone());
+    if let Some(msg) = inbox.recv().await {
+        match msg {
+            Ok(_) => (),
+            Err(e) => bail!(e),
+        }
+    } else {
+        bail!("Could not verify if table was dropped!")
+    }
 
-        CREATE TABLE IF NOT EXISTS {0}.addresses  (
-            address text,
-            partition_id smallint,
-            milestone_index int,
-            output_type tinyint,
-            transaction_id text,
-            idx smallint,
-            amount bigint,
-            address_type tinyint,
-            inclusion_state blob,
-            PRIMARY KEY ((address, partition_id), milestone_index, output_type, transaction_id, idx)
-        ) WITH CLUSTERING ORDER BY (milestone_index DESC, output_type DESC, transaction_id DESC, idx DESC);
-
-        CREATE TABLE IF NOT EXISTS {0}.indexes  (
-            indexation text,
-            partition_id smallint,
-            milestone_index int,
-            message_id text,
-            inclusion_state blob,
-            PRIMARY KEY ((indexation, partition_id), milestone_index, message_id)
-        ) WITH CLUSTERING ORDER BY (milestone_index DESC);
-
-        CREATE TABLE IF NOT EXISTS {0}.parents  (
-            parent_id text,
-            partition_id smallint,
-            milestone_index int,
-            message_id text,
-            inclusion_state blob,
-            PRIMARY KEY ((parent_id, partition_id), milestone_index, message_id)
-        ) WITH CLUSTERING ORDER BY (milestone_index DESC);
-
-        CREATE TABLE IF NOT EXISTS {0}.transactions  (
-            transaction_id text,
-            idx smallint,
-            variant text,
-            message_id text,
+    let table_query = format!(
+        "CREATE TABLE IF NOT EXISTS {}.test (
+            key text PRIMARY KEY,
             data blob,
-            inclusion_state blob,
-            milestone_index int,
-            PRIMARY KEY (transaction_id, idx, variant, message_id, data)
-        );
-
-        CREATE TABLE IF NOT EXISTS {0}.milestones  (
-            milestone_index int,
-            message_id text,
-            timestamp bigint,
-            payload blob,
-            PRIMARY KEY (milestone_index, message_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS {0}.hints  (
-            hint text,
-            variant text,
-            partition_id smallint,
-            milestone_index int,
-            PRIMARY KEY (hint, variant, partition_id)
-        ) WITH CLUSTERING ORDER BY (variant DESC, partition_id DESC);
-
-        CREATE TABLE IF NOT EXISTS {0}.sync  (
-            key text,
-            milestone_index int,
-            synced_by tinyint,
-            logged_by tinyint,
-            PRIMARY KEY (key, milestone_index)
-        ) WITH CLUSTERING ORDER BY (milestone_index DESC);
-        
-        CREATE TABLE IF NOT EXISTS {0}.analytics (
-            key text,
-            milestone_index int,
-            message_count int,
-            transaction_count int,
-            transferred_tokens bigint,
-            PRIMARY KEY (key, milestone_index)
-        ) WITH CLUSTERING ORDER BY (milestone_index DESC);",
+        );",
         keyspace
     );
-    for query in table_queries.split(";").map(str::trim).filter(|s| !s.is_empty()) {
-        let worker = BatchWorker::boxed(sender.clone());
-        let statement = Query::new().statement(query).consistency(Consistency::One).build()?;
-        send_local(token, statement.0, worker, keyspace.clone());
-        if let Some(msg) = inbox.recv().await {
-            match msg {
-                Ok(_) => (),
-                Err(e) => bail!(e),
-            }
-        } else {
-            bail!("Could not verify if table was created!")
+    let worker = BatchWorker::boxed(sender.clone());
+    let statement = Query::new()
+        .statement(table_query.as_str())
+        .consistency(Consistency::One)
+        .build()?;
+    send_local(token, statement.0, worker, keyspace.clone());
+    if let Some(msg) = inbox.recv().await {
+        match msg {
+            Ok(_) => (),
+            Err(e) => bail!(e),
+        }
+    } else {
+        bail!("Could not verify if table was created!")
+    }
+
+    let keyspace = MyKeyspace::new();
+    let worker = PrepareWorker::boxed(
+        <MyKeyspace as Insert<String, i32>>::id(&keyspace),
+        <MyKeyspace as Insert<String, i32>>::statement(&keyspace),
+    );
+    let Prepare(payload) = Prepare::new()
+        .statement(&<MyKeyspace as Insert<String, i32>>::statement(&keyspace))
+        .build()?;
+    send_local(token, payload, worker, keyspace.name().to_string());
+
+    let worker = PrepareWorker::boxed(
+        <MyKeyspace as Select<String, i32>>::id(&keyspace),
+        <MyKeyspace as Select<String, i32>>::statement(&keyspace),
+    );
+    let Prepare(payload) = Prepare::new()
+        .statement(&<MyKeyspace as Select<String, i32>>::statement(&keyspace))
+        .build()?;
+    send_local(token, payload, worker, keyspace.name().to_string());
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let start = SystemTime::now();
+    let n = 10000;
+    for i in 0..n {
+        let worker = InsertWorker::boxed(keyspace.clone(), format!("Key {}", i), i, 3);
+        let request = keyspace
+            .insert(&format!("Key {}", i), &i)
+            .consistency(Consistency::One)
+            .build()?;
+        request.send_local(worker);
+    }
+
+    let (sender, mut inbox) = unbounded_channel();
+    for i in 0..n {
+        let worker = ValueWorker::boxed(
+            sender.clone(),
+            keyspace.clone(),
+            format!("Key {}", i),
+            2,
+            PhantomData::<i32>,
+        );
+        let request = keyspace
+            .select(&format!("Key {}", i))
+            .consistency(Consistency::One)
+            .build()?;
+        request.send_local(worker);
+    }
+    drop(sender);
+    while let Some(res) = inbox.recv().await {
+        match res {
+            Ok(_) => (),
+            Err(e) => error!("Select error: {}", e),
         }
     }
+    info!(
+        "Finished benchmark. Total time: {} ms",
+        start.elapsed().unwrap().as_millis()
+    );
 
     Ok(())
 }
@@ -201,5 +202,66 @@ impl Worker for BatchWorker {
     ) -> anyhow::Result<()> {
         self.sender.send(Err(error))?;
         Ok(())
+    }
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct MyKeyspace {
+    pub name: Cow<'static, str>,
+}
+
+impl MyKeyspace {
+    pub fn new() -> Self {
+        Self {
+            name: "scylla_example".into(),
+        }
+    }
+}
+
+impl Keyspace for MyKeyspace {
+    fn name(&self) -> &Cow<'static, str> {
+        &self.name
+    }
+}
+
+impl VoidDecoder for MyKeyspace {}
+
+impl RowsDecoder<String, i32> for MyKeyspace {
+    type Row = i32;
+    fn try_decode(decoder: Decoder) -> anyhow::Result<Option<i32>> {
+        anyhow::ensure!(decoder.is_rows()?, "Decoded response is not rows!");
+        Self::Row::rows_iter(decoder)?
+            .next()
+            .map(|row| Some(row))
+            .ok_or_else(|| anyhow::anyhow!("Row not found!"))
+    }
+}
+
+impl<T> ComputeToken<T> for MyKeyspace {
+    fn token(_key: &T) -> i64 {
+        rand::random()
+    }
+}
+
+impl Insert<String, i32> for MyKeyspace {
+    type QueryOrPrepared = PreparedStatement;
+    fn statement(&self) -> Cow<'static, str> {
+        format!("INSERT INTO {}.test (key, data) VALUES (?, ?)", self.name()).into()
+    }
+
+    fn bind_values<T: Values>(builder: T, key: &String, value: &i32) -> T::Return {
+        builder.value(key).value(value)
+    }
+}
+
+impl Select<String, i32> for MyKeyspace {
+    type QueryOrPrepared = PreparedStatement;
+
+    fn statement(&self) -> Cow<'static, str> {
+        format!("SELECT data FROM {}.test WHERE key = ?", self.name()).into()
+    }
+
+    fn bind_values<T: Values>(builder: T, key: &String) -> T::Return {
+        builder.value(key)
     }
 }
