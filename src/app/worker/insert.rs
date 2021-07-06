@@ -18,8 +18,8 @@ pub struct InsertWorker<S: Insert<K, V>, K, V> {
 impl<S: Insert<K, V>, K, V> InsertWorker<S, K, V>
 where
     S: 'static + Insert<K, V>,
-    K: 'static + Send,
-    V: 'static + Send,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
 {
     /// Create a new insert worker with a number of retries
     pub fn new(keyspace: S, key: K, value: V, retries: usize) -> Self {
@@ -34,30 +34,8 @@ where
     pub fn boxed(keyspace: S, key: K, value: V, retries: usize) -> Box<Self> {
         Box::new(Self::new(keyspace, key, value, retries))
     }
-}
 
-impl<S, K, V> Worker for InsertWorker<S, K, V>
-where
-    S: 'static + Insert<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-{
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        Self::decode_response(giveload.try_into()?)?;
-        Ok(())
-    }
-
-    fn handle_error(
-        mut self: Box<Self>,
-        mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
-    ) -> anyhow::Result<()> {
-        if let WorkerError::Cql(ref mut cql_error) = error {
-            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
-                    .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
-            }
-        }
+    fn handle_error(mut self: Box<InsertWorker<S, K, V>>, _worker_error: WorkerError) -> anyhow::Result<()> {
         if self.retries > 0 {
             self.retries -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
@@ -67,10 +45,32 @@ where
                 .consistency(Consistency::One)
                 .build()?;
             tokio::spawn(async { req.send_global(self) });
+        }
+        Ok(())
+    }
+}
+
+impl<S, K, V> Worker for InsertWorker<S, K, V>
+where
+    S: 'static + Insert<K, V>,
+    K: 'static + Send + Sync + Clone,
+    V: 'static + Send + Sync + Clone,
+{
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        Self::decode_response(giveload.try_into()?)?;
+        Ok(())
+    }
+
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
+        if let WorkerError::Cql(ref mut cql_error) = error {
+            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+                return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
+                    .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
+            } else {
+                self.handle_error(error)?;
+            }
         } else {
-            // no more retries
-            // print error!
-            error!("{:?}, reporter running: {}", error, reporter.is_some());
+            self.handle_error(error)?;
         }
         Ok(())
     }

@@ -80,11 +80,13 @@ impl<H: ScyllaScope> EventLoop<H> for Scylla<H> {
                                             my_sup.shutdown_app(&self.get_name());
                                             // shutdown children
                                             // Listener
-                                            let listener_handle = self.listener_handle.take().unwrap();
-                                            listener_handle.shutdown();
+                                            if let Some(listener_handle) = self.listener_handle.take() {
+                                                listener_handle.shutdown();
+                                            }
                                             // shutdown cluster
-                                            let cluster_handle = self.cluster_handle.take().unwrap();
-                                            cluster_handle.shutdown();
+                                            if let Some(cluster_handle) = self.listener_handle.take() {
+                                                cluster_handle.shutdown();
+                                            }
                                             // Shutdown the websockets
                                             for (_, ws) in &mut self.websockets {
                                                 let _ = ws.close().await;

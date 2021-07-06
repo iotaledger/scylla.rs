@@ -98,18 +98,6 @@ where
             } else {
                 H::handle_error(self, error)
             }
-        } else if self.retries > 0 {
-            self.retries -= 1;
-            // currently we assume all cql/worker errors are retryable, but we might change this in future
-            let req = self.keyspace.select_query::<V>(&self.key).consistency(Consistency::One);
-            let req = if let Some(page_size) = self.page_size {
-                req.page_size(page_size).paging_state(&self.paging_state)
-            } else {
-                req.paging_state(&self.paging_state)
-            }
-            .build()?;
-            tokio::spawn(async { req.send_global(self) });
-            Ok(())
         } else {
             H::handle_error(self, error)
         }
@@ -140,13 +128,30 @@ where
     V: 'static + Send + Clone,
 {
     fn handle_error(
-        worker: Box<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>,
+        mut worker: Box<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>,
         worker_error: WorkerError,
     ) -> anyhow::Result<()> {
-        worker
-            .handle
-            .send(Err(worker_error))
-            .map_err(|e| anyhow!(e.to_string()))
+        if worker.retries > 0 {
+            worker.retries -= 1;
+            // currently we assume all cql/worker errors are retryable, but we might change this in future
+            let req = worker
+                .keyspace
+                .select_query::<V>(&worker.key)
+                .consistency(Consistency::One);
+            let req = if let Some(page_size) = worker.page_size {
+                req.page_size(page_size).paging_state(&worker.paging_state)
+            } else {
+                req.paging_state(&worker.paging_state)
+            }
+            .build()?;
+            tokio::spawn(async { req.send_global(worker) });
+            Ok(())
+        } else {
+            worker
+                .handle
+                .send(Err(worker_error))
+                .map_err(|e| anyhow!(e.to_string()))
+        }
     }
 }
 
