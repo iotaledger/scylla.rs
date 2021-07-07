@@ -23,10 +23,9 @@ impl Actor for Websocket {
     type Event = WebsocketRequest;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
-        mut cluster: Self::Dependencies,
+        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -39,7 +38,24 @@ impl Actor for Websocket {
             .listen_address(self.listen_address)
             .supervisor_handle(my_handle)
             .build();
-        let (_, mut websocket) = rt.spawn_actor_unsupervised(websocket).await;
+        rt.spawn_actor_unsupervised(websocket).await?;
+        Ok(())
+    }
+
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+        &mut self,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        mut cluster: Self::Dependencies,
+    ) -> Result<(), ActorError>
+    where
+        Self: Sized,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
+    {
+        let mut websocket = rt
+            .actor_event_handle::<backstage::prefabs::websocket::Websocket<Self>>()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No websocket!"))?;
         rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(WebsocketRequest(addr, msg)) = rt.next_event().await {
             debug!("Received message {} from {}", msg, addr);

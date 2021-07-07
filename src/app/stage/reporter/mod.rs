@@ -48,6 +48,13 @@ impl Actor for Reporter {
     type Event = ReporterEvent;
     type Channel = TokioChannel<Self::Event>;
 
+    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+        &mut self,
+        _rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+    ) -> Result<(), ActorError> {
+        Ok(())
+    }
+
     async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,

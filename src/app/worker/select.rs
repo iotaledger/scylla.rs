@@ -76,7 +76,7 @@ where
     }
 
     fn handle_error(
-        mut self: Box<Self>,
+        self: Box<Self>,
         mut error: WorkerError,
         reporter: Option<&mut UnboundedSender<<Reporter as Actor>::Event>>,
     ) -> anyhow::Result<()> {

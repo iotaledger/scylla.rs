@@ -67,6 +67,13 @@ impl Actor for Cluster {
     type Event = ClusterEvent;
     type Channel = TokioChannel<Self::Event>;
 
+    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+        &mut self,
+        _rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+    ) -> Result<(), ActorError> {
+        Ok(())
+    }
+
     async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
@@ -119,7 +126,7 @@ impl Actor for Cluster {
                                 // get msb
                                 let msb = cqlconn.msb();
 
-                                let (_, node_handle) = rt.spawn_actor(node, my_handle.clone()).await;
+                                let (_, node_handle) = rt.spawn_actor(node, my_handle.clone()).await?;
                                 // create nodeinfo
                                 let node_info = NodeInfo {
                                     address: address.clone(),

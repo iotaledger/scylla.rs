@@ -53,10 +53,9 @@ impl Actor for Scylla {
     type Event = ScyllaEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
-        _deps: Self::Dependencies,
+        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -68,7 +67,7 @@ impl Actor for Scylla {
         let websocket = Websocket {
             listen_address: self.listen_address,
         };
-        rt.spawn_actor(websocket, my_handle.clone()).await;
+        rt.spawn_actor(websocket, my_handle.clone()).await?;
 
         let cluster_builder = {
             cluster::ClusterBuilder::new()
@@ -80,9 +79,22 @@ impl Actor for Scylla {
                 .buffer_size(self.buffer_size.unwrap_or(1024000))
                 .authenticator(self.authenticator.clone().unwrap_or(PasswordAuth::default()))
         };
-        rt.spawn_actor(cluster_builder.build(), my_handle.clone()).await;
+        rt.spawn_actor(cluster_builder.build(), my_handle).await?;
+        Ok(())
+    }
 
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+        &mut self,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        _deps: Self::Dependencies,
+    ) -> Result<(), ActorError>
+    where
+        Self: Sized,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
+    {
         rt.update_status(ServiceStatus::Running).await.ok();
+        let my_handle = rt.my_handle().await;
         while let Some(event) = rt.next_event().await {
             match event {
                 ScyllaEvent::StatusChange(_) => {
@@ -102,10 +114,10 @@ impl Actor for Scylla {
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => match e.state {
                             ChildStates::Cluster(c) => {
-                                rt.spawn_actor(c, my_handle.clone()).await;
+                                rt.spawn_actor(c, my_handle.clone()).await?;
                             }
                             ChildStates::Websocket(w) => {
-                                rt.spawn_actor(w, my_handle.clone()).await;
+                                rt.spawn_actor(w, my_handle.clone()).await?;
                             }
                         },
                         ActorRequest::Reschedule(dur) => {

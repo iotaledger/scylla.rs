@@ -59,14 +59,13 @@ pub fn build_stage(
 
 #[async_trait]
 impl Actor for Stage {
-    type Dependencies = Act<Node>;
+    type Dependencies = ();
     type Event = StageEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
-        mut node: Self::Dependencies,
+        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -74,6 +73,10 @@ impl Actor for Stage {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
+        let mut node = rt
+            .actor_event_handle::<Node>()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No Node!"))?;
         let mut my_handle = rt.my_handle().await;
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
@@ -103,7 +106,7 @@ impl Actor for Stage {
                     .build();
 
                 rt.spawn_into_pool_with_metric(reporter, reporter_id, my_handle.clone())
-                    .await;
+                    .await?;
             } else {
                 error!("Failed to create streams!");
                 return Err(StageError::CannotCreateStreams.into());
@@ -117,8 +120,21 @@ impl Actor for Stage {
         node.send(event).await.ok();
 
         my_handle.send(StageEvent::Connect).await.ok();
+        Ok(())
+    }
 
+    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+        &mut self,
+        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        _: Self::Dependencies,
+    ) -> Result<(), ActorError>
+    where
+        Self: Sized,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
+    {
         rt.update_status(ServiceStatus::Running).await.ok();
+        let mut my_handle = rt.my_handle().await;
         while let Some(event) = rt.next_event().await {
             match event {
                 StageEvent::Connect => {
@@ -141,7 +157,7 @@ impl Actor for Stage {
                                 .appends_num(self.appends_num)
                                 .payloads(self.payloads.clone())
                                 .build();
-                            rt.spawn_actor(sender, my_handle.clone()).await;
+                            rt.spawn_actor(sender, my_handle.clone()).await?;
                             // spawn receiver
                             let receiver = receiver::ReceiverBuilder::new()
                                 .socket(socket_rx)
@@ -149,7 +165,7 @@ impl Actor for Stage {
                                 .payloads(self.payloads.clone())
                                 .buffer_size(self.buffer_size)
                                 .build();
-                            rt.spawn_actor(receiver, my_handle.clone()).await;
+                            rt.spawn_actor(receiver, my_handle.clone()).await?;
                         }
                         Err(_) => {
                             warn!("Waiting to reconnect after 5 seconds");
