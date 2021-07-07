@@ -12,9 +12,9 @@ async fn main() {
     std::panic::set_hook(Box::new(|info| {
         log::error!("{}", info);
     }));
-    std::env::set_var("RUST_LOG", "debug");
+    let env = env_logger::Env::new().filter_or("RUST_LOG", "debug");
     // start the logger
-    env_logger::init();
+    env_logger::Builder::from_env(env).init();
     let scylla_builder = ScyllaBuilder::new()
         .listen_address(([127, 0, 0, 1], 8080).into())
         .thread_count(num_cpus::get())
@@ -26,7 +26,7 @@ async fn main() {
             let (_, handle) = scope.spawn_actor_unsupervised(scylla_builder.build()).await?;
             tokio::task::spawn(ctrl_c(handle.into_inner()));
             let ws = format!("ws://{}/", "127.0.0.1:8080");
-            let nodes = vec![([127, 0, 0, 1], 9042).into()];
+            let nodes = vec![([172, 17, 0, 2], 9042).into()];
             match add_nodes(&ws, nodes, 1).await {
                 Ok(_) => match init_database().await {
                     Ok(_) => log::debug!("{}", scope.service_tree().await),
@@ -151,7 +151,7 @@ async fn init_database() -> anyhow::Result<()> {
             logged_by tinyint,
             PRIMARY KEY (key, milestone_index)
         ) WITH CLUSTERING ORDER BY (milestone_index DESC);
-        
+
         CREATE TABLE IF NOT EXISTS {0}.analytics (
             key text,
             milestone_index int,
