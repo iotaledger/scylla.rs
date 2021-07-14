@@ -67,16 +67,16 @@ impl Actor for Cluster {
     type Event = ClusterEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        _rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+        _rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
     ) -> Result<(), ActorError> {
         Ok(())
     }
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
         _deps: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
@@ -85,7 +85,7 @@ impl Actor for Cluster {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let mut my_handle = rt.my_handle().await;
+        let mut my_handle = rt.handle();
         let mut reporter_pools: Option<HashMap<SocketAddr, Pool<Reporter, u8>>> = None;
         let mut last_uniform_rf = None;
         while let Some(event) = rt.next_event().await {
@@ -126,7 +126,7 @@ impl Actor for Cluster {
                                 // get msb
                                 let msb = cqlconn.msb();
 
-                                let (_, node_handle) = rt.spawn_actor(node, my_handle.clone()).await?;
+                                let (node_handle, _, _) = rt.spawn_actor(node, my_handle.clone()).await?;
                                 // create nodeinfo
                                 let node_info = NodeInfo {
                                     address: address.clone(),

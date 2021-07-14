@@ -50,9 +50,9 @@ impl Actor for Node {
     type Event = NodeEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -60,7 +60,7 @@ impl Actor for Node {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let my_handle = rt.my_handle().await;
+        let my_handle = rt.handle();
         // spawn stages
         for shard_id in 0..self.shard_count {
             let stage = stage::StageBuilder::new()
@@ -72,15 +72,15 @@ impl Actor for Node {
                 .send_buffer_size(self.send_buffer_size)
                 .authenticator(self.authenticator.clone())
                 .build();
-            let (_, stage_handle) = rt.spawn_into_pool(stage, my_handle.clone()).await?;
+            let (stage_handle, _, _) = rt.spawn_into_pool(stage, my_handle.clone()).await?;
             self.stages.insert(shard_id, stage_handle);
         }
         Ok(())
     }
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
         mut cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
@@ -90,7 +90,7 @@ impl Actor for Node {
     {
         rt.update_status(ServiceStatus::Running).await.ok();
         let mut reporter_pools = HashMap::new();
-        let my_handle = rt.my_handle().await;
+        let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 NodeEvent::RegisterReporters(shard_id, reporter_pool) => {

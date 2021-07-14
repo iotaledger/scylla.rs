@@ -53,9 +53,9 @@ impl Actor for Scylla {
     type Event = ScyllaEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -63,7 +63,7 @@ impl Actor for Scylla {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let my_handle = rt.my_handle().await;
+        let my_handle = rt.handle();
         let websocket = Websocket {
             listen_address: self.listen_address,
         };
@@ -83,9 +83,9 @@ impl Actor for Scylla {
         Ok(())
     }
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
         _deps: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
@@ -94,7 +94,7 @@ impl Actor for Scylla {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let my_handle = rt.my_handle().await;
+        let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 ScyllaEvent::StatusChange(_) => {

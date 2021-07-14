@@ -30,7 +30,7 @@ async fn main() {
         .map(|(n, r)| (n, r, Arc::new(Mutex::new(0u128))))
         .collect::<Vec<_>>();
 
-    RuntimeScope::<ActorRegistry>::launch(move |scope| {
+    RuntimeScope::<ArcedRegistry>::launch(move |scope| {
         async move {
             let scylla_builder = ScyllaBuilder::new()
                 .listen_address(([127, 0, 0, 1], 8080).into())
@@ -42,7 +42,7 @@ async fn main() {
                     .scope(|scope| {
                         async move {
                             warn!("Spawning scylla with ({}, {})", n, r);
-                            let (_, mut handle) = scope.spawn_actor_unsupervised(scylla).await?;
+                            let (mut handle, _, _) = scope.spawn_actor_unsupervised(scylla).await?;
                             let ws = format!("ws://{}/", "127.0.0.1:8080");
                             let nodes = vec![([127, 0, 0, 1], 9042).into()];
                             match add_nodes(&ws, nodes, 1).await {
@@ -168,7 +168,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         .build()?;
     send_local(token, payload, worker, keyspace.name().to_string());
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let start = SystemTime::now();
     for i in 0..n {

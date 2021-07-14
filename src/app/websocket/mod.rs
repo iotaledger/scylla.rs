@@ -23,9 +23,9 @@ impl Actor for Websocket {
     type Event = WebsocketRequest;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -33,7 +33,7 @@ impl Actor for Websocket {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let my_handle = rt.my_handle().await;
+        let my_handle = rt.handle();
         let websocket = backstage::prefabs::websocket::WebsocketBuilder::new()
             .listen_address(self.listen_address)
             .supervisor_handle(my_handle)
@@ -42,9 +42,9 @@ impl Actor for Websocket {
         Ok(())
     }
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
         mut cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where

@@ -63,9 +63,9 @@ impl Actor for Stage {
     type Event = StageEvent;
     type Channel = TokioChannel<Self::Event>;
 
-    async fn init<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorInitRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -77,7 +77,7 @@ impl Actor for Stage {
             .actor_event_handle::<Node>()
             .await
             .ok_or_else(|| anyhow::anyhow!("No Node!"))?;
-        let mut my_handle = rt.my_handle().await;
+        let mut my_handle = rt.handle();
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
         let last_range = self.appends_num * (self.reporter_count as i16);
@@ -123,9 +123,9 @@ impl Actor for Stage {
         Ok(())
     }
 
-    async fn run<'a, Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
+    async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        rt: &mut ActorScopedRuntime<'a, Self, Reg, Sup>,
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
         _: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
@@ -134,7 +134,7 @@ impl Actor for Stage {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let mut my_handle = rt.my_handle().await;
+        let mut my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 StageEvent::Connect => {
