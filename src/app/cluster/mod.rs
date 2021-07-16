@@ -86,7 +86,7 @@ impl Actor for Cluster {
     {
         rt.update_status(ServiceStatus::Running).await.ok();
         let mut my_handle = rt.handle();
-        let mut reporter_pools: Option<HashMap<SocketAddr, Pool<Reporter, u8>>> = None;
+        let mut reporter_pools: Option<HashMap<SocketAddr, Pool<MapPool<Reporter, u8>>>> = None;
         let mut last_uniform_rf = None;
         while let Some(event) = rt.next_event().await {
             match event {
@@ -190,9 +190,9 @@ impl Actor for Cluster {
                         last_uniform_rf = Some(uniform_rf);
                         for (addr, pool) in reporter_pools.as_ref().unwrap() {
                             let handles = pool
-                                .write()
+                                .read()
                                 .await
-                                .iter_with_metrics()
+                                .iter()
                                 .map(|(id, h)| (*id, h.clone().into_inner().into_inner()))
                                 .collect::<HashMap<_, _>>();
 
@@ -333,7 +333,7 @@ impl Cluster {
 #[supervise(Node)]
 pub enum ClusterEvent {
     /// Used by the Node to register its reporters with the cluster
-    RegisterReporters(HashMap<SocketAddr, Pool<Reporter, u8>>),
+    RegisterReporters(HashMap<SocketAddr, Pool<MapPool<Reporter, u8>>>),
     /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
     AddNode(SocketAddr, Option<oneshot::Sender<Result<Topology, Topology>>>),
     /// Used by Scylla/dashboard to remove/disconnect from existing scylla node in the cluster

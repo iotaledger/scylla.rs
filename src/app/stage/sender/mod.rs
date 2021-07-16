@@ -26,7 +26,7 @@ type SenderEvent = i16;
 
 #[async_trait]
 impl Actor for Sender {
-    type Dependencies = Pool<Reporter, ReporterId>;
+    type Dependencies = Pool<MapPool<Reporter, ReporterId>>;
     type Event = SenderEvent;
     type Channel = TokioChannel<Self::Event>;
 
@@ -56,7 +56,7 @@ impl Actor for Sender {
                     if let Some(mut reporter_handle) = reporter_pool
                         .read()
                         .await
-                        .get_by_metric(&compute_reporter_num(stream_id, self.appends_num))
+                        .get(&compute_reporter_num(stream_id, self.appends_num))
                         .cloned()
                     {
                         backstage::actor::Sender::send(

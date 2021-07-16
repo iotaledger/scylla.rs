@@ -39,7 +39,7 @@ pub fn build_receiver(socket: OwnedReadHalf, payloads: Payloads, buffer_size: us
 
 #[async_trait]
 impl Actor for Receiver {
-    type Dependencies = Pool<Reporter, ReporterId>;
+    type Dependencies = Pool<MapPool<Reporter, ReporterId>>;
     type Event = ();
     type Channel = TokioChannel<()>;
 
@@ -93,7 +93,7 @@ impl Receiver {
     async fn handle_remaining_buffer(
         &mut self,
         i: usize,
-        reporters_handles: &Pool<Reporter, ReporterId>,
+        reporters_handles: &Pool<MapPool<Reporter, ReporterId>>,
     ) -> anyhow::Result<()> {
         if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
             self.buffer.copy_within(i..(i + self.current_length), self.i);
@@ -133,7 +133,7 @@ impl Receiver {
         &mut self,
         n: usize,
         mut padding: usize,
-        reporters_handles: &Pool<Reporter, ReporterId>,
+        reporters_handles: &Pool<MapPool<Reporter, ReporterId>>,
     ) -> anyhow::Result<()> {
         let start = self.current_length - n - self.i;
         if self.current_length >= self.total_length {
@@ -150,7 +150,7 @@ impl Receiver {
             let mut reporter_handle = reporters_handles
                 .read()
                 .await
-                .get_by_metric(&compute_reporter_num(self.stream_id, self.appends_num))
+                .get(&compute_reporter_num(self.stream_id, self.appends_num))
                 .cloned()
                 .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
 

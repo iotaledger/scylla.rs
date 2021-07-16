@@ -105,7 +105,7 @@ impl Actor for Stage {
                     .streams(streams.to_owned().into_iter().collect())
                     .build();
 
-                rt.spawn_into_pool_with_metric(reporter, reporter_id, my_handle.clone())
+                rt.spawn_into_pool_keyed::<_, _, MapPool<_, _>>(my_handle.clone(), reporter_id, reporter)
                     .await?;
             } else {
                 error!("Failed to create streams!");
@@ -113,7 +113,7 @@ impl Actor for Stage {
             }
         }
 
-        let reporter_pool = rt.pool_with_metric::<Reporter, ReporterId>().await.unwrap();
+        let reporter_pool = rt.pool::<MapPool<Reporter, ReporterId>>().await.unwrap();
 
         info!("Sending register reporters event to node!");
         let event = NodeEvent::RegisterReporters(self.shard_id, reporter_pool);

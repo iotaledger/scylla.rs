@@ -12,7 +12,6 @@ use std::{collections::HashMap, net::SocketAddr};
 pub struct Node {
     pub(crate) address: SocketAddr,
     reporter_count: u8,
-    stages: HashMap<u16, Act<Stage>>,
     shard_count: u16,
     buffer_size: usize,
     recv_buffer_size: Option<u32>,
@@ -35,7 +34,6 @@ pub fn build_node(
     Node {
         address,
         reporter_count,
-        stages: HashMap::new(),
         shard_count,
         buffer_size,
         recv_buffer_size,
@@ -72,8 +70,8 @@ impl Actor for Node {
                 .send_buffer_size(self.send_buffer_size)
                 .authenticator(self.authenticator.clone())
                 .build();
-            let (stage_handle, _, _) = rt.spawn_into_pool(stage, my_handle.clone()).await?;
-            self.stages.insert(shard_id, stage_handle);
+            rt.spawn_into_pool_keyed::<_, _, MapPool<_, u16>>(my_handle.clone(), shard_id, stage)
+                .await?;
         }
         Ok(())
     }
@@ -108,7 +106,12 @@ impl Actor for Node {
                     Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
-                            rt.spawn_into_pool(e.state, my_handle.clone()).await?;
+                            rt.spawn_into_pool_keyed::<_, _, MapPool<_, u16>>(
+                                my_handle.clone(),
+                                e.state.shard_id,
+                                e.state,
+                            )
+                            .await?;
                         }
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
@@ -143,6 +146,6 @@ impl Actor for Node {
 #[supervise(Stage)]
 pub enum NodeEvent {
     /// Register the stage reporters.
-    RegisterReporters(u16, Pool<Reporter, ReporterId>),
+    RegisterReporters(u16, Pool<MapPool<Reporter, ReporterId>>),
     Shutdown,
 }
