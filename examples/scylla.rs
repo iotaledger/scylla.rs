@@ -23,8 +23,8 @@ async fn main() {
     // create apps_builder and build apps
     RuntimeScope::<ActorRegistry>::launch(|scope| {
         async move {
-            let (_, shutdown_handle, _) = scope.spawn_actor_unsupervised(scylla_builder.build()).await?;
-            tokio::task::spawn(ctrl_c(shutdown_handle));
+            let scylla_handle = scope.spawn_actor_unsupervised(scylla_builder.build()).await?;
+            tokio::task::spawn(ctrl_c(scylla_handle));
             let ws = format!("ws://{}/", "127.0.0.1:8080");
             let nodes = vec![([172, 17, 0, 2], 9042).into()];
             match add_nodes(&ws, nodes, 1).await {
@@ -50,7 +50,7 @@ async fn main() {
     .unwrap();
 }
 
-async fn ctrl_c(shutdown_handle: ShutdownHandle) {
+async fn ctrl_c(shutdown_handle: Act<Scylla>) {
     tokio::signal::ctrl_c().await.unwrap();
     shutdown_handle.shutdown();
 }

@@ -63,11 +63,10 @@ impl Actor for Scylla {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let my_handle = rt.handle();
         let websocket = Websocket {
             listen_address: self.listen_address,
         };
-        rt.spawn_actor(websocket, my_handle.clone()).await?;
+        rt.spawn_actor(websocket).await?;
 
         let cluster_builder = {
             cluster::ClusterBuilder::new()
@@ -79,7 +78,7 @@ impl Actor for Scylla {
                 .buffer_size(self.buffer_size.unwrap_or(1024000))
                 .authenticator(self.authenticator.clone().unwrap_or(PasswordAuth::default()))
         };
-        rt.spawn_actor(cluster_builder.build(), my_handle).await?;
+        rt.spawn_actor(cluster_builder.build()).await?;
         Ok(())
     }
 
@@ -94,7 +93,6 @@ impl Actor for Scylla {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 ScyllaEvent::StatusChange(_) => {
@@ -114,14 +112,14 @@ impl Actor for Scylla {
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => match e.state {
                             ChildStates::Cluster(c) => {
-                                rt.spawn_actor(c, my_handle.clone()).await?;
+                                rt.spawn_actor(c).await?;
                             }
                             ChildStates::Websocket(w) => {
-                                rt.spawn_actor(w, my_handle.clone()).await?;
+                                rt.spawn_actor(w).await?;
                             }
                         },
                         ActorRequest::Reschedule(dur) => {
-                            let mut handle_clone = my_handle.clone();
+                            let mut handle = rt.handle();
                             let evt = Self::Event::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
@@ -130,7 +128,7 @@ impl Actor for Scylla {
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
-                                handle_clone.send(evt).await.ok();
+                                handle.send(evt).await.ok();
                             });
                         }
                         ActorRequest::Finish => error!("{}", e.error),

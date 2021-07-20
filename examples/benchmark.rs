@@ -42,7 +42,7 @@ async fn main() {
                     .scope(|scope| {
                         async move {
                             warn!("Spawning scylla with ({}, {})", n, r);
-                            let (mut handle, _, _) = scope.spawn_actor_unsupervised(scylla).await?;
+                            let mut scylla_handle = scope.spawn_actor_unsupervised(scylla).await?;
                             let ws = format!("ws://{}/", "127.0.0.1:8080");
                             let nodes = vec![([127, 0, 0, 1], 9042).into()];
                             match add_nodes(&ws, nodes, 1).await {
@@ -60,8 +60,8 @@ async fn main() {
                                     //scope.print_root().await;
                                 }
                             }
-                            handle.send(ScyllaEvent::Shutdown).await.ok();
-                            handle.into_inner().into_inner().closed().await;
+                            scylla_handle.send(ScyllaEvent::Shutdown).await.ok();
+                            scylla_handle.into_inner().into_inner().closed().await;
                             Ok(())
                         }
                         .boxed()
@@ -80,11 +80,6 @@ async fn main() {
     })
     .await
     .unwrap();
-}
-
-async fn ctrl_c(mut sender: TokioSender<ScyllaEvent>) {
-    tokio::signal::ctrl_c().await.unwrap();
-    sender.send(ScyllaEvent::Shutdown).await.ok();
 }
 
 async fn init_database(n: i32) -> anyhow::Result<u128> {

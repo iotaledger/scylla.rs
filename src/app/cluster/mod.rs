@@ -85,9 +85,9 @@ impl Actor for Cluster {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let mut my_handle = rt.handle();
         let mut reporter_pools: Option<HashMap<SocketAddr, Pool<MapPool<Reporter, u8>>>> = None;
         let mut last_uniform_rf = None;
+        let mut my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster
@@ -126,7 +126,7 @@ impl Actor for Cluster {
                                 // get msb
                                 let msb = cqlconn.msb();
 
-                                let (node_handle, _, _) = rt.spawn_actor(node, my_handle.clone()).await?;
+                                let node_handle = rt.spawn_actor(node).await?;
                                 // create nodeinfo
                                 let node_info = NodeInfo {
                                     address: address.clone(),

@@ -157,7 +157,7 @@ impl Actor for Stage {
                                 .appends_num(self.appends_num)
                                 .payloads(self.payloads.clone())
                                 .build();
-                            rt.spawn_actor(sender, my_handle.clone()).await?;
+                            rt.spawn_actor(sender).await?;
                             // spawn receiver
                             let receiver = receiver::ReceiverBuilder::new()
                                 .socket(socket_rx)
@@ -165,7 +165,7 @@ impl Actor for Stage {
                                 .payloads(self.payloads.clone())
                                 .buffer_size(self.buffer_size)
                                 .build();
-                            rt.spawn_actor(receiver, my_handle.clone()).await?;
+                            rt.spawn_actor(receiver).await?;
                         }
                         Err(_) => {
                             warn!("Waiting to reconnect after 5 seconds");
