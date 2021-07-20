@@ -105,8 +105,7 @@ impl Actor for Stage {
                     .streams(streams.to_owned().into_iter().collect())
                     .build();
 
-                rt.spawn_into_pool_keyed::<_, _, MapPool<_, _>>(my_handle.clone(), reporter_id, reporter)
-                    .await?;
+                rt.spawn_into_pool_keyed::<MapPool<_, _>>(reporter_id, reporter).await?;
             } else {
                 error!("Failed to create streams!");
                 return Err(StageError::CannotCreateStreams.into());

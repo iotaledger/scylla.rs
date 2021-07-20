@@ -70,8 +70,7 @@ impl Actor for Node {
                 .send_buffer_size(self.send_buffer_size)
                 .authenticator(self.authenticator.clone())
                 .build();
-            rt.spawn_into_pool_keyed::<_, _, MapPool<_, u16>>(my_handle.clone(), shard_id, stage)
-                .await?;
+            rt.spawn_into_pool_keyed::<MapPool<_, u16>>(shard_id, stage).await?;
         }
         Ok(())
     }
@@ -106,12 +105,8 @@ impl Actor for Node {
                     Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
-                            rt.spawn_into_pool_keyed::<_, _, MapPool<_, u16>>(
-                                my_handle.clone(),
-                                e.state.shard_id,
-                                e.state,
-                            )
-                            .await?;
+                            rt.spawn_into_pool_keyed::<MapPool<_, u16>>(e.state.shard_id, e.state)
+                                .await?;
                         }
                         ActorRequest::Reschedule(dur) => {
                             let mut handle_clone = my_handle.clone();
