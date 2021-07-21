@@ -21,7 +21,7 @@ pub struct Websocket {
 impl Actor for Websocket {
     type Dependencies = Act<Cluster>;
     type Event = WebsocketRequest;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -45,14 +45,14 @@ impl Actor for Websocket {
     async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
-        mut cluster: Self::Dependencies,
+        cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        let mut websocket = rt
+        let websocket = rt
             .actor_event_handle::<backstage::prefabs::websocket::Websocket<Self>>()
             .await
             .ok_or_else(|| anyhow::anyhow!("No websocket!"))?;
@@ -70,16 +70,13 @@ impl Actor for Websocket {
                 match msg {
                     ScyllaWebsocketEvent::Topology(t) => match t {
                         Topology::AddNode(addr) => {
-                            cluster.send(ClusterEvent::AddNode(addr, Some(sender))).await.ok();
+                            cluster.send(ClusterEvent::AddNode(addr, Some(sender))).ok();
                         }
                         Topology::RemoveNode(addr) => {
-                            cluster.send(ClusterEvent::RemoveNode(addr, Some(sender))).await.ok();
+                            cluster.send(ClusterEvent::RemoveNode(addr, Some(sender))).ok();
                         }
                         Topology::BuildRing(uniform_rf) => {
-                            cluster
-                                .send(ClusterEvent::BuildRing(uniform_rf, Some(sender)))
-                                .await
-                                .ok();
+                            cluster.send(ClusterEvent::BuildRing(uniform_rf, Some(sender))).ok();
                         }
                     },
                 }
@@ -90,7 +87,6 @@ impl Actor for Websocket {
                             addr,
                             serde_json::to_string(&res).unwrap().into(),
                         ))
-                        .await
                         .map_err(|e| anyhow::anyhow!("Websocket error: {}", e))?;
                 }
             }

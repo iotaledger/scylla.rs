@@ -28,7 +28,7 @@ type SenderEvent = i16;
 impl Actor for Sender {
     type Dependencies = Pool<MapPool<Reporter, ReporterId>>;
     type Event = SenderEvent;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -53,19 +53,14 @@ impl Actor for Sender {
             if let Some(payload) = self.payloads[stream_id as usize].as_ref_payload() {
                 if let Err(io_error) = self.socket.write_all(payload).await {
                     // send to reporter ReporterEvent::Err(io_error, stream_id)
-                    if let Some(mut reporter_handle) = reporter_pool
-                        .read()
-                        .await
-                        .get(&compute_reporter_num(stream_id, self.appends_num))
-                        .cloned()
-                    {
-                        backstage::actor::Sender::send(
-                            &mut reporter_handle,
+                    if reporter_pool
+                        .send(
+                            &compute_reporter_num(stream_id, self.appends_num),
                             ReporterEvent::Err(anyhow!(io_error), stream_id),
                         )
                         .await
-                        .unwrap_or_else(|e| error!("{}", e))
-                    } else {
+                        .is_err()
+                    {
                         error!("No reporter found for stream {}!", stream_id);
                     }
                 }

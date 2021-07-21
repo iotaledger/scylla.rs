@@ -65,7 +65,7 @@ pub fn build_cluster(
 impl Actor for Cluster {
     type Dependencies = ();
     type Event = ClusterEvent;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -87,7 +87,7 @@ impl Actor for Cluster {
         rt.update_status(ServiceStatus::Running).await.ok();
         let mut reporter_pools: Option<HashMap<SocketAddr, Pool<MapPool<Reporter, u8>>>> = None;
         let mut last_uniform_rf = None;
-        let mut my_handle = rt.handle();
+        let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster
@@ -160,7 +160,7 @@ impl Actor for Cluster {
                             // remove the shard_reporters for "address" node in shard_id from registry
                             self.registry.remove(&node_info.address);
                         }
-                        node_info.node_handle.send(NodeEvent::Shutdown).await.ok();
+                        node_info.node_handle.send(NodeEvent::Shutdown).ok();
                         // update waiting for build to true
                         self.should_build = true;
                         // note: the node tree will not get shutdown unless we drop the ring
@@ -190,10 +190,9 @@ impl Actor for Cluster {
                         last_uniform_rf = Some(uniform_rf);
                         for (addr, pool) in reporter_pools.as_ref().unwrap() {
                             let handles = pool
-                                .read()
-                                .await
                                 .iter()
-                                .map(|(id, h)| (*id, h.clone().into_inner().into_inner()))
+                                .await
+                                .map(|(id, h)| (id, h.into_inner().into_inner()))
                                 .collect::<HashMap<_, _>>();
 
                             self.registry.insert(*addr, handles);
@@ -229,45 +228,36 @@ impl Actor for Cluster {
                         // reply to scylla/dashboard
                         responder.map(|r| r.send(Ok(Topology::BuildRing(uniform_rf))));
                     } else {
-                        my_handle
-                            .send(ClusterEvent::BuildRing(uniform_rf, responder))
-                            .await
-                            .ok();
+                        my_handle.send(ClusterEvent::BuildRing(uniform_rf, responder)).ok();
                         //responder.send(Err(Topology::BuildRing(uniform_rf)));
                     }
                 }
                 ClusterEvent::ReportExit(res) => match res {
                     Ok(s) => {
-                        my_handle
-                            .send(ClusterEvent::RemoveNode(s.state.address, None))
-                            .await
-                            .ok();
+                        my_handle.send(ClusterEvent::RemoveNode(s.state.address, None)).ok();
                         my_handle
                             .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
-                            .await
                             .ok();
                     }
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
                             let address = e.state.address;
-                            my_handle.send(ClusterEvent::RemoveNode(address, None)).await.ok();
-                            my_handle.send(ClusterEvent::AddNode(address, None)).await.ok();
+                            my_handle.send(ClusterEvent::RemoveNode(address, None)).ok();
+                            my_handle.send(ClusterEvent::AddNode(address, None)).ok();
                             my_handle
                                 .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
-                                .await
                                 .ok();
                         }
                         ActorRequest::Reschedule(dur) => {
-                            let mut handle_clone = my_handle.clone();
+                            let handle_clone = my_handle.clone();
                             let address = e.state.address;
-                            my_handle.send(ClusterEvent::RemoveNode(address, None)).await.ok();
+                            my_handle.send(ClusterEvent::RemoveNode(address, None)).ok();
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
-                                handle_clone.send(ClusterEvent::AddNode(address, None)).await.ok();
+                                handle_clone.send(ClusterEvent::AddNode(address, None)).ok();
                                 handle_clone
                                     .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
-                                    .await
                                     .ok();
                             });
                         }

@@ -46,7 +46,7 @@ pub fn build_reporter(
 impl Actor for Reporter {
     type Dependencies = Act<super::sender::Sender>;
     type Event = ReporterEvent;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -58,7 +58,7 @@ impl Actor for Reporter {
     async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
-        mut sender: Self::Dependencies,
+        sender: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -78,7 +78,7 @@ impl Actor for Reporter {
                         // store payload as reusable at payloads[stream]
                         self.payloads[stream as usize].as_mut().replace(payload);
                         self.workers.insert(stream, worker);
-                        sender.send(stream).await.unwrap_or_else(|e| error!("{}", e));
+                        sender.send(stream).unwrap_or_else(|e| error!("{}", e));
                     } else {
                         // Send overload to the worker in-case we don't have anymore streams
                         worker

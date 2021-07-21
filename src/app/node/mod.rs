@@ -46,7 +46,7 @@ pub fn build_node(
 impl Actor for Node {
     type Dependencies = Act<Cluster>;
     type Event = NodeEvent;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -58,7 +58,6 @@ impl Actor for Node {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let my_handle = rt.handle();
         // spawn stages
         for shard_id in 0..self.shard_count {
             let stage = stage::StageBuilder::new()
@@ -78,7 +77,7 @@ impl Actor for Node {
     async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
-        mut cluster: Self::Dependencies,
+        cluster: Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -98,7 +97,7 @@ impl Actor for Node {
                     if reporter_pools.len() == self.shard_count as usize {
                         debug!("Sending register reporters event to cluster!");
                         let event = ClusterEvent::RegisterReporters(reporter_pools.clone());
-                        cluster.send(event).await.ok();
+                        cluster.send(event).ok();
                     }
                 }
                 NodeEvent::ReportExit(res) => match res {
@@ -109,7 +108,7 @@ impl Actor for Node {
                                 .await?;
                         }
                         ActorRequest::Reschedule(dur) => {
-                            let mut handle_clone = my_handle.clone();
+                            let handle_clone = my_handle.clone();
                             let evt = Self::Event::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
@@ -118,7 +117,7 @@ impl Actor for Node {
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
-                                handle_clone.send(evt).await.ok();
+                                handle_clone.send(evt).ok();
                             });
                         }
                         ActorRequest::Finish => {

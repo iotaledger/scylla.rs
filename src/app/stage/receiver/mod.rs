@@ -41,7 +41,7 @@ pub fn build_receiver(socket: OwnedReadHalf, payloads: Payloads, buffer_size: us
 impl Actor for Receiver {
     type Dependencies = Pool<MapPool<Reporter, ReporterId>>;
     type Event = ();
-    type Channel = TokioChannel<()>;
+    type Channel = UnboundedTokioChannel<()>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -147,19 +147,15 @@ impl Receiver {
             padding += self.total_length - start;
             giveload[start..self.total_length].copy_from_slice(&self.buffer[old_padding..padding]);
             // tell reporter that giveload is ready.
-            let mut reporter_handle = reporters_handles
-                .read()
+            reporters_handles
+                .send(
+                    &compute_reporter_num(self.stream_id, self.appends_num),
+                    ReporterEvent::Response {
+                        stream_id: self.stream_id,
+                    },
+                )
                 .await
-                .get(&compute_reporter_num(self.stream_id, self.appends_num))
-                .cloned()
-                .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
-
-            reporter_handle
-                .send(ReporterEvent::Response {
-                    stream_id: self.stream_id,
-                })
-                .await
-                .unwrap_or_else(|e| error!("{}", e));
+                .map_err(|_| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
             // set header to false
             self.header = false;
             // update current_length

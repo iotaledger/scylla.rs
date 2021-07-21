@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::{cluster::Cluster, websocket::Websocket, *};
 pub(crate) use crate::cql::{CqlBuilder, PasswordAuth};
-use std::net::SocketAddr;
+use std::{convert::TryFrom, fmt::Display, net::SocketAddr};
 
 /// Application state
 pub struct Scylla {
@@ -47,11 +47,42 @@ pub fn build_scylla(
     }
 }
 
+#[derive(Clone)]
+pub enum ScyllaStatus {
+    Maintenance,
+    Degraded,
+}
+
+impl Display for ScyllaStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ScyllaStatus::Maintenance => "Maintenance",
+                ScyllaStatus::Degraded => "Degraded",
+            }
+        )
+    }
+}
+
+impl TryFrom<&str> for ScyllaStatus {
+    type Error = anyhow::Error;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Ok(match s {
+            "Maintenance" => ScyllaStatus::Maintenance,
+            "Degraded" => ScyllaStatus::Degraded,
+            _ => anyhow::bail!("Invalid Scylla Status!"),
+        })
+    }
+}
+
 #[async_trait]
 impl Actor for Scylla {
     type Dependencies = ();
     type Event = ScyllaEvent;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -99,10 +130,18 @@ impl Actor for Scylla {
                     let service_tree = rt.service_tree().await;
                     if service_tree.children.iter().any(|s| s.service.is_initializing()) {
                         rt.update_status(ServiceStatus::Initializing).await.ok();
-                    } else if service_tree.children.iter().any(|s| s.service.is_maintenance()) {
-                        rt.update_status(ServiceStatus::Maintenance).await.ok();
-                    } else if service_tree.children.iter().any(|s| s.service.is_degraded()) {
-                        rt.update_status(ServiceStatus::Degraded).await.ok();
+                    } else if service_tree
+                        .children
+                        .iter()
+                        .any(|s| s.service.status == ScyllaStatus::Maintenance.to_string())
+                    {
+                        rt.update_status(ScyllaStatus::Maintenance).await.ok();
+                    } else if service_tree
+                        .children
+                        .iter()
+                        .any(|s| s.service.status == ScyllaStatus::Degraded.to_string())
+                    {
+                        rt.update_status(ScyllaStatus::Degraded).await.ok();
                     } else if service_tree.children.iter().all(|s| s.service.is_running()) {
                         rt.update_status(ServiceStatus::Running).await.ok();
                     }
@@ -119,7 +158,7 @@ impl Actor for Scylla {
                             }
                         },
                         ActorRequest::Reschedule(dur) => {
-                            let mut handle = rt.handle();
+                            let handle = rt.handle();
                             let evt = Self::Event::report_err(ErrorReport::new(
                                 e.state,
                                 e.service,
@@ -128,7 +167,7 @@ impl Actor for Scylla {
                             let dur = *dur;
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
-                                handle.send(evt).await.ok();
+                                handle.send(evt).ok();
                             });
                         }
                         ActorRequest::Finish => error!("{}", e.error),

@@ -61,7 +61,7 @@ pub fn build_stage(
 impl Actor for Stage {
     type Dependencies = ();
     type Event = StageEvent;
-    type Channel = TokioChannel<Self::Event>;
+    type Channel = UnboundedTokioChannel<Self::Event>;
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
@@ -73,11 +73,11 @@ impl Actor for Stage {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let mut node = rt
+        let node = rt
             .actor_event_handle::<Node>()
             .await
             .ok_or_else(|| anyhow::anyhow!("No Node!"))?;
-        let mut my_handle = rt.handle();
+        let my_handle = rt.handle();
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
         let last_range = self.appends_num * (self.reporter_count as i16);
@@ -116,9 +116,9 @@ impl Actor for Stage {
 
         info!("Sending register reporters event to node!");
         let event = NodeEvent::RegisterReporters(self.shard_id, reporter_pool);
-        node.send(event).await.ok();
+        node.send(event).ok();
 
-        my_handle.send(StageEvent::Connect).await.ok();
+        my_handle.send(StageEvent::Connect).ok();
         Ok(())
     }
 
@@ -133,7 +133,7 @@ impl Actor for Stage {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let mut my_handle = rt.handle();
+        let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
                 StageEvent::Connect => {
@@ -170,7 +170,7 @@ impl Actor for Stage {
                             warn!("Waiting to reconnect after 5 seconds");
                             tokio::time::sleep(Duration::from_secs(5)).await;
                             // try to reconnect
-                            my_handle.send(StageEvent::Connect).await.ok();
+                            my_handle.send(StageEvent::Connect).ok();
                         }
                     }
                 }
