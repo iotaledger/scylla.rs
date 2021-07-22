@@ -1,16 +1,15 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use tokio::sync::oneshot;
-
 use super::{
     node::{Node, NodeEvent},
-    stage::Reporter,
+    stage::{Reporter, ReporterId},
     websocket::Topology,
     *,
 };
 use crate::app::ring::{build_ring, initialize_ring, ArcRing, Registry, Ring, WeakRing};
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio::sync::{oneshot, RwLock};
 
 pub(crate) type Nodes = HashMap<SocketAddr, NodeInfo>;
 
@@ -85,7 +84,12 @@ impl Actor for Cluster {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Running).await.ok();
-        let mut reporter_pools: Option<HashMap<SocketAddr, Pool<MapPool<Reporter, u8>>>> = None;
+        let reporter_pools = rt
+            .add_resource(Arc::new(RwLock::new(HashMap::<
+                SocketAddr,
+                Pool<MapPool<Reporter, ReporterId>>,
+            >::new())))
+            .await;
         let mut last_uniform_rf = None;
         let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
@@ -139,6 +143,7 @@ impl Actor for Cluster {
                                 };
                                 // add node_info to nodes
                                 self.nodes.insert(address, node_info);
+                                self.should_build = true;
                                 responder.map(|r| r.send(Ok(Topology::AddNode(address))));
                             } else {
                                 responder.map(|r| r.send(Err(Topology::AddNode(address))));
@@ -154,6 +159,7 @@ impl Actor for Cluster {
                 ClusterEvent::RemoveNode(address, responder) => {
                     // get and remove node_info
                     if let Some(mut node_info) = self.nodes.remove(&address) {
+                        reporter_pools.write().await.retain(|addr, _| addr.ip() != address.ip());
                         // update(remove from) registry
                         for shard_id in 0..node_info.shard_count {
                             // make node_id to reflect the correct shard_id
@@ -173,23 +179,11 @@ impl Actor for Cluster {
                         responder.map(|r| r.send(Err(Topology::RemoveNode(address))));
                     };
                 }
-                ClusterEvent::RegisterReporters(pools) => {
-                    match reporter_pools {
-                        Some(ref mut map) => {
-                            map.extend(pools);
-                        }
-                        None => {
-                            reporter_pools = Some(pools);
-                        }
-                    }
-                    // update waiting for build to true
-                    self.should_build = true;
-                }
                 ClusterEvent::BuildRing(uniform_rf, responder) => {
                     if self.should_build {
                         warn!("Rebuilding RING");
                         last_uniform_rf = Some(uniform_rf);
-                        for (addr, pool) in reporter_pools.as_ref().unwrap() {
+                        for (addr, pool) in reporter_pools.read().await.iter() {
                             let handles = pool
                                 .iter()
                                 .await
@@ -229,8 +223,7 @@ impl Actor for Cluster {
                         // reply to scylla/dashboard
                         responder.map(|r| r.send(Ok(Topology::BuildRing(uniform_rf))));
                     } else {
-                        my_handle.send(ClusterEvent::BuildRing(uniform_rf, responder)).ok();
-                        //responder.send(Err(Topology::BuildRing(uniform_rf)));
+                        responder.map(|r| r.send(Err(Topology::BuildRing(uniform_rf))));
                     }
                 }
                 ClusterEvent::ReportExit(res) => match res {
@@ -255,11 +248,22 @@ impl Actor for Cluster {
                             my_handle.send(ClusterEvent::RemoveNode(address, None)).ok();
                             let dur = *dur;
                             tokio::spawn(async move {
-                                tokio::time::sleep(dur).await;
-                                handle_clone.send(ClusterEvent::AddNode(address, None)).ok();
-                                handle_clone
-                                    .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
-                                    .ok();
+                                loop {
+                                    tokio::time::sleep(dur).await;
+                                    let (sender, receiver) = tokio::sync::oneshot::channel();
+                                    if handle_clone.send(ClusterEvent::AddNode(address, Some(sender))).is_ok() {
+                                        if let Ok(Ok(_)) = receiver.await {
+                                            log::warn!("Successfully added node!");
+                                            handle_clone
+                                                .send(ClusterEvent::BuildRing(last_uniform_rf.unwrap_or(1), None))
+                                                .ok();
+                                            break;
+                                        }
+                                    } else {
+                                        log::warn!("Handle can't send!");
+                                        break;
+                                    }
+                                }
                             });
                         }
                         ActorRequest::Finish => {
@@ -321,8 +325,6 @@ impl Cluster {
 /// Cluster Event type
 #[supervise(Node)]
 pub enum ClusterEvent {
-    /// Used by the Node to register its reporters with the cluster
-    RegisterReporters(HashMap<SocketAddr, Pool<MapPool<Reporter, u8>>>),
     /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
     AddNode(SocketAddr, Option<oneshot::Sender<Result<Topology, Topology>>>),
     /// Used by Scylla/dashboard to remove/disconnect from existing scylla node in the cluster

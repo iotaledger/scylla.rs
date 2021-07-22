@@ -2,25 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::app::{
     cluster::{NodeInfo, Nodes},
-    stage::Reporter,
-    stage::ReporterEvent,
+    stage::{Reporter, ReporterEvent, ReporterId},
     worker::WorkerError,
 };
 use backstage::actor::Actor;
 use log::*;
 use rand::{distributions::Uniform, prelude::ThreadRng, thread_rng, Rng};
-use std::net::SocketAddr;
 use std::{
     cell::RefCell,
     collections::HashMap,
     i64::{MAX, MIN},
+    net::SocketAddr,
     sync::{
         atomic::{AtomicPtr, Ordering},
         Arc, Weak,
     },
 };
 
-use super::stage::ReporterId;
 // types
 /// The token of Ring.
 pub type Token = i64;

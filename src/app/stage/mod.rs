@@ -1,14 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    node::{Node, NodeEvent},
-    *,
-};
+use super::*;
 pub(crate) use reporter::ReporterId;
 pub use reporter::{Reporter, ReporterEvent};
 use std::{borrow::Cow, cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, sync::RwLock};
 
 mod receiver;
 mod reporter;
@@ -73,10 +70,6 @@ impl Actor for Stage {
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
         rt.update_status(ServiceStatus::Initializing).await.ok();
-        let node = rt
-            .actor_event_handle::<Node>()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No Node!"))?;
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
         let last_range = self.appends_num * (self.reporter_count as i16);
@@ -116,9 +109,14 @@ impl Actor for Stage {
             .await
             .ok_or_else(|| anyhow::anyhow!("Reporter pool missing!"))?;
 
-        info!("Sending register reporters event to node!");
-        let event = NodeEvent::RegisterReporters(self.shard_id, reporter_pool);
-        node.send(event).ok();
+        let mut socket_addr = self.address;
+        // assign shard_id to socket_addr as it's going be used later as key in registry
+        socket_addr.set_port(self.shard_id);
+        let reporter_pools = rt
+            .resource::<Arc<RwLock<HashMap<SocketAddr, Pool<MapPool<Reporter, ReporterId>>>>>>()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Reporter pools resource missing!"))?;
+        reporter_pools.write().await.insert(socket_addr, reporter_pool);
         Ok(())
     }
 
@@ -214,7 +212,7 @@ impl Into<ActorError> for StageError {
             StageError::CannotCreateStreams => ActorError::RuntimeError(ActorRequest::Panic),
             StageError::ConnectionFailed(_) => ActorError::Other {
                 source: anyhow::anyhow!(self),
-                request: ActorRequest::Reschedule(Duration::from_secs(5)),
+                request: ActorRequest::Finish,
             },
             StageError::ConnectionLost(_) => ActorError::Other {
                 source: anyhow::anyhow!(self),

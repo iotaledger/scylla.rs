@@ -21,7 +21,7 @@ pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> 
         ws_stream.send(m).await?;
         // await till the node is added
         while let Some(msg) = ws_stream.next().await {
-            let msg = msg.map_err(|_| anyhow!("Expected message from the WebSocketStream while building a ring"))?;
+            let msg = msg.map_err(|_| anyhow!("Expected message from the WebSocketStream while adding a node"))?;
             let msg = msg.to_text()?;
             if let Ok(event) = serde_json::from_str::<Result<Topology, Topology>>(msg) {
                 if let Ok(Topology::AddNode(_)) = event {

@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::app::stage::Reporter;
 pub use crate::app::stage::ReporterEvent;
 use crate::{
-    app::access::*,
+    app::{access::*, stage::Reporter},
     cql::{Consistency, CqlError, Decoder, Prepare},
 };
 use anyhow::anyhow;
