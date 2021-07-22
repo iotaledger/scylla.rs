@@ -7,7 +7,7 @@ use super::{
 };
 pub(crate) use reporter::ReporterId;
 pub use reporter::{Reporter, ReporterEvent};
-use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{borrow::Cow, cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::net::TcpStream;
 
 mod receiver;
@@ -77,7 +77,6 @@ impl Actor for Stage {
             .actor_event_handle::<Node>()
             .await
             .ok_or_else(|| anyhow::anyhow!("No Node!"))?;
-        let my_handle = rt.handle();
         // init Reusable payloads holder to enable reporter/sender/receiver
         // to reuse the payload whenever is possible.
         let last_range = self.appends_num * (self.reporter_count as i16);
@@ -112,13 +111,14 @@ impl Actor for Stage {
             }
         }
 
-        let reporter_pool = rt.pool::<MapPool<Reporter, ReporterId>>().await.unwrap();
+        let reporter_pool = rt
+            .pool::<MapPool<Reporter, ReporterId>>()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Reporter pool missing!"))?;
 
         info!("Sending register reporters event to node!");
         let event = NodeEvent::RegisterReporters(self.shard_id, reporter_pool);
         node.send(event).ok();
-
-        my_handle.send(StageEvent::Connect).ok();
         Ok(())
     }
 
@@ -132,68 +132,66 @@ impl Actor for Stage {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
+        // Connect to the shard after initialization so that we don't stall the
+        // node while we wait for a connection
+        let cql_builder = CqlBuilder::new()
+            .authenticator(self.authenticator.clone())
+            .address(self.address)
+            .shard_id(self.shard_id)
+            .recv_buffer_size(self.recv_buffer_size)
+            .send_buffer_size(self.send_buffer_size)
+            .build();
+        match cql_builder.await {
+            Ok(cql_conn) => {
+                // Split the stream
+                let stream: TcpStream = cql_conn.into();
+                let (socket_rx, socket_tx) = stream.into_split();
+                // spawn sender
+                let sender = sender::SenderBuilder::new()
+                    .socket(socket_tx)
+                    .appends_num(self.appends_num)
+                    .payloads(self.payloads.clone())
+                    .build();
+                rt.spawn_actor(sender).await?;
+                // spawn receiver
+                let receiver = receiver::ReceiverBuilder::new()
+                    .socket(socket_rx)
+                    .appends_num(self.appends_num)
+                    .payloads(self.payloads.clone())
+                    .buffer_size(self.buffer_size)
+                    .build();
+                rt.spawn_actor(receiver).await?;
+            }
+            Err(_) => {
+                return Err(StageError::ConnectionFailed(self.address).into());
+            }
+        }
         rt.update_status(ServiceStatus::Running).await.ok();
-        let my_handle = rt.handle();
         while let Some(event) = rt.next_event().await {
             match event {
-                StageEvent::Connect => {
-                    // cql connect
-                    let cql_builder = CqlBuilder::new()
-                        .authenticator(self.authenticator.clone())
-                        .address(self.address)
-                        .shard_id(self.shard_id)
-                        .recv_buffer_size(self.recv_buffer_size)
-                        .send_buffer_size(self.send_buffer_size)
-                        .build();
-                    match cql_builder.await {
-                        Ok(cql_conn) => {
-                            // Split the stream
-                            let stream: TcpStream = cql_conn.into();
-                            let (socket_rx, socket_tx) = stream.into_split();
-                            // spawn sender
-                            let sender = sender::SenderBuilder::new()
-                                .socket(socket_tx)
-                                .appends_num(self.appends_num)
-                                .payloads(self.payloads.clone())
-                                .build();
-                            rt.spawn_actor(sender).await?;
-                            // spawn receiver
-                            let receiver = receiver::ReceiverBuilder::new()
-                                .socket(socket_rx)
-                                .appends_num(self.appends_num)
-                                .payloads(self.payloads.clone())
-                                .buffer_size(self.buffer_size)
-                                .build();
-                            rt.spawn_actor(receiver).await?;
-                        }
-                        Err(_) => {
-                            warn!("Waiting to reconnect after 5 seconds");
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            // try to reconnect
-                            my_handle.send(StageEvent::Connect).ok();
-                        }
-                    }
-                }
                 StageEvent::ReportExit(res) => match res {
-                    Ok(s) => break,
+                    Ok(_) => break,
                     Err(e) => match e.state {
+                        ChildStates::Receiver(_) => {
+                            // Something went wrong with the receiver
+                            rt.update_status(ScyllaStatus::Degraded).await.ok();
+                            return Err(StageError::ConnectionLost(self.address).into());
+                        }
                         // Shouldn't happen
                         ChildStates::Reporter(_) => break,
-                        ChildStates::Receiver(_) => return Err(e.error),
                         // Shouldn't happen
                         ChildStates::Sender(_) => break,
                     },
                 },
-                StageEvent::StatusChange(s) => match s.actor_type {
-                    // TODO
-                    Children::Reporter => (),
-                    Children::Receiver => (),
-                    Children::Sender => (),
-                },
+                StageEvent::StatusChange(_) => (),
             }
         }
         rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
+    }
+
+    fn name(&self) -> Cow<'static, str> {
+        format!("Stage ({}|{})", self.address, self.shard_id).into()
     }
 }
 
@@ -203,6 +201,10 @@ pub enum StageError {
     NoReusablePayloads,
     #[error("Failed to create streams!")]
     CannotCreateStreams,
+    #[error("Failed to connect to {0}!")]
+    ConnectionFailed(SocketAddr),
+    #[error("Connection lost at {0}!")]
+    ConnectionLost(SocketAddr),
 }
 
 impl Into<ActorError> for StageError {
@@ -210,16 +212,21 @@ impl Into<ActorError> for StageError {
         match self {
             StageError::NoReusablePayloads => ActorError::RuntimeError(ActorRequest::Panic),
             StageError::CannotCreateStreams => ActorError::RuntimeError(ActorRequest::Panic),
+            StageError::ConnectionFailed(_) => ActorError::Other {
+                source: anyhow::anyhow!(self),
+                request: ActorRequest::Reschedule(Duration::from_secs(5)),
+            },
+            StageError::ConnectionLost(_) => ActorError::Other {
+                source: anyhow::anyhow!(self),
+                request: ActorRequest::Reschedule(Duration::from_secs(5)),
+            },
         }
     }
 }
 
 /// Stage event enum.
 #[supervise(Reporter, receiver::Receiver, sender::Sender)]
-pub enum StageEvent {
-    /// Establish connection to scylla shard.
-    Connect,
-}
+pub enum StageEvent {}
 
 #[derive(Default)]
 /// The reusable sender payload.

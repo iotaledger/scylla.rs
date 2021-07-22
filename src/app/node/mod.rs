@@ -104,10 +104,13 @@ impl Actor for Node {
                     Ok(_) => break,
                     Err(e) => match e.error.request() {
                         ActorRequest::Restart => {
+                            warn!("Respawning stage after error: {}", e.error);
+                            rt.print_root().await;
                             rt.spawn_into_pool_keyed::<MapPool<_, u16>>(e.state.shard_id, e.state)
                                 .await?;
                         }
                         ActorRequest::Reschedule(dur) => {
+                            warn!("Respawning stage after {} ms", dur.as_millis());
                             let handle_clone = my_handle.clone();
                             let evt = Self::Event::report_err(ErrorReport::new(
                                 e.state,
@@ -127,7 +130,18 @@ impl Actor for Node {
                         ActorRequest::Panic => panic!("{}", e.error),
                     },
                 },
-                NodeEvent::StatusChange(_) => (),
+                NodeEvent::StatusChange(_) => {
+                    let service_tree = rt.service_tree().await;
+                    if service_tree
+                        .children
+                        .iter()
+                        .any(|s| s.status == ScyllaStatus::Degraded.as_str())
+                    {
+                        rt.update_status(ScyllaStatus::Degraded).await.ok();
+                    } else {
+                        rt.update_status(ServiceStatus::Running).await.ok();
+                    }
+                }
                 NodeEvent::Shutdown => break,
             }
         }
@@ -139,7 +153,8 @@ impl Actor for Node {
 /// Node event enum.
 #[supervise(Stage)]
 pub enum NodeEvent {
-    /// Register the stage reporters.
+    /// Register the stage reporters
     RegisterReporters(u16, Pool<MapPool<Reporter, ReporterId>>),
+    /// Shutdown this node
     Shutdown,
 }

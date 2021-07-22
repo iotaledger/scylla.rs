@@ -19,7 +19,7 @@ pub struct Websocket {
 
 #[async_trait]
 impl Actor for Websocket {
-    type Dependencies = Act<Cluster>;
+    type Dependencies = (Act<Cluster>, Act<backstage::prefabs::websocket::Websocket<Self>>);
     type Event = WebsocketRequest;
     type Channel = UnboundedTokioChannel<Self::Event>;
 
@@ -45,17 +45,13 @@ impl Actor for Websocket {
     async fn run<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
         rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
-        cluster: Self::Dependencies,
+        (cluster, websocket): Self::Dependencies,
     ) -> Result<(), ActorError>
     where
         Self: Sized,
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        let websocket = rt
-            .actor_event_handle::<backstage::prefabs::websocket::Websocket<Self>>()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No websocket!"))?;
         rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(WebsocketRequest(addr, msg)) = rt.next_event().await {
             debug!("Received message {} from {}", msg, addr);

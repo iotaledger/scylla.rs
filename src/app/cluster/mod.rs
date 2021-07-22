@@ -93,7 +93,6 @@ impl Actor for Cluster {
                 // Maybe let the variant to set the PasswordAuth instead of forcing global_auth at the cluster
                 // level?
                 ClusterEvent::AddNode(address, responder) => {
-                    info!("Received add node event!");
                     // make sure it doesn't already exist in our cluster
                     if self.nodes.contains_key(&address) {
                         responder.map(|r| r.send(Err(Topology::AddNode(address))));
@@ -107,8 +106,10 @@ impl Actor for Cluster {
                         .send_buffer_size(self.send_buffer_size)
                         .authenticator(self.authenticator.clone())
                         .build();
+                    info!("Connecting to node at {}", address);
                     match cql.await {
                         Ok(mut cqlconn) => {
+                            info!("Successfully connected to node!");
                             // add it as microservice
                             let shard_count = cqlconn.shard_count();
                             if let (Some(dc), Some(tokens)) = (cqlconn.take_dc(), cqlconn.take_tokens()) {
@@ -268,9 +269,7 @@ impl Actor for Cluster {
                         ActorRequest::Panic => panic!("{}", e.error),
                     },
                 },
-                ClusterEvent::StatusChange(s) => {
-                    // TODO
-                }
+                ClusterEvent::StatusChange(_) => (),
             }
         }
         rt.update_status(ServiceStatus::Stopping).await.ok();

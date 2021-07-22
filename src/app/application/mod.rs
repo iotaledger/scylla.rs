@@ -53,16 +53,19 @@ pub enum ScyllaStatus {
     Degraded,
 }
 
+impl ScyllaStatus {
+    /// Get the const string representation of the status
+    pub const fn as_str(&self) -> &str {
+        match self {
+            ScyllaStatus::Maintenance => "Maintenance",
+            ScyllaStatus::Degraded => "Degraded",
+        }
+    }
+}
+
 impl Display for ScyllaStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                ScyllaStatus::Maintenance => "Maintenance",
-                ScyllaStatus::Degraded => "Degraded",
-            }
-        )
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -133,13 +136,13 @@ impl Actor for Scylla {
                     } else if service_tree
                         .children
                         .iter()
-                        .any(|s| s.service.status == ScyllaStatus::Maintenance.to_string())
+                        .any(|s| s.service.status == ScyllaStatus::Maintenance.as_str())
                     {
                         rt.update_status(ScyllaStatus::Maintenance).await.ok();
                     } else if service_tree
                         .children
                         .iter()
-                        .any(|s| s.service.status == ScyllaStatus::Degraded.to_string())
+                        .any(|s| s.service.status == ScyllaStatus::Degraded.as_str())
                     {
                         rt.update_status(ScyllaStatus::Degraded).await.ok();
                     } else if service_tree.children.iter().all(|s| s.service.is_running()) {

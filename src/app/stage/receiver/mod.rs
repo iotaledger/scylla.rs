@@ -84,7 +84,7 @@ impl Actor for Receiver {
                 break;
             }
         }
-        rt.update_status(ServiceStatus::Stopped).await.ok();
+        rt.update_status(ScyllaStatus::Degraded).await.ok();
         Err(ActorError::RuntimeError(ActorRequest::Restart))
     }
 }
