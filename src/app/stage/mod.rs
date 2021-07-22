@@ -4,7 +4,7 @@
 use super::*;
 pub(crate) use reporter::ReporterId;
 pub use reporter::{Reporter, ReporterEvent};
-use std::{borrow::Cow, cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{cell::UnsafeCell, collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpStream, sync::RwLock};
 
 mod receiver;

@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use backstage::prelude::*;
 use log::*;
 use serde::{Deserialize, Serialize};
-use std::{marker::PhantomData, time::Duration};
+use std::{borrow::Cow, marker::PhantomData, time::Duration};
 use thiserror::Error;
 pub use websocket::add_nodes::add_nodes;
 pub use worker::{Worker, WorkerError};

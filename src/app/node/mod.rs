@@ -100,6 +100,10 @@ impl Actor for Node {
         rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
+
+    fn name(&self) -> Cow<'static, str> {
+        format!("Node ({})", self.address).into()
+    }
 }
 
 /// Node event enum.

@@ -108,6 +108,10 @@ impl Actor for Reporter {
         rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
+
+    fn name(&self) -> Cow<'static, str> {
+        format!("Reporter ({}|{})", self.address, self.reporter_id).into()
+    }
 }
 
 /// Reporter event enum.

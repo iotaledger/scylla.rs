@@ -90,6 +90,10 @@ impl Actor for Websocket {
         rt.update_status(ServiceStatus::Stopped).await.ok();
         Ok(())
     }
+
+    fn name(&self) -> Cow<'static, str> {
+        format!("Websocket ({})", self.listen_address).into()
+    }
 }
 
 pub struct WebsocketRequest(SocketAddr, Message);
