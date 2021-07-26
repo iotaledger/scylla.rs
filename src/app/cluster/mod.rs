@@ -68,8 +68,14 @@ impl Actor for Cluster {
 
     async fn init<Reg: RegistryAccess + Send + Sync, Sup: EventDriven>(
         &mut self,
-        _rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
-    ) -> Result<(), ActorError> {
+        rt: &mut ActorScopedRuntime<Self, Reg, Sup>,
+    ) -> Result<(), ActorError>
+    where
+        Self: Sized,
+        Sup::Event: SupervisorEvent,
+        <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
+    {
+        rt.update_status(ScyllaStatus::Disconnected).await.ok();
         Ok(())
     }
 
@@ -83,7 +89,6 @@ impl Actor for Cluster {
         Sup::Event: SupervisorEvent,
         <Sup::Event as SupervisorEvent>::Children: From<PhantomData<Self>>,
     {
-        rt.update_status(ServiceStatus::Running).await.ok();
         let reporter_pools = rt
             .add_resource(Arc::new(RwLock::new(HashMap::<
                 SocketAddr,
@@ -144,6 +149,7 @@ impl Actor for Cluster {
                                 // add node_info to nodes
                                 self.nodes.insert(address, node_info);
                                 self.should_build = true;
+                                rt.update_status(ServiceStatus::Running).await.ok();
                                 responder.map(|r| r.send(Ok(Topology::AddNode(address))));
                             } else {
                                 responder.map(|r| r.send(Err(Topology::AddNode(address))));
@@ -170,6 +176,9 @@ impl Actor for Cluster {
                         node_info.node_handle.send(NodeEvent::Shutdown).ok();
                         // update waiting for build to true
                         self.should_build = true;
+                        if self.nodes.is_empty() {
+                            rt.update_status(ScyllaStatus::Disconnected).await.ok();
+                        }
                         // note: the node tree will not get shutdown unless we drop the ring
                         // but we cannot drop the ring unless we build a new one and atomically swap it,
                         // therefore dashboard admin supposed to BuildRing

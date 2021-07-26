@@ -51,6 +51,7 @@ pub fn build_scylla(
 pub enum ScyllaStatus {
     Maintenance,
     Degraded,
+    Disconnected,
 }
 
 impl ScyllaStatus {
@@ -59,6 +60,7 @@ impl ScyllaStatus {
         match self {
             ScyllaStatus::Maintenance => "Maintenance",
             ScyllaStatus::Degraded => "Degraded",
+            ScyllaStatus::Disconnected => "Disconnected",
         }
     }
 }
@@ -76,6 +78,7 @@ impl TryFrom<&str> for ScyllaStatus {
         Ok(match s {
             "Maintenance" => ScyllaStatus::Maintenance,
             "Degraded" => ScyllaStatus::Degraded,
+            "Disconnected" => ScyllaStatus::Disconnected,
             _ => anyhow::bail!("Invalid Scylla Status!"),
         })
     }
@@ -129,26 +132,12 @@ impl Actor for Scylla {
         rt.update_status(ServiceStatus::Running).await.ok();
         while let Some(event) = rt.next_event().await {
             match event {
-                ScyllaEvent::StatusChange(_) => {
-                    let service_tree = rt.service_tree().await;
-                    if service_tree.children.iter().any(|s| s.service.is_initializing()) {
-                        rt.update_status(ServiceStatus::Initializing).await.ok();
-                    } else if service_tree
-                        .children
-                        .iter()
-                        .any(|s| s.service.status() == ScyllaStatus::Maintenance.as_str())
-                    {
-                        rt.update_status(ScyllaStatus::Maintenance).await.ok();
-                    } else if service_tree
-                        .children
-                        .iter()
-                        .any(|s| s.service.status() == ScyllaStatus::Degraded.as_str())
-                    {
-                        rt.update_status(ScyllaStatus::Degraded).await.ok();
-                    } else if service_tree.children.iter().all(|s| s.service.is_running()) {
-                        rt.update_status(ServiceStatus::Running).await.ok();
+                ScyllaEvent::StatusChange(s) => match s.actor_type {
+                    Children::Cluster => {
+                        rt.update_status(s.service.status().clone()).await?;
                     }
-                }
+                    _ => (),
+                },
                 ScyllaEvent::ReportExit(res) => match res {
                     Ok(_) => break,
                     Err(mut e) => match e.error.request().clone() {
