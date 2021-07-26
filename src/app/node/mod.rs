@@ -88,7 +88,7 @@ impl Actor for Node {
                     Err(e) => return Err(e.error),
                 },
                 NodeEvent::StatusChange(s) => {
-                    if s.service.status == ScyllaStatus::Degraded.as_str() {
+                    if s.service.status() == ScyllaStatus::Degraded.as_str() {
                         rt.update_status(ScyllaStatus::Degraded).await.ok();
                     } else {
                         rt.update_status(ServiceStatus::Running).await.ok();

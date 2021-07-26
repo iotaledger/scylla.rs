@@ -136,13 +136,13 @@ impl Actor for Scylla {
                     } else if service_tree
                         .children
                         .iter()
-                        .any(|s| s.service.status == ScyllaStatus::Maintenance.as_str())
+                        .any(|s| s.service.status() == ScyllaStatus::Maintenance.as_str())
                     {
                         rt.update_status(ScyllaStatus::Maintenance).await.ok();
                     } else if service_tree
                         .children
                         .iter()
-                        .any(|s| s.service.status == ScyllaStatus::Degraded.as_str())
+                        .any(|s| s.service.status() == ScyllaStatus::Degraded.as_str())
                     {
                         rt.update_status(ScyllaStatus::Degraded).await.ok();
                     } else if service_tree.children.iter().all(|s| s.service.is_running()) {
@@ -151,7 +151,7 @@ impl Actor for Scylla {
                 }
                 ScyllaEvent::ReportExit(res) => match res {
                     Ok(_) => break,
-                    Err(e) => match e.error.request() {
+                    Err(mut e) => match e.error.request().clone() {
                         ActorRequest::Restart => match e.state {
                             ChildStates::Cluster(c) => {
                                 rt.spawn_actor(c).await?;
@@ -162,12 +162,8 @@ impl Actor for Scylla {
                         },
                         ActorRequest::Reschedule(dur) => {
                             let handle = rt.handle();
-                            let evt = Self::Event::report_err(ErrorReport::new(
-                                e.state,
-                                e.service,
-                                ActorError::RuntimeError(ActorRequest::Restart),
-                            ));
-                            let dur = *dur;
+                            e.error = ActorError::RuntimeError(ActorRequest::Restart);
+                            let evt = Self::Event::report_err(e);
                             tokio::spawn(async move {
                                 tokio::time::sleep(dur).await;
                                 handle.send(evt).ok();
