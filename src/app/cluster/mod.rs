@@ -149,7 +149,6 @@ impl Actor for Cluster {
                                 // add node_info to nodes
                                 self.nodes.insert(address, node_info);
                                 self.should_build = true;
-                                rt.update_status(ServiceStatus::Running).await.ok();
                                 responder.map(|r| r.send(Ok(Topology::AddNode(address))));
                             } else {
                                 responder.map(|r| r.send(Err(Topology::AddNode(address))));
@@ -229,6 +228,9 @@ impl Actor for Cluster {
                         // reset should_build state to false becaue we built it and we don't want to rebuild again
                         // incase of another BuildRing event
                         self.should_build = false;
+                        if !self.nodes.is_empty() {
+                            rt.update_status(ServiceStatus::Running).await.ok();
+                        }
                         // reply to scylla/dashboard
                         responder.map(|r| r.send(Ok(Topology::BuildRing(uniform_rf))));
                     } else {
