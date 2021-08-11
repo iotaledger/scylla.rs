@@ -8,14 +8,14 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[allow(irrefutable_let_patterns)]
 /// Add new ScyllaDB nodes.
-pub async fn add_nodes(ws: &str, addresses: Vec<SocketAddr>, uniform_rf: u8) -> anyhow::Result<()> {
+pub async fn add_nodes(ws: &str, addresses: &[SocketAddr], uniform_rf: u8) -> anyhow::Result<()> {
     let request = Url::parse(ws)?;
     // connect to dashboard
     let (mut ws_stream, _) = connect_async(request).await?;
     // add scylla nodes
     for address in addresses {
         // add node
-        let msg = ScyllaWebsocketEvent::Topology(Topology::AddNode(address));
+        let msg = ScyllaWebsocketEvent::Topology(Topology::AddNode(*address));
         let j = serde_json::to_string(&msg).map_err(|_| anyhow!("Invalid AddNode event"))?;
         let m = Message::text(j);
         ws_stream.send(m).await?;

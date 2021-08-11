@@ -44,20 +44,20 @@ async fn main() {
                             warn!("Spawning scylla with ({}, {})", n, r);
                             let scylla_handle = scope.spawn_actor_unsupervised(scylla).await?;
                             let ws = format!("ws://{}/", "127.0.0.1:8080");
-                            let nodes = vec![([127, 0, 0, 1], 9042).into()];
-                            match add_nodes(&ws, nodes, 1).await {
+                            let nodes = [([127, 0, 0, 1], 9042).into()];
+                            match add_nodes(&ws, &nodes, 1).await {
                                 Ok(_) => match init_database(n).await {
                                     Ok(time) => {
                                         *t.lock().await = time;
                                     }
                                     Err(e) => {
                                         error!("{}", e);
-                                        //scope.print_root().await;
+                                        // scope.print_root().await;
                                     }
                                 },
                                 Err(e) => {
                                     error!("{}", e);
-                                    //scope.print_root().await;
+                                    // scope.print_root().await;
                                 }
                             }
                             scylla_handle.send(ScyllaEvent::Shutdown).ok();

@@ -21,25 +21,26 @@ async fn main() {
         .reporter_count(2)
         .local_dc("datacenter1".to_owned());
     // create apps_builder and build apps
-    RuntimeScope::<ActorRegistry>::launch(|scope| {
+    RuntimeScope::<ArcedRegistry>::launch(|scope| {
         async move {
             let scylla_handle = scope.spawn_actor_unsupervised(scylla_builder.build()).await?;
             tokio::task::spawn(ctrl_c(scylla_handle));
             let ws = format!("ws://{}/", "127.0.0.1:8080");
-            let nodes = vec![([172, 17, 0, 2], 9042).into()];
-            match add_nodes(&ws, nodes, 1).await {
+            let nodes = [([127, 0, 0, 1], 9042).into()];
+            log::debug!("{}", scope.root_service_tree().await?);
+            match add_nodes(&ws, &nodes, 1).await {
                 Ok(_) => match init_database().await {
-                    Ok(_) => log::debug!("{}", scope.service_tree().await),
+                    Ok(_) => log::debug!("{}", scope.root_service_tree().await?),
                     Err(e) => {
                         error!("{}", e);
-                        //scope.print_root().await;
-                        log::debug!("{}", scope.service_tree().await);
+                        // scope.print_root().await;
+                        log::debug!("{}", scope.root_service_tree().await?);
                     }
                 },
                 Err(e) => {
                     error!("{}", e);
-                    //scope.print_root().await;
-                    log::debug!("{}", scope.service_tree().await);
+                    // scope.print_root().await;
+                    log::debug!("{}", scope.root_service_tree().await?);
                 }
             }
             Ok(())
@@ -56,6 +57,7 @@ async fn ctrl_c(shutdown_handle: Act<Scylla>) {
 }
 
 async fn init_database() -> anyhow::Result<()> {
+    warn!("Initializing database");
     let (sender, mut inbox) = unbounded_channel::<Result<(), WorkerError>>();
     let worker = BatchWorker::boxed(sender.clone());
     let token = 1;
