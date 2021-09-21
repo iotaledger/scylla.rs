@@ -100,6 +100,11 @@ impl EventLoop<StageHandle> for Reporter {
                                         // running service
                                         self.service.update_status(ServiceStatus::Running);
                                     }
+                                } else {
+                                    if !self.service.is_stopping() {
+                                        // degraded service
+                                        self.service.update_status(ServiceStatus::Degraded);
+                                    }
                                 };
                             }
                             Session::Shutdown => {

@@ -30,7 +30,12 @@ impl EventLoop<NodeHandle> for Stage {
                                     && microservices_len == self.reporter_count as usize
                                 {
                                     self.service.update_status(ServiceStatus::Running);
-                                }
+                                } else {
+                                    if !self.service.is_stopping() {
+                                        // degraded service
+                                        self.service.update_status(ServiceStatus::Degraded);
+                                    }
+                                };
                             }
                             let event = NodeEvent::Service(self.service.clone());
                             supervisor.send(event).ok();
