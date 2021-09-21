@@ -34,6 +34,7 @@ use backstage::core::{
 use std::collections::HashMap;
 /// Workers Map holds all the workers_ids
 type Workers = HashMap<i16, Box<dyn Worker>>;
+/// Reporter's handle, used to push cql request
 pub type ReporterHandle = UnboundedHandle<ReporterEvent>;
 
 /// Reporter event enum.
@@ -69,7 +70,7 @@ pub struct Reporter {
 
 impl Reporter {
     /// Create new reporter
-    pub fn new(streams: Vec<i16>) -> Self {
+    pub(super) fn new(streams: Vec<i16>) -> Self {
         Self {
             streams,
             workers: HashMap::new(),
@@ -112,6 +113,11 @@ where
                         payloads[stream as usize].as_mut().replace(payload);
                         self.workers.insert(stream, worker);
                         sender.send(stream).unwrap_or_else(|e| log::error!("{}", e));
+                    } else {
+                        // Send overload to the worker in-case we don't have anymore streams
+                        worker
+                            .handle_error(WorkerError::Overload, rt.handle())
+                            .unwrap_or_else(|e| log::error!("{}", e));
                     }
                 }
                 ReporterEvent::Response { stream_id } => {

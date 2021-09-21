@@ -12,9 +12,7 @@ use backstage::core::{
     ActorResult,
     IoChannel,
     Rt,
-    StreamExt,
     SupHandle,
-    UnboundedHandle,
 };
 use tokio::{
     io::AsyncReadExt,

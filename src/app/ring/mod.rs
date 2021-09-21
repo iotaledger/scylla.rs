@@ -7,7 +7,6 @@ use crate::app::{
         Nodes,
     },
     stage::reporter::ReporterEvent,
-    worker::WorkerError,
 };
 use std::net::SocketAddr;
 
@@ -316,8 +315,11 @@ impl SmartId for Replica {
 }
 
 #[derive(Debug)]
+/// Ring send error
 pub enum RingSendError {
+    /// No ring exist error
     NoRing(ReporterEvent),
+    /// Reporter's send error
     SendError(tokio::sync::mpsc::error::SendError<ReporterEvent>),
 }
 

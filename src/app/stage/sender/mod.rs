@@ -17,9 +17,7 @@ use backstage::core::{
     Rt,
     StreamExt,
     SupHandle,
-    UnboundedHandle,
 };
-use std::collections::HashMap;
 use tokio::{
     io::AsyncWriteExt,
     net::tcp::OwnedWriteHalf,
@@ -31,7 +29,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub(crate) fn new(split_sink_owned: OwnedWriteHalf, appends_num: i16) -> Self {
+    pub(super) fn new(split_sink_owned: OwnedWriteHalf, appends_num: i16) -> Self {
         Self {
             socket: split_sink_owned,
             appends_num,
@@ -61,11 +59,12 @@ where
         let reporters_handles = rt.depends_on(parent_id).await.map_err(ActorError::exit)?;
         Ok((payloads, reporters_handles))
     }
-    async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, reporters_handles): Self::Data) -> ActorResult<()> {
+    async fn run(&mut self, rt: &mut Rt<Self, S>, (payloads, reporters_handles): Self::Data) -> ActorResult<()> {
         while let Some(stream_id) = rt.inbox_mut().next().await {
             if let Some(payload) = payloads[stream_id as usize].as_ref_payload() {
                 if let Err(io_error) = self.socket.write_all(payload).await {
-                    if let Some(reporter_handle) = reporters_handles.get(&compute_reporter_num(stream_id, self.appends_num))
+                    if let Some(reporter_handle) =
+                        reporters_handles.get(&compute_reporter_num(stream_id, self.appends_num))
                     {
                         reporter_handle
                             .send(ReporterEvent::Err(anyhow!(io_error), stream_id))

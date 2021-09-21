@@ -25,16 +25,9 @@ use std::{
     cell::UnsafeCell,
     collections::HashMap,
     net::SocketAddr,
-    ops::{
-        Deref,
-        DerefMut,
-    },
     sync::Arc,
 };
-use tokio::{
-    net::TcpStream,
-    sync::RwLock,
-};
+use tokio::sync::RwLock;
 
 mod receiver;
 pub mod reporter;
@@ -43,6 +36,7 @@ mod sender;
 static MAX_STREAM_IDS: i16 = 32767;
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
+/// Reporter handles at the stage level
 pub type ReportersHandles = HashMap<u8, UnboundedHandle<reporter::ReporterEvent>>;
 /// Stage event enum.
 #[backstage::core::supervise]
@@ -59,19 +53,16 @@ pub enum StageEvent {
 /// Stage state
 pub struct Stage {
     address: SocketAddr,
-    session_id: usize,
     shard_id: usize,
     shard_count: usize,
-    // payloads: Payloads, todo add it as resource
 }
 
 impl Stage {
-    pub fn new(address: SocketAddr, shard_id: usize, shard_count: usize) -> Self {
+    pub(super) fn new(address: SocketAddr, shard_id: usize, shard_count: usize) -> Self {
         Self {
             shard_count,
             address,
             shard_id,
-            session_id: 0,
         }
     }
 }
@@ -118,7 +109,7 @@ where
         let cql_conn = cql.await.map_err(|e| ActorError::restart(e, None))?;
         // verify shard_count, (as in very rare condition scylla might get restarted with different shard count )
         if self.shard_count != cql_conn.shard_count() as usize {
-            return Err(ActorError::exit_msg("scylla changed its shard count"));
+            return Err(ActorError::restart_msg("scylla changed its shard count", None));
         };
         let (socket_rx, socket_tx) = cql_conn.split();
         let sender = sender::Sender::new(socket_tx, appends_num);

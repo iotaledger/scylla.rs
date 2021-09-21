@@ -22,12 +22,19 @@ use serde::{
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Application state
 pub struct Scylla {
+    /// The local data center from the scylla driver perspective
     pub local_dc: String,
+    /// The thread count (workers threads in tokio term)
     pub thread_count: usize,
+    /// Reporter count per stage
     pub reporter_count: u8,
+    /// Optional buffer size used by the stage's connection
     pub buffer_size: Option<usize>,
+    /// Optional recv buffer size size used by the stage's connection
     pub recv_buffer_size: Option<u32>,
+    /// Optional send buffer size size used by the stage's connection
     pub send_buffer_size: Option<u32>,
+    /// Default cql authentication
     pub authenticator: PasswordAuth,
 }
 
@@ -71,12 +78,7 @@ pub enum ScyllaEvent {
     #[report]
     #[eol]
     /// Used by scylla children to push their service
-    Microservice(
-        /// Scope id of the Cluster
-        ScopeId,
-        /// Cluster Service
-        Service,
-    ),
+    Microservice(ScopeId, Service),
     /// Shutdown signal
     #[shutdown]
     Shutdown,
