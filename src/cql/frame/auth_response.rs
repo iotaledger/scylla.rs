@@ -4,7 +4,10 @@
 //! This module implements the response part of the challenge–response authentication.
 
 use super::opcode::AUTH_RESPONSE;
-use crate::cql::compression::{Compression, MyCompression};
+use crate::cql::compression::{
+    Compression,
+    MyCompression,
+};
 use std::convert::TryInto;
 
 /// Blanket cql frame header for AUTH_RESPONSE frame.
@@ -27,7 +30,7 @@ impl Authenticator for AllowAllAuth {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
 /// The password autentication structure with the user and password fields.
 pub struct PasswordAuth {
     user: String,

@@ -10,10 +10,21 @@ use super::*;
 /// ```
 /// use scylla_rs::{
 ///     app::{
-///         access::{ComputeToken, GetInsertRequest, Insert, Keyspace},
+///         access::{
+///             ComputeToken,
+///             GetInsertRequest,
+///             Insert,
+///             Keyspace,
+///         },
 ///         worker::InsertWorker,
 ///     },
-///     cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder},
+///     cql::{
+///         Batch,
+///         Consistency,
+///         PreparedStatement,
+///         Values,
+///         VoidDecoder,
+///     },
 /// };
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
@@ -240,9 +251,9 @@ impl<K, V, S: Insert<K, V> + Clone> CreateRequest<InsertRequest<S, K, V>> for S 
 
 impl<S, K, V> Request for InsertRequest<S, K, V>
 where
-    S: Insert<K, V>,
-    K: Send,
-    V: Send,
+    S: Insert<K, V> + std::fmt::Debug,
+    K: Send + std::fmt::Debug,
+    V: Send + std::fmt::Debug,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.insert_statement::<K, V>()

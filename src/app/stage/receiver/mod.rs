@@ -1,29 +1,30 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{reporter::*, *};
+use super::{
+    reporter::*,
+    *,
+};
 use anyhow::anyhow;
-use tokio::{io::AsyncReadExt, net::tcp::OwnedReadHalf};
-
-mod event_loop;
-mod init;
-mod terminating;
+use backstage::core::{
+    Actor,
+    ActorError,
+    ActorResult,
+    IoChannel,
+    Rt,
+    StreamExt,
+    SupHandle,
+    UnboundedHandle,
+};
+use tokio::{
+    io::AsyncReadExt,
+    net::tcp::OwnedReadHalf,
+};
 
 const CQL_FRAME_HEADER_BYTES_LENGTH: usize = 9;
 
-// Receiver builder
-builder!(ReceiverBuilder {
-    socket: OwnedReadHalf,
-    session_id: usize,
-    payloads: Payloads,
-    buffer_size: usize,
-    appends_num: i16
-});
-
 /// Receiver state
-pub struct Receiver {
-    service: Service,
-    socket: OwnedReadHalf,
+pub(super) struct Receiver {
     stream_id: i16,
     total_length: usize,
     current_length: usize,
@@ -31,51 +32,147 @@ pub struct Receiver {
     buffer: Vec<u8>,
     i: usize,
     appends_num: i16,
-    payloads: Payloads,
 }
 
-impl ActorBuilder<ReportersHandles> for ReceiverBuilder {}
-
-/// implementation of builder
-impl Builder for ReceiverBuilder {
-    type State = Receiver;
-    fn build(self) -> Self::State {
-        Self::State {
-            service: Service::new(),
-            socket: self.socket.unwrap(),
+impl Receiver {
+    pub(super) fn new(buffer_size: Option<usize>, appends_num: i16) -> Self {
+        Self {
             stream_id: 0,
             total_length: 0,
             current_length: 0,
             header: false,
-            buffer: vec![0; self.buffer_size.unwrap()],
+            buffer: vec![0; buffer_size.unwrap_or(1024000)],
             i: 0,
-            appends_num: self.appends_num.unwrap(),
-            payloads: self.payloads.unwrap(),
+            appends_num,
         }
-        .set_name()
     }
 }
 
-/// impl name of the Receiver
-impl Name for Receiver {
-    fn set_name(mut self) -> Self {
-        let name = String::from("Receiver");
-        self.service.update_name(name);
-        self
+/// The Receiver actor lifecycle implementation
+#[async_trait]
+impl<S> Actor<S> for Receiver
+where
+    S: SupHandle<Self>,
+{
+    type Data = (Payloads, ReportersHandles);
+    type Channel = IoChannel<OwnedReadHalf>;
+    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        let parent_id = rt
+            .parent_id()
+            .ok_or_else(|| ActorError::exit_msg("receiver without stage supervisor"))?;
+        let payloads = rt
+            .lookup(parent_id)
+            .await
+            .ok_or_else(|| ActorError::exit_msg("receiver unables to lookup for payloads"))?;
+        let reporters_handles = rt.depends_on(parent_id).await.map_err(ActorError::exit)?;
+        Ok((payloads, reporters_handles))
     }
-    fn get_name(&self) -> String {
-        self.service.get_name()
+    async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, reporters_handles): Self::Data) -> ActorResult<()> {
+        while let Ok(n) = rt.inbox_mut().read(&mut self.buffer[self.i..]).await {
+            if n != 0 {
+                self.current_length += n;
+                if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
+                    self.i = self.current_length;
+                } else {
+                    self.handle_frame_header(0, &mut payloads)
+                        .and_then(|_| self.handle_frame(n, 0, &mut payloads, &reporters_handles))
+                        .map_err(|e| {
+                            log::error!("{}", e);
+                            ActorError::exit(e)
+                        })?;
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 
-#[async_trait::async_trait]
-impl AknShutdown<Receiver> for ReportersHandles {
-    async fn aknowledge_shutdown(self, mut _state: Receiver, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        for reporter_handle in self.values() {
-            let event = ReporterEvent::Session(Session::Service(_state.service.clone()));
-            let _ = reporter_handle.send(event);
+impl Receiver {
+    fn handle_remaining_buffer(
+        &mut self,
+        i: usize,
+        payloads: &mut Payloads,
+        reporters_handles: &ReportersHandles,
+    ) -> anyhow::Result<()> {
+        if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
+            self.buffer.copy_within(i..(i + self.current_length), self.i);
+            self.i = self.current_length;
+        } else {
+            self.handle_frame_header(i, payloads)
+                .and_then(|_| self.handle_frame(self.current_length, i, payloads, reporters_handles))?;
         }
+        Ok(())
+    }
+    fn handle_frame_header(&mut self, padding: usize, payloads: &mut Payloads) -> anyhow::Result<()> {
+        // if no-header decode the header and resize the payload(if needed).
+        if !self.header {
+            // decode total_length(HEADER_LENGTH + frame_body_length)
+            let buf = &self.buffer[padding..];
+            self.total_length = get_total_length_usize(&buf);
+            // decode stream_id
+            self.stream_id = get_stream_id(&buf);
+            // get mut ref to payload for stream_id
+            let payload = payloads[self.stream_id as usize]
+                .as_mut_payload()
+                .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
+            // resize payload only if total_length is larger than the payload length
+            if self.total_length > payload.len() {
+                // resize the len of the payload.
+                payload.resize(self.total_length, 0);
+            }
+            // set header to true
+            self.header = true;
+        }
+        Ok(())
+    }
+    fn handle_frame(
+        &mut self,
+        n: usize,
+        mut padding: usize,
+        payloads: &mut Payloads,
+        reporters_handles: &ReportersHandles,
+    ) -> anyhow::Result<()> {
+        let start = self.current_length - n - self.i;
+        if self.current_length >= self.total_length {
+            // get mut ref to payload for stream_id as giveload
+            let giveload = payloads[self.stream_id as usize]
+                .as_mut_payload()
+                .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
+            // memcpy the current bytes from self.buffer into payload
+            let old_padding = padding;
+            // update padding
+            padding += self.total_length - start;
+            giveload[start..self.total_length].copy_from_slice(&self.buffer[old_padding..padding]);
+            // tell reporter that giveload is ready.
+            let reporter_handle = reporters_handles
+                .get(&compute_reporter_num(self.stream_id, self.appends_num))
+                .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
+
+            reporter_handle
+                .send(ReporterEvent::Response {
+                    stream_id: self.stream_id,
+                })
+                .unwrap_or_else(|e| log::error!("{}", e));
+            // set header to false
+            self.header = false;
+            // update current_length
+            self.current_length -= self.total_length;
+            // set self.i to zero
+            self.i = 0;
+            self.handle_remaining_buffer(padding, payloads, reporters_handles)?;
+        } else {
+            // get mut ref to payload for stream_id
+            let payload = payloads[self.stream_id as usize]
+                .as_mut_payload()
+                .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
+            // memcpy the current bytes from self.buffer into payload
+            payload[start..self.current_length].copy_from_slice(&self.buffer[padding..(padding + n + self.i)]);
+            // set self.i to zero
+            self.i = 0;
+        }
+        Ok(())
     }
 }
 

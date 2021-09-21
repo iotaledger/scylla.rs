@@ -2,20 +2,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::{
-    cluster::{NodeInfo, Nodes},
-    stage::{ReporterEvent, ReportersHandles},
+    cluster::{
+        NodeInfo,
+        Nodes,
+    },
+    stage::reporter::ReporterEvent,
     worker::WorkerError,
 };
 use std::net::SocketAddr;
 
-use rand::{distributions::Uniform, prelude::ThreadRng, thread_rng, Rng};
+use backstage::core::UnboundedHandle;
+use rand::{
+    distributions::Uniform,
+    prelude::ThreadRng,
+    thread_rng,
+    Rng,
+};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    i64::{MAX, MIN},
+    i64::{
+        MAX,
+        MIN,
+    },
     sync::{
-        atomic::{AtomicPtr, Ordering},
-        Arc, Weak,
+        atomic::{
+            AtomicPtr,
+            Ordering,
+        },
+        Arc,
+        Weak,
     },
 };
 // types
@@ -35,7 +51,7 @@ type Replicas = HashMap<DC, Vec<Replica>>;
 type Replica = (SocketAddr, Msb, ShardCount);
 type Vcell = Box<dyn Vnode>;
 /// The registry of `SocketAddr` to its reporters.
-pub type Registry = HashMap<SocketAddr, ReportersHandles>;
+pub type Registry = HashMap<SocketAddr, HashMap<u8, UnboundedHandle<ReporterEvent>>>;
 /// The global ring  of ScyllaDB.
 pub type GlobalRing = (
     Vec<DC>,
@@ -175,6 +191,10 @@ impl Ring {
         }
         self
     }
+    /// Return the current ring version
+    pub(crate) fn version() -> u8 {
+        unsafe { super::ring::VERSION }
+    }
     fn global(&mut self, data_center: &str, replica_index: usize, token: Token, request: ReporterEvent) {
         // send request.
         self.root.as_mut().search(token).send(
@@ -270,8 +290,9 @@ trait SmartId {
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
-    );
+    ) -> anyhow::Result<(), RingSendError>;
 }
+
 impl SmartId for Replica {
     fn send_reporter(
         &mut self,
@@ -280,16 +301,44 @@ impl SmartId for Replica {
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
-    ) {
+    ) -> anyhow::Result<(), RingSendError> {
         // shard awareness algo,
-        self.0
-            .set_port((((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u16);
-        let _ = registry
+        let mut key = self.0;
+        key.set_port((((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u16);
+        registry
             .get_mut(&self.0)
             .unwrap()
             .get_mut(&rng.sample(uniform))
             .unwrap()
-            .send(request);
+            .send(request)
+            .map_err(|e| RingSendError::SendError(e))
+    }
+}
+
+#[derive(Debug)]
+pub enum RingSendError {
+    NoRing(ReporterEvent),
+    SendError(tokio::sync::mpsc::error::SendError<ReporterEvent>),
+}
+
+impl std::fmt::Display for RingSendError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRing(_) => {
+                write!(fmt, "no ring")
+            }
+            Self::SendError(tokio_send_error) => tokio_send_error.fmt(fmt),
+        }
+    }
+}
+
+impl std::error::Error for RingSendError {}
+impl Into<ReporterEvent> for RingSendError {
+    fn into(self) -> ReporterEvent {
+        match self {
+            Self::NoRing(event) => event,
+            Self::SendError(tokio_send_error) => tokio_send_error.0,
+        }
     }
 }
 
@@ -305,7 +354,7 @@ pub trait Endpoints: EndpointsClone + Send + Sync {
         registry: &mut Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
-    );
+    ) -> anyhow::Result<(), RingSendError>;
 }
 
 /// Clone the endpoints.
@@ -339,15 +388,15 @@ impl Endpoints for Replicas {
         mut registry: &mut Registry,
         mut rng: &mut ThreadRng,
         uniform: Uniform<u8>,
-    ) {
+    ) -> anyhow::Result<(), RingSendError> {
         let replicas = self.get_mut(data_center).expect("Expected Replicas");
         if let Some(replica) = replicas.get_mut(replica_index) {
-            replica.send_reporter(token, &mut registry, &mut rng, uniform, request);
+            replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
         } else {
             // send to a random node
             let rf = Uniform::new(0, replicas.len());
             let mut replica = replicas[rng.sample(rf)];
-            replica.send_reporter(token, &mut registry, &mut rng, uniform, request);
+            replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
         }
     }
 }
@@ -363,13 +412,8 @@ impl Endpoints for Option<Replicas> {
         _: &mut Registry,
         _: &mut ThreadRng,
         _uniform: Uniform<u8>,
-    ) {
-        // simulate reporter,
-        if let ReporterEvent::Request { worker, .. } = request {
-            worker
-                .handle_error(WorkerError::NoRing, &None)
-                .unwrap_or_else(|e| log::error!("{}", e));
-        };
+    ) -> anyhow::Result<(), RingSendError> {
+        Err(RingSendError::NoRing(request))
     }
 }
 
@@ -653,7 +697,10 @@ pub fn initialize_ring(version: u8, rebuild: bool) -> (ArcRing, Option<Box<Weak<
 
 #[test]
 fn generate_and_compute_fake_ring() {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{
+        IpAddr,
+        Ipv4Addr,
+    };
     let mut rng = thread_rng();
     let uniform = Uniform::new(MIN, MAX);
     // create test token_range vector // the token range should be fetched from scylla node.

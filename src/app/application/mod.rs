@@ -1,210 +1,134 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
-
-use super::{
-    cluster::{ClusterBuilder, ClusterHandle},
-    listener::{ListenerBuilder, ListenerHandle},
-    websocket::WsTx,
-    *,
+use super::cluster::Cluster;
+pub(crate) use crate::cql::PasswordAuth;
+use async_trait::async_trait;
+use backstage::core::{
+    Actor,
+    ActorResult,
+    Rt,
+    ScopeId,
+    Service,
+    ServiceStatus,
+    StreamExt,
+    SupHandle,
+    UnboundedChannel,
 };
-pub(crate) use crate::cql::{CqlBuilder, PasswordAuth};
-use anyhow::{anyhow, bail};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
+use serde::{
+    Deserialize,
+    Serialize,
 };
 
-mod event_loop;
-mod init;
-mod starter;
-mod terminating;
-
-/// Define the application scope trait
-pub trait ScyllaScope: LauncherSender<ScyllaBuilder<Self>> {}
-impl<H: LauncherSender<ScyllaBuilder<H>>> ScyllaScope for H {}
-
-// Scylla builder
-builder!(
-    #[derive(Clone)]
-    ScyllaBuilder<H> {
-        listen_address: String,
-        reporter_count: u8,
-        thread_count: usize,
-        local_dc: String,
-        buffer_size: usize,
-        recv_buffer_size: u32,
-        send_buffer_size: u32,
-        listener_handle: ListenerHandle,
-        cluster_handle: ClusterHandle,
-        authenticator: PasswordAuth
-});
-
-#[derive(Deserialize, Serialize)]
-/// It's the Interface the scylla app to dynamiclly configure the application during runtime
-pub enum ScyllaThrough {
-    /// Shutdown json to gracefully shutdown scylla app
-    Shutdown,
-    /// Alter the scylla topology
-    Topology(Topology),
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+/// Application state
+pub struct Scylla {
+    pub local_dc: String,
+    pub thread_count: usize,
+    pub reporter_count: u8,
+    pub buffer_size: Option<usize>,
+    pub recv_buffer_size: Option<u32>,
+    pub send_buffer_size: Option<u32>,
+    pub authenticator: PasswordAuth,
 }
 
-#[allow(missing_docs)]
-#[repr(u8)]
-#[derive(PartialEq)]
-pub enum Caller {
-    Launcher = 0,
-    Other = 1,
-}
-
-/// ScyllaHandle to be passed to the children (Listener and Cluster)
-pub struct ScyllaHandle<H: ScyllaScope> {
-    pub(crate) caller: Caller,
-    tx: tokio::sync::mpsc::UnboundedSender<ScyllaEvent<H::AppsEvents>>,
-}
-/// ScyllaInbox used to recv events
-pub struct ScyllaInbox<H: ScyllaScope> {
-    rx: tokio::sync::mpsc::UnboundedReceiver<ScyllaEvent<H::AppsEvents>>,
-}
-
-impl<H: ScyllaScope> Clone for ScyllaHandle<H> {
-    fn clone(&self) -> Self {
-        ScyllaHandle::<H> {
-            caller: Caller::Other,
-            tx: self.tx.clone(),
+impl Default for Scylla {
+    fn default() -> Self {
+        Self {
+            local_dc: "datacenter1".to_string(),
+            thread_count: num_cpus::get(),
+            reporter_count: 2,
+            buffer_size: None,
+            recv_buffer_size: None,
+            send_buffer_size: None,
+            authenticator: PasswordAuth::default(),
         }
     }
 }
 
-/// Application state
-pub struct Scylla<H: ScyllaScope> {
-    service: Service,
-    listener_handle: Option<ListenerHandle>,
-    cluster_handle: Option<ClusterHandle>,
-    websockets: HashMap<String, WsTx>,
-    handle: Option<ScyllaHandle<H>>,
-    inbox: ScyllaInbox<H>,
-}
-
-/// SubEvent type, indicated the children
-pub enum ScyllaChild {
-    /// Used by Listener to keep scylla up to date with its service
-    Listener(Service),
-    /// Used by Cluster to keep scylla up to date with its service
-    Cluster(Service),
-    /// Used by Websocket to keep scylla up to date with its service
-    Websocket(Service, Option<WsTx>),
+impl Scylla {
+    /// Create new Scylla instance
+    pub fn new<T: Into<String>>(
+        local_datacenter: T,
+        thread_count: usize,
+        reporter_count: u8,
+        password_auth: PasswordAuth,
+    ) -> Self {
+        Self {
+            local_dc: local_datacenter.into(),
+            thread_count,
+            reporter_count,
+            buffer_size: None,
+            recv_buffer_size: None,
+            send_buffer_size: None,
+            authenticator: password_auth,
+        }
+    }
 }
 
 /// Event type of the Scylla Application
-pub enum ScyllaEvent<T> {
-    /// It's the passthrough event, which the scylla application will receive from
-    Passthrough(T),
+#[backstage::core::supervise]
+pub enum ScyllaEvent {
+    #[report]
+    #[eol]
     /// Used by scylla children to push their service
-    Children(ScyllaChild),
-    /// Used by cluster to inform scylla in order to inform the sockets with the result of topology events
-    Result(SocketMsg<Result<Topology, Topology>>),
-    /// Abort the scylla app, sent by launcher
-    Abort,
+    Microservice(
+        /// Scope id of the Cluster
+        ScopeId,
+        /// Cluster Service
+        Service,
+    ),
+    /// Shutdown signal
+    #[shutdown]
+    Shutdown,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-/// Topology event
-pub enum Topology {
-    /// AddNode json to add new scylla node
-    AddNode(SocketAddr),
-    /// RemoveNode json to remove an existing scylla node
-    RemoveNode(SocketAddr),
-    /// BuildRing json to re/build the cluster topology,
-    /// Current limitation: for now the admin supposed to define uniform replication factor among all DataCenter and
-    /// all keyspaces
-    BuildRing(u8),
-}
-
-#[derive(Deserialize, Serialize)]
-/// Indicates which app this message is for
-pub enum SocketMsg<T> {
-    /// Message for Scylla app
-    Scylla(T),
-}
-
-/// implementation of the AppBuilder
-impl<H: ScyllaScope> AppBuilder<H> for ScyllaBuilder<H> {}
-
-/// implementation of through type
-impl<H: ScyllaScope> ThroughType for ScyllaBuilder<H> {
-    type Through = ScyllaThrough;
-}
-
-/// implementation of builder
-impl<H: ScyllaScope> Builder for ScyllaBuilder<H> {
-    type State = Scylla<H>;
-    fn build(self) -> Self::State {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let handle = Some(ScyllaHandle {
-            caller: Caller::Other,
-            tx,
-        });
-        let inbox = ScyllaInbox { rx };
-        Scylla::<H> {
-            service: Service::new(),
-            listener_handle: Some(self.listener_handle.expect("Expected Listener handle")),
-            cluster_handle: self.cluster_handle,
-            websockets: HashMap::new(),
-            handle,
-            inbox,
+/// The Scylla actor lifecycle implementation
+#[async_trait]
+impl<S> Actor<S> for Scylla
+where
+    S: SupHandle<Self>,
+{
+    type Data = ();
+    type Channel = UnboundedChannel<ScyllaEvent>;
+    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        // publish scylla as config
+        rt.add_resource(self.clone()).await;
+        let cluster = Cluster::new();
+        rt.start("cluster".to_string(), cluster).await?;
+        Ok(())
+    }
+    async fn run(&mut self, rt: &mut Rt<Self, S>, _data: Self::Data) -> ActorResult<()> {
+        while let Some(event) = rt.inbox_mut().next().await {
+            match event {
+                ScyllaEvent::Microservice(scope_id, service) => {
+                    if service.is_stopped() {
+                        rt.remove_microservice(scope_id);
+                    } else {
+                        rt.upsert_microservice(scope_id, service);
+                    }
+                    if !rt.service().is_stopping() {
+                        if rt.microservices_all(|node| node.is_running()) {
+                            rt.update_status(ServiceStatus::Running).await;
+                        } else if rt.microservices_all(|node| node.is_maintenance()) {
+                            rt.update_status(ServiceStatus::Maintenance).await;
+                        } else {
+                            rt.update_status(ServiceStatus::Degraded).await;
+                        }
+                    } else {
+                        rt.update_status(ServiceStatus::Stopping).await;
+                        if rt.microservices_stopped() {
+                            rt.inbox_mut().close();
+                        }
+                    }
+                }
+                ScyllaEvent::Shutdown => {
+                    rt.stop().await;
+                    if rt.microservices_stopped() {
+                        rt.inbox_mut().close();
+                    }
+                }
+            }
         }
-        .set_name()
-    }
-}
-
-// TODO integrate well with other services;
-/// implementation of passthrough functionality
-impl<H: ScyllaScope> Passthrough<ScyllaThrough> for ScyllaHandle<H> {
-    fn launcher_status_change(&mut self, _service: &Service) {}
-    fn app_status_change(&mut self, _service: &Service) {}
-    fn passthrough(&mut self, _event: ScyllaThrough, _from_app_name: String) {}
-    fn service(&mut self, _service: &Service) {}
-}
-
-/// implementation of shutdown functionality
-impl<H: ScyllaScope> Shutdown for ScyllaHandle<H> {
-    fn shutdown(self) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let scylla_shutdown: H::AppsEvents = serde_json::from_str("{\"Scylla\": \"Shutdown\"}").unwrap();
-        let _ = self.send(ScyllaEvent::Passthrough(scylla_shutdown));
-        // if the caller is launcher we abort scylla app. better solution will be implemented in future
-        if self.caller == Caller::Launcher {
-            let _ = self.send(ScyllaEvent::Abort);
-        }
-        None
-    }
-}
-
-impl<H: ScyllaScope> Deref for ScyllaHandle<H> {
-    type Target = tokio::sync::mpsc::UnboundedSender<ScyllaEvent<H::AppsEvents>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
-    }
-}
-
-impl<H: ScyllaScope> DerefMut for ScyllaHandle<H> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
-    }
-}
-
-/// impl name of the application
-impl<H: ScyllaScope> Name for Scylla<H> {
-    fn set_name(mut self) -> Self {
-        self.service.update_name("Scylla".to_string());
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
+        Ok(())
     }
 }

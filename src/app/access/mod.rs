@@ -23,24 +23,68 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-use super::{Worker, WorkerError};
+use super::{
+    Worker,
+    WorkerError,
+};
 use crate::{
     app::{
         ring::Ring,
-        stage::{ReporterEvent, ReporterHandle},
+        stage::reporter::{
+            ReporterEvent,
+            ReporterHandle,
+        },
     },
     cql::{
-        Consistency, Decoder, Prepare, PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency,
-        QueryOrPrepared, QueryStatement, QueryValues, RowsDecoder, Statements, Values, VoidDecoder,
+        Consistency,
+        Decoder,
+        Prepare,
+        PreparedStatement,
+        Query,
+        QueryBuild,
+        QueryBuilder,
+        QueryConsistency,
+        QueryOrPrepared,
+        QueryStatement,
+        QueryValues,
+        RowsDecoder,
+        Statements,
+        Values,
+        VoidDecoder,
     },
 };
 pub use batch::*;
-pub use delete::{Delete, DeleteRequest, GetDeleteRequest, GetDeleteStatement};
-pub use insert::{GetInsertRequest, GetInsertStatement, Insert, InsertRequest};
+pub use delete::{
+    Delete,
+    DeleteRequest,
+    GetDeleteRequest,
+    GetDeleteStatement,
+};
+pub use insert::{
+    GetInsertRequest,
+    GetInsertStatement,
+    Insert,
+    InsertRequest,
+};
 pub use keyspace::Keyspace;
-pub use select::{GetSelectRequest, GetSelectStatement, Select, SelectRequest};
-use std::{borrow::Cow, convert::TryInto, marker::PhantomData, ops::Deref};
-pub use update::{GetUpdateRequest, GetUpdateStatement, Update, UpdateRequest};
+pub use select::{
+    GetSelectRequest,
+    GetSelectStatement,
+    Select,
+    SelectRequest,
+};
+use std::{
+    borrow::Cow,
+    convert::TryInto,
+    marker::PhantomData,
+    ops::Deref,
+};
+pub use update::{
+    GetUpdateRequest,
+    GetUpdateStatement,
+    Update,
+    UpdateRequest,
+};
 
 #[repr(u8)]
 #[derive(Copy, Clone)]
@@ -65,7 +109,7 @@ pub trait CreateRequest<T>: Keyspace {
 }
 
 /// Unifying trait for requests which defines shared functionality
-pub trait Request: Send {
+pub trait Request: Send + std::fmt::Debug {
     /// Get the statement that was used to create this request
     fn statement(&self) -> Cow<'static, str>;
 
@@ -292,6 +336,7 @@ pub mod tests {
 
     impl VoidDecoder for MyKeyspace {}
 
+    #[derive(Debug)]
     struct TestWorker {
         request: Box<dyn Request>,
     }
@@ -305,10 +350,10 @@ pub mod tests {
         fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: &Option<crate::app::stage::ReporterHandle>,
+            reporter: &ReporterHandle,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
-                if let (Some(_), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+                if let Some(_) = cql_error.take_unprepared_id() {
                     if let Ok(prepare) = Prepare::new().statement(&self.request.statement()).build() {
                         let prepare_worker = PrepareWorker {
                             retries: 3,
@@ -329,6 +374,7 @@ pub mod tests {
         }
     }
 
+    #[derive(Debug)]
     struct BatchWorker<S> {
         request: BatchRequest<S>,
     }
@@ -342,10 +388,10 @@ pub mod tests {
         fn handle_error(
             self: Box<Self>,
             error: crate::app::worker::WorkerError,
-            reporter: &Option<crate::app::stage::ReporterHandle>,
+            reporter: &crate::app::stage::reporter::ReporterHandle,
         ) -> anyhow::Result<()> {
             if let WorkerError::Cql(mut cql_error) = error {
-                if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+                if let Some(id) = cql_error.take_unprepared_id() {
                     if let Some(statement) = self.request.get_statement(&id) {
                         if let Ok(prepare) = Prepare::new().statement(&statement).build() {
                             let prepare_worker = PrepareWorker {
@@ -380,11 +426,7 @@ pub mod tests {
             Ok(())
         }
 
-        fn handle_error(
-            self: Box<Self>,
-            _error: WorkerError,
-            _reporter: &Option<ReporterHandle>,
-        ) -> anyhow::Result<()> {
+        fn handle_error(self: Box<Self>, _error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
             if self.retries > 0 {
                 let prepare_worker = PrepareWorker {
                     retries: self.retries - 1,

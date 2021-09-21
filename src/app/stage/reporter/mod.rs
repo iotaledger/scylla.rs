@@ -1,61 +1,43 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::*;
+use async_trait::async_trait;
+
+use super::{
+    sender::SenderEvent,
+    Payloads,
+};
 use crate::{
-    app::worker::{Worker, WorkerError},
-    cql::{CqlError, Decoder},
+    app::worker::{
+        Worker,
+        WorkerError,
+    },
+    cql::{
+        CqlError,
+        Decoder,
+    },
 };
-use anyhow::anyhow;
-use sender::SenderHandle;
-use std::{
-    collections::HashSet,
-    convert::TryFrom,
-    ops::{Deref, DerefMut},
+use std::convert::TryFrom;
+
+use backstage::core::{
+    AbortableUnboundedHandle,
+    Actor,
+    ActorError,
+    ActorResult,
+    Rt,
+    ShutdownEvent,
+    StreamExt,
+    SupHandle,
+    UnboundedChannel,
+    UnboundedHandle,
 };
-
-mod event_loop;
-mod init;
-mod terminating;
-
+use std::collections::HashMap;
 /// Workers Map holds all the workers_ids
 type Workers = HashMap<i16, Box<dyn Worker>>;
-
-// Reporter builder
-builder!(ReporterBuilder {
-    session_id: usize,
-    reporter_id: u8,
-    shard_id: u16,
-    streams: HashSet<i16>,
-    address: SocketAddr,
-    payloads: Payloads
-});
-
-/// ReporterHandle to be passed to the children (Stage)
-#[derive(Clone)]
-pub struct ReporterHandle {
-    tx: mpsc::UnboundedSender<ReporterEvent>,
-}
-/// NodeInbox is used to recv events
-pub struct ReporterInbox {
-    rx: mpsc::UnboundedReceiver<ReporterEvent>,
-}
-
-impl Deref for ReporterHandle {
-    type Target = mpsc::UnboundedSender<ReporterEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
-    }
-}
-
-impl DerefMut for ReporterHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
-    }
-}
+pub type ReporterHandle = UnboundedHandle<ReporterEvent>;
 
 /// Reporter event enum.
+#[derive(Debug)]
 pub enum ReporterEvent {
     /// The request Cql query.
     Request {
@@ -71,102 +53,143 @@ pub enum ReporterEvent {
     },
     /// The stream error.
     Err(anyhow::Error, i16),
-    /// The stage session.
-    Session(Session),
-}
-
-pub enum Session {
-    New(Service, sender::SenderHandle),
-    Service(Service),
+    /// Shutdown signal
     Shutdown,
 }
-
+impl ShutdownEvent for ReporterEvent {
+    fn shutdown_event() -> Self {
+        Self::Shutdown
+    }
+}
 /// Reporter state
 pub struct Reporter {
-    service: Service,
-    address: SocketAddr,
-    session_id: usize,
-    reporter_id: u8,
-    streams: HashSet<i16>,
-    shard_id: u16,
+    streams: Vec<i16>,
     workers: Workers,
-    sender_handle: Option<SenderHandle>,
-    payloads: Payloads,
-    handle: Option<ReporterHandle>,
-    inbox: ReporterInbox,
 }
 
 impl Reporter {
-    pub fn clone_handle(&self) -> Option<ReporterHandle> {
-        self.handle.clone()
-    }
-}
-
-impl ActorBuilder<StageHandle> for ReporterBuilder {}
-
-/// implementation of builder
-impl Builder for ReporterBuilder {
-    type State = Reporter;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<ReporterEvent>();
-        let handle = Some(ReporterHandle { tx });
-        let inbox = ReporterInbox { rx };
-
-        Self::State {
-            service: Service::new(),
-            address: self.address.unwrap(),
-            session_id: self.session_id.unwrap(),
-            reporter_id: self.reporter_id.unwrap(),
-            streams: self.streams.unwrap(),
-            shard_id: self.shard_id.unwrap(),
+    /// Create new reporter
+    pub fn new(streams: Vec<i16>) -> Self {
+        Self {
+            streams,
             workers: HashMap::new(),
-            sender_handle: None,
-            payloads: self.payloads.unwrap(),
-            handle,
-            inbox,
         }
-        .set_name()
     }
 }
 
-/// impl name of the Reporter
-impl Name for Reporter {
-    fn set_name(mut self) -> Self {
-        // create name from the reporter_id
-        let name = self.reporter_id.to_string();
-        self.service.update_name(name);
-        self
+/// The Reporter actor lifecycle implementation
+#[async_trait]
+impl<S> Actor<S> for Reporter
+where
+    S: SupHandle<Self>,
+{
+    type Data = (Payloads, AbortableUnboundedHandle<SenderEvent>);
+    type Channel = UnboundedChannel<ReporterEvent>;
+    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        let parent_id = rt
+            .parent_id()
+            .ok_or_else(|| ActorError::exit_msg("reporter without stage supervisor"))?;
+        let sender_scope_id = rt
+            .sibling("sender")
+            .scope_id()
+            .await
+            .ok_or_else(|| ActorError::exit_msg("reporter without sender sibling"))?;
+        let payloads = rt
+            .lookup(parent_id)
+            .await
+            .ok_or_else(|| ActorError::exit_msg("sender unables to lookup for payloads"))?;
+        let sender_handle = rt.link(sender_scope_id).await.map_err(ActorError::exit)?;
+        Ok((payloads, sender_handle))
     }
-    fn get_name(&self) -> String {
-        self.service.get_name()
+    async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, sender): Self::Data) -> ActorResult<()> {
+        while let Some(event) = rt.inbox_mut().next().await {
+            match event {
+                ReporterEvent::Request { worker, mut payload } => {
+                    if let Some(stream) = self.streams.pop() {
+                        // Assign stream_id to the payload
+                        assign_stream_to_payload(stream, &mut payload);
+                        // store payload as reusable at payloads[stream]
+                        payloads[stream as usize].as_mut().replace(payload);
+                        self.workers.insert(stream, worker);
+                        sender.send(stream).unwrap_or_else(|e| log::error!("{}", e));
+                    }
+                }
+                ReporterEvent::Response { stream_id } => {
+                    self.handle_response(rt.handle(), stream_id, &mut payloads)
+                        .unwrap_or_else(|e| log::error!("{}", e));
+                }
+                ReporterEvent::Err(io_error, stream_id) => {
+                    self.handle_error(rt.handle(), stream_id, &mut payloads, WorkerError::Other(io_error))
+                        .unwrap_or_else(|e| log::error!("{}", e));
+                }
+                ReporterEvent::Shutdown => {
+                    rt.stop().await;
+                    if rt.microservices_stopped() {
+                        rt.inbox_mut().close();
+                    }
+                }
+            }
+        }
+        self.force_consistency(rt.handle());
+        Ok(())
     }
 }
-
-#[async_trait::async_trait]
-impl AknShutdown<Reporter> for StageHandle {
-    async fn aknowledge_shutdown(self, mut state: Reporter, _status: Result<(), Need>) {
-        state.service.update_status(ServiceStatus::Stopped);
-        let event = StageEvent::Reporter(state.service);
-        let _ = self.send(event);
-    }
-}
-
 impl Reporter {
-    fn force_consistency(&mut self) {
+    fn handle_response(&mut self, handle: &ReporterHandle, stream: i16, payloads: &mut Payloads) -> anyhow::Result<()> {
+        // push the stream_id back to streams vector.
+        self.streams.push(stream);
+        // remove the worker from workers.
+        if let Some(worker) = self.workers.remove(&stream) {
+            if let Some(payload) = payloads[stream as usize].as_mut().take() {
+                if is_cql_error(&payload) {
+                    let error = Decoder::try_from(payload)
+                        .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
+                        .unwrap_or_else(|e| WorkerError::Other(e));
+                    worker.handle_error(error, handle)?;
+                } else {
+                    worker.handle_response(payload)?;
+                }
+            } else {
+                log::error!("No payload found while handling response for stream {}!", stream);
+            }
+        } else {
+            log::error!("No worker found while handling response for stream {}!", stream);
+        }
+        Ok(())
+    }
+    fn handle_error(
+        &mut self,
+        handle: &ReporterHandle,
+        stream: i16,
+        payloads: &mut Payloads,
+        error: WorkerError,
+    ) -> anyhow::Result<()> {
+        // push the stream_id back to streams vector.
+        self.streams.push(stream);
+        // remove the worker from workers and send error.
+        if let Some(worker) = self.workers.remove(&stream) {
+            // drop payload.
+            if let Some(_payload) = payloads[stream as usize].as_mut().take() {
+                worker.handle_error(error, handle)?;
+            } else {
+                log::error!("No payload found while handling error for stream {}!", stream);
+            }
+        } else {
+            log::error!("No worker found while handling error for stream {}!", stream);
+        }
+        Ok(())
+    }
+    fn force_consistency(&mut self, handle: &ReporterHandle) {
         for (stream_id, worker_id) in self.workers.drain() {
             // push the stream_id back into the streams vector
-            self.streams.insert(stream_id);
+            self.streams.push(stream_id);
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
             worker_id
-                .handle_error(WorkerError::Lost, &self.handle)
-                .unwrap_or_else(|e| error!("{}", e));
+                .handle_error(WorkerError::Lost, handle)
+                .unwrap_or_else(|e| log::error!("{}", e));
         }
     }
-}
-
-pub fn compute_reporter_num(stream_id: i16, appends_num: i16) -> u8 {
-    (stream_id / appends_num) as u8
 }
 
 // private functions

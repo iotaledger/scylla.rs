@@ -9,8 +9,19 @@ use super::*;
 /// ## Examples
 /// ```
 /// use scylla_rs::{
-///     app::access::{ComputeToken, GetUpdateRequest, Keyspace, Update},
-///     cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder},
+///     app::access::{
+///         ComputeToken,
+///         GetUpdateRequest,
+///         Keyspace,
+///         Update,
+///     },
+///     cql::{
+///         Batch,
+///         Consistency,
+///         PreparedStatement,
+///         Values,
+///         VoidDecoder,
+///     },
 /// };
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
@@ -237,8 +248,8 @@ impl<K, V, S: Update<K, V> + Clone> CreateRequest<UpdateRequest<S, K, V>> for S 
 impl<S, K, V> Request for UpdateRequest<S, K, V>
 where
     S: Update<K, V> + std::fmt::Debug + Clone,
-    K: Send,
-    V: Send,
+    K: Send + std::fmt::Debug,
+    V: Send + std::fmt::Debug,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.update_statement::<K, V>()

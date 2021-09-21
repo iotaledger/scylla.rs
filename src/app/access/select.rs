@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::cql::{QueryPagingState, QuerySerialConsistency};
+use crate::cql::{
+    QueryPagingState,
+    QuerySerialConsistency,
+};
 
 /// Select query trait which creates a `SelectRequest`
 /// that can be sent to the `Ring`.
@@ -11,10 +14,24 @@ use crate::cql::{QueryPagingState, QuerySerialConsistency};
 /// ```
 /// use scylla_rs::{
 ///     app::{
-///         access::{ComputeToken, GetSelectRequest, Keyspace, Select},
-///         worker::{ValueWorker, WorkerError},
+///         access::{
+///             ComputeToken,
+///             GetSelectRequest,
+///             Keyspace,
+///             Select,
+///         },
+///         worker::{
+///             ValueWorker,
+///             WorkerError,
+///         },
 ///     },
-///     cql::{Batch, Consistency, PreparedStatement, RowsDecoder, Values},
+///     cql::{
+///         Batch,
+///         Consistency,
+///         PreparedStatement,
+///         RowsDecoder,
+///         Values,
+///     },
 /// };
 /// use std::borrow::Cow;
 /// # use scylla_rs::cql::Decoder;
@@ -309,9 +326,9 @@ impl<K, V, S: Select<K, V> + Clone> CreateRequest<SelectRequest<S, K, V>> for S 
 
 impl<S, K, V> Request for SelectRequest<S, K, V>
 where
-    S: Select<K, V>,
-    K: Send,
-    V: Send,
+    S: Select<K, V> + std::fmt::Debug,
+    K: Send + std::fmt::Debug,
+    V: Send + std::fmt::Debug,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.select_statement::<K, V>()

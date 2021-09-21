@@ -10,10 +10,21 @@ use super::*;
 /// ```
 /// use scylla_rs::{
 ///     app::{
-///         access::{ComputeToken, Delete, GetDeleteRequest, Keyspace},
+///         access::{
+///             ComputeToken,
+///             Delete,
+///             GetDeleteRequest,
+///             Keyspace,
+///         },
 ///         worker::DeleteWorker,
 ///     },
-///     cql::{Batch, Consistency, PreparedStatement, Values, VoidDecoder},
+///     cql::{
+///         Batch,
+///         Consistency,
+///         PreparedStatement,
+///         Values,
+///         VoidDecoder,
+///     },
 /// };
 /// use std::borrow::Cow;
 /// # #[derive(Default, Clone, Debug)]
@@ -240,8 +251,8 @@ impl<K, V, S: Delete<K, V> + Clone> CreateRequest<DeleteRequest<S, K, V>> for S 
 impl<S, K, V> Request for DeleteRequest<S, K, V>
 where
     S: Delete<K, V> + std::fmt::Debug + Clone,
-    K: Send,
-    V: Send,
+    K: Send + std::fmt::Debug,
+    V: Send + std::fmt::Debug,
 {
     fn statement(&self) -> Cow<'static, str> {
         self.keyspace.delete_statement::<K, V>()

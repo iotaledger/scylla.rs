@@ -1,18 +1,38 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-pub use crate::app::stage::{ReporterEvent, ReporterHandle};
+pub use crate::app::stage::reporter::{
+    ReporterEvent,
+    ReporterHandle,
+};
 use crate::{
     app::access::*,
-    cql::{Consistency, CqlError, Decoder, Prepare},
+    cql::{
+        Consistency,
+        CqlError,
+        Decoder,
+        Prepare,
+    },
 };
 use anyhow::anyhow;
-pub use delete::{handle_unprepared_error as handle_delete_unprepared_error, DeleteWorker};
-pub use insert::{handle_unprepared_error as handle_insert_unprepared_error, InsertWorker};
+pub use delete::{
+    handle_unprepared_error as handle_delete_unprepared_error,
+    DeleteWorker,
+};
+pub use insert::{
+    handle_unprepared_error as handle_insert_unprepared_error,
+    InsertWorker,
+};
 use log::*;
 pub use prepare::PrepareWorker;
-pub use select::{handle_unprepared_error as handle_select_unprepared_error, SelectWorker};
-use std::convert::{TryFrom, TryInto};
+pub use select::{
+    handle_unprepared_error as handle_select_unprepared_error,
+    SelectWorker,
+};
+use std::convert::{
+    TryFrom,
+    TryInto,
+};
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
 pub use value::ValueWorker;
@@ -24,11 +44,11 @@ mod select;
 mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
-pub trait Worker: Send {
+pub trait Worker: Send + std::fmt::Debug {
     /// Reporter will invoke this method to Send the cql response to worker
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()>;
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()>;
 }
 
 #[derive(Error, Debug)]

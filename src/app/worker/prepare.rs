@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::fmt::Debug;
 
 /// A statement prepare worker
+#[derive(Debug)]
 pub struct PrepareWorker {
     /// The expected id for this statement
     pub id: [u8; 16],
@@ -72,7 +74,7 @@ impl Worker for PrepareWorker {
         info!("Successfully prepared statement: '{}'", self.statement);
         Ok(())
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
         error!("Failed to prepare statement: {}, error: {}", self.statement, error);
         Ok(())
     }

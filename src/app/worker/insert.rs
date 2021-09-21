@@ -1,9 +1,10 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use std::fmt::Debug;
 
 /// An insert request worker
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InsertWorker<S: Insert<K, V>, K, V> {
     /// The keyspace this worker is for
     pub keyspace: S,
@@ -38,22 +39,18 @@ where
 
 impl<S, K, V> Worker for InsertWorker<S, K, V>
 where
-    S: 'static + Insert<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    S: 'static + Insert<K, V> + Debug,
+    K: 'static + Send + Clone + Debug,
+    V: 'static + Send + Clone + Debug,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         Self::decode_response(giveload.try_into()?)?;
         Ok(())
     }
 
-    fn handle_error(
-        mut self: Box<Self>,
-        mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
-    ) -> anyhow::Result<()> {
+    fn handle_error(mut self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+            if let Some(id) = cql_error.take_unprepared_id() {
                 return handle_unprepared_error(&self, &self.keyspace, &self.key, &self.value, id, reporter)
                     .map_err(|e| anyhow!("Error trying to prepare query: {}", e));
             }
@@ -69,8 +66,7 @@ where
             tokio::spawn(async { req.send_global(self) });
         } else {
             // no more retries
-            // print error!
-            error!("{:?}, reporter running: {}", error, reporter.is_some());
+            error!("{:?}, reporter running: {}", error, !reporter.is_closed());
         }
         Ok(())
     }

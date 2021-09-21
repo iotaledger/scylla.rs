@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::fmt::Debug;
 
 /// A select worker
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SelectWorker<H, S: Select<K, V>, K, V>
 where
-    S: 'static + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
+    S: 'static + Select<K, V> + Debug,
+    K: 'static + Send + Clone + Debug,
+    V: 'static + Send + Clone + Debug,
+    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone + Debug,
 {
     /// A handle which can be used to return the queried value decoder
     pub handle: H,
@@ -29,10 +30,10 @@ where
 
 impl<H, S: Select<K, V>, K, V> SelectWorker<H, S, K, V>
 where
-    S: 'static + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
+    S: 'static + Select<K, V> + Debug,
+    K: 'static + Send + Clone + Debug,
+    V: 'static + Send + Clone + Debug,
+    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone + Debug,
 {
     /// Create a new value selecting worker with a number of retries and a response handle
     pub fn new(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Self {
@@ -60,10 +61,10 @@ where
 
 impl<H, S, K, V> Worker for SelectWorker<H, S, K, V>
 where
-    S: 'static + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
-    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone,
+    S: 'static + Select<K, V> + Debug,
+    K: 'static + Send + Clone + Debug,
+    V: 'static + Send + Clone + Debug,
+    H: 'static + Send + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone + Debug,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
@@ -75,13 +76,9 @@ where
         }
     }
 
-    fn handle_error(
-        mut self: Box<Self>,
-        mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
-    ) -> anyhow::Result<()> {
+    fn handle_error(mut self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
+            if let Some(id) = cql_error.take_unprepared_id() {
                 handle_unprepared_error(
                     &self,
                     &self.keyspace,
@@ -119,9 +116,9 @@ where
 impl<S, K, V> HandleResponse<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>
     for UnboundedSender<Result<Decoder, WorkerError>>
 where
-    S: 'static + Send + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    S: 'static + Send + Select<K, V> + Debug,
+    K: 'static + Send + Clone + Debug,
+    V: 'static + Send + Clone + Debug,
 {
     type Response = Decoder;
     fn handle_response(
@@ -135,9 +132,9 @@ where
 impl<S, K, V> HandleError<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>
     for UnboundedSender<Result<Decoder, WorkerError>>
 where
-    S: 'static + Send + Select<K, V>,
-    K: 'static + Send + Clone,
-    V: 'static + Send + Clone,
+    S: 'static + Send + Select<K, V> + Debug,
+    K: 'static + Send + Clone + Debug,
+    V: 'static + Send + Clone + Debug,
 {
     fn handle_error(
         worker: Box<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, S, K, V>>,

@@ -1,99 +1,83 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{reporter::*, *};
+use super::{
+    compute_reporter_num,
+    reporter::ReporterEvent,
+    Payloads,
+    ReportersHandles,
+};
 use anyhow::anyhow;
-use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf};
-
-mod event_loop;
-mod init;
-mod terminating;
-
-// Sender builder
-builder!(SenderBuilder {
-    socket: OwnedWriteHalf,
-    payloads: Payloads,
-    appends_num: i16
-});
-
-/// SenderHandle to be passed to the supervisor (reporters)
-#[derive(Clone)]
-pub struct SenderHandle {
-    tx: mpsc::UnboundedSender<SenderEvent>,
-}
-/// SenderInbox is used to recv events
-pub struct SenderInbox {
-    rx: mpsc::UnboundedReceiver<SenderEvent>,
-}
-
-impl Deref for SenderHandle {
-    type Target = mpsc::UnboundedSender<SenderEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
-    }
-}
-
-impl DerefMut for SenderHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
-    }
-}
-
-/// Sender event type.
-type SenderEvent = i16;
-
+use async_trait::async_trait;
+use backstage::core::{
+    AbortableUnboundedChannel,
+    Actor,
+    ActorError,
+    ActorResult,
+    Rt,
+    StreamExt,
+    SupHandle,
+    UnboundedHandle,
+};
+use std::collections::HashMap;
+use tokio::{
+    io::AsyncWriteExt,
+    net::tcp::OwnedWriteHalf,
+};
 /// Sender state
 pub struct Sender {
-    service: Service,
     socket: OwnedWriteHalf,
-    handle: Option<SenderHandle>,
-    inbox: SenderInbox,
-    payloads: Payloads,
     appends_num: i16,
 }
 
-impl ActorBuilder<ReportersHandles> for SenderBuilder {}
-
-/// implementation of builder
-impl Builder for SenderBuilder {
-    type State = Sender;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<SenderEvent>();
-        let handle = Some(SenderHandle { tx });
-        let inbox = SenderInbox { rx };
-
-        Self::State {
-            service: Service::new(),
-            payloads: self.payloads.unwrap(),
-            socket: self.socket.unwrap(),
-            appends_num: self.appends_num.unwrap(),
-            handle,
-            inbox,
+impl Sender {
+    pub(crate) fn new(split_sink_owned: OwnedWriteHalf, appends_num: i16) -> Self {
+        Self {
+            socket: split_sink_owned,
+            appends_num,
         }
-        .set_name()
     }
 }
 
-/// impl name of the Sender
-impl Name for Sender {
-    fn set_name(mut self) -> Self {
-        let name = String::from("Sender");
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
+/// The sender's event type
+pub(super) type SenderEvent = i16;
 
-#[async_trait::async_trait]
-impl AknShutdown<Sender> for ReportersHandles {
-    async fn aknowledge_shutdown(self, mut _state: Sender, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        for reporter_handle in self.values() {
-            let event = ReporterEvent::Session(Session::Service(_state.service.clone()));
-            let _ = reporter_handle.send(event);
+/// The Sender actor lifecycle implementation
+#[async_trait]
+impl<S> Actor<S> for Sender
+where
+    S: SupHandle<Self>,
+{
+    type Data = (Payloads, ReportersHandles);
+    type Channel = AbortableUnboundedChannel<SenderEvent>;
+    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        let parent_id = rt
+            .parent_id()
+            .ok_or_else(|| ActorError::exit_msg("sender without stage supervisor"))?;
+        let payloads = rt
+            .lookup(parent_id)
+            .await
+            .ok_or_else(|| ActorError::exit_msg("sender unables to lookup for payloads"))?;
+        let reporters_handles = rt.depends_on(parent_id).await.map_err(ActorError::exit)?;
+        Ok((payloads, reporters_handles))
+    }
+    async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, reporters_handles): Self::Data) -> ActorResult<()> {
+        while let Some(stream_id) = rt.inbox_mut().next().await {
+            if let Some(payload) = payloads[stream_id as usize].as_ref_payload() {
+                if let Err(io_error) = self.socket.write_all(payload).await {
+                    if let Some(reporter_handle) = reporters_handles.get(&compute_reporter_num(stream_id, self.appends_num))
+                    {
+                        reporter_handle
+                            .send(ReporterEvent::Err(anyhow!(io_error), stream_id))
+                            .unwrap_or_else(|e| log::error!("{}", e))
+                    } else {
+                        log::error!("No reporter found for stream {}!", stream_id);
+                    }
+                }
+            } else {
+                log::error!("No payload found for stream {}!", stream_id);
+            }
         }
+        Ok(())
     }
 }

@@ -2,133 +2,199 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    node::{NodeEvent, NodeHandle},
-    *,
+    ring::Registry,
+    Scylla,
 };
-use receiver::ReceiverBuilder;
-use reporter::ReporterBuilder;
-pub use reporter::{ReporterEvent, ReporterHandle};
-use sender::SenderBuilder;
+use crate::cql::CqlBuilder;
+use async_trait::async_trait;
+use backstage::core::{
+    Actor,
+    ActorError,
+    ActorResult,
+    IoChannel,
+    Rt,
+    ScopeId,
+    Service,
+    ServiceStatus,
+    StreamExt,
+    SupHandle,
+    UnboundedChannel,
+    UnboundedHandle,
+};
 use std::{
     cell::UnsafeCell,
     collections::HashMap,
     net::SocketAddr,
-    ops::{Deref, DerefMut},
+    ops::{
+        Deref,
+        DerefMut,
+    },
     sync::Arc,
 };
-use tokio::net::TcpStream;
+use tokio::{
+    net::TcpStream,
+    sync::RwLock,
+};
 
-mod event_loop;
-mod init;
 mod receiver;
-mod reporter;
+pub mod reporter;
 mod sender;
-mod terminating;
-
-/// The reporters of shard id to its corresponding sender of stage reporter events.
-#[derive(Clone)]
-pub struct ReportersHandles(HashMap<u8, ReporterHandle>);
+/// The max number
+static MAX_STREAM_IDS: i16 = 32767;
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
-
-impl Deref for ReportersHandles {
-    type Target = HashMap<u8, ReporterHandle>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ReportersHandles {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Shutdown for ReportersHandles {
-    fn shutdown(self) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        for reporter_handle in self.values() {
-            let _ = reporter_handle.send(ReporterEvent::Session(reporter::Session::Shutdown));
-        }
-        None
-    }
-}
-
-// Stage builder
-builder!(StageBuilder {
-    address: SocketAddr,
-    authenticator: PasswordAuth,
-    reporter_count: u8,
-    shard_id: u16,
-    buffer_size: usize,
-    recv_buffer_size: Option<u32>,
-    send_buffer_size: Option<u32>,
-    handle: StageHandle,
-    inbox: StageInbox
-});
-
-/// StageHandle to be passed to the children (reporter/s)
-#[derive(Clone)]
-pub struct StageHandle {
-    tx: mpsc::UnboundedSender<StageEvent>,
-}
-/// StageInbox is used to recv events
-pub struct StageInbox {
-    rx: mpsc::UnboundedReceiver<StageEvent>,
-}
-
-impl Deref for StageHandle {
-    type Target = mpsc::UnboundedSender<StageEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
-    }
-}
-
-impl DerefMut for StageHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
-    }
-}
-
+pub type ReportersHandles = HashMap<u8, UnboundedHandle<reporter::ReporterEvent>>;
 /// Stage event enum.
+#[backstage::core::supervise]
 pub enum StageEvent {
-    /// Reporter child status change
-    Reporter(Service),
-    /// Establish connection to scylla shard.
-    Connect,
+    /// Child status change
+    #[report]
+    #[eol]
+    Microservice(ScopeId, Service),
     /// Shutdwon a stage.
+    #[shutdown]
     Shutdown,
 }
+
 /// Stage state
 pub struct Stage {
-    service: Service,
     address: SocketAddr,
-    authenticator: PasswordAuth,
-    appends_num: i16,
-    reporter_count: u8,
-    reporters_handles: Option<ReportersHandles>,
     session_id: usize,
-    shard_id: u16,
-    payloads: Payloads,
-    buffer_size: usize,
-    recv_buffer_size: Option<u32>,
-    send_buffer_size: Option<u32>,
-    handle: Option<StageHandle>,
-    inbox: StageInbox,
+    shard_id: usize,
+    shard_count: usize,
+    // payloads: Payloads, todo add it as resource
 }
+
 impl Stage {
-    pub(crate) fn clone_handle(&self) -> Option<StageHandle> {
-        self.handle.clone()
+    pub fn new(address: SocketAddr, shard_id: usize, shard_count: usize) -> Self {
+        Self {
+            shard_count,
+            address,
+            shard_id,
+            session_id: 0,
+        }
     }
 }
+
+/// The Stage actor lifecycle implementation
+#[async_trait]
+impl<S> Actor<S> for Stage
+where
+    S: SupHandle<Self>,
+{
+    type Data = (SocketAddr, Arc<RwLock<Registry>>);
+    type Channel = UnboundedChannel<StageEvent>;
+    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        let scylla_resource_scope_id = rt
+            .highest_scope_id::<Scylla>()
+            .await
+            .ok_or_else(|| ActorError::exit_msg("stage unables to get scylla resource scope id"))?;
+        let scylla: Scylla = rt
+            .lookup(scylla_resource_scope_id)
+            .await
+            .ok_or_else(|| ActorError::exit_msg("stage unables to lookup for scylla as config"))?;
+        let cluster_scope_id = rt
+            .grandparent()
+            .scope_id()
+            .await
+            .ok_or_else(|| ActorError::exit_msg("stage doesn't have cluster as grandparent"))?;
+        // create payload resource
+        let mut payloads = Vec::new();
+        let appends_num = appends_num(scylla.reporter_count);
+        let last_range = appends_num * (scylla.reporter_count as i16);
+        (0..last_range).for_each(|_| payloads.push(Reusable::default()));
+        let payloads = Arc::new(payloads);
+        rt.publish(payloads).await;
+        let all_stage_streams: Vec<i16> = (0..last_range).collect();
+        let mut streams_iter = all_stage_streams.chunks_exact(appends_num as usize);
+        // start sender first to let it awaits reporters_handles resources
+        let cql = CqlBuilder::new()
+            .address(self.address)
+            .tokens()
+            .recv_buffer_size(scylla.recv_buffer_size)
+            .send_buffer_size(scylla.send_buffer_size)
+            .authenticator(scylla.authenticator.clone())
+            .build();
+        let cql_conn = cql.await.map_err(|e| ActorError::restart(e, None))?;
+        // verify shard_count, (as in very rare condition scylla might get restarted with different shard count )
+        if self.shard_count != cql_conn.shard_count() as usize {
+            return Err(ActorError::exit_msg("scylla changed its shard count"));
+        };
+        let (socket_rx, socket_tx) = cql_conn.split();
+        let sender = sender::Sender::new(socket_tx, appends_num);
+        rt.spawn("sender".to_string(), sender).await?;
+        // spawn receiver
+        let receiver = receiver::Receiver::new(scylla.buffer_size, appends_num);
+        rt.spawn_with_channel("receiver".to_string(), receiver, IoChannel(socket_rx))
+            .await?;
+        let reporters_registry: Arc<RwLock<Registry>> = rt.lookup(cluster_scope_id).await.ok_or_else(|| {
+            ActorError::exit_msg("stage unable to lookup for reporters registry in cluster data store")
+        })?;
+        // start reporters where they can directly link to the sender handle
+        let mut reporters_handles = HashMap::new();
+        let mut reporter_id: u8 = 0;
+        for reporter_streams_ids in streams_iter.next() {
+            let reporter = reporter::Reporter::new(reporter_streams_ids.into());
+            let reporter_handle = rt.start(format!("reporter_{}", reporter_id), reporter).await?;
+            reporters_handles.insert(reporter_id, reporter_handle);
+            reporter_id += 1;
+        }
+        rt.publish(reporters_handles.clone()).await;
+        let mut shard_socket_addr = self.address.clone();
+        shard_socket_addr.set_port(self.shard_id as u16);
+        reporters_registry
+            .write()
+            .await
+            .insert(shard_socket_addr.clone(), reporters_handles);
+        Ok((shard_socket_addr, reporters_registry))
+    }
+    async fn run(
+        &mut self,
+        rt: &mut Rt<Self, S>,
+        (shard_socket_addr, reporters_registry): Self::Data,
+    ) -> ActorResult<()> {
+        while let Some(event) = rt.inbox_mut().next().await {
+            match event {
+                StageEvent::Microservice(scope_id, service) => {
+                    if service.is_stopped() {
+                        rt.remove_microservice(scope_id);
+                    } else {
+                        rt.upsert_microservice(scope_id, service);
+                    }
+                    if !rt.service().is_stopping() {
+                        if rt.microservices_all(|node| node.is_running()) {
+                            rt.update_status(ServiceStatus::Running).await;
+                        } else if rt.microservices_all(|node| node.is_maintenance()) {
+                            rt.update_status(ServiceStatus::Maintenance).await;
+                        } else {
+                            rt.update_status(ServiceStatus::Degraded).await;
+                        }
+                    } else {
+                        rt.update_status(ServiceStatus::Stopping).await;
+                        if rt.microservices_stopped() {
+                            rt.inbox_mut().close();
+                        }
+                    }
+                }
+                StageEvent::Shutdown => {
+                    rt.stop().await;
+                    if rt.microservices_stopped() {
+                        rt.inbox_mut().close();
+                    }
+                }
+            }
+        }
+        reporters_registry.write().await.remove(&shard_socket_addr);
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 /// The reusable sender payload.
 pub struct Reusable {
     value: UnsafeCell<Option<Vec<u8>>>,
 }
+
 impl Reusable {
     #[allow(clippy::mut_from_ref)]
     /// Return as mutable sender payload value.
@@ -144,59 +210,13 @@ impl Reusable {
         self.as_mut().as_mut()
     }
 }
+
 unsafe impl Sync for Reusable {}
 
-impl ActorBuilder<NodeHandle> for StageBuilder {}
-
-/// implementation of builder
-impl Builder for StageBuilder {
-    type State = Stage;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<StageEvent>();
-        let handle = Some(StageHandle { tx });
-        let inbox = StageInbox { rx };
-        // create reusable payloads as giveload
-        let vector: Vec<Reusable> = Vec::new();
-        let payloads: Payloads = Arc::new(vector);
-        let reporter_count = self.reporter_count.unwrap();
-        Self::State {
-            service: Service::new(),
-            address: self.address.unwrap(),
-            authenticator: self.authenticator.unwrap(),
-            appends_num: 32767 / (reporter_count as i16),
-            reporter_count,
-            reporters_handles: Some(ReportersHandles(HashMap::with_capacity(reporter_count as usize))),
-            session_id: 0,
-            shard_id: self.shard_id.unwrap(),
-            payloads,
-            buffer_size: self.buffer_size.unwrap_or(1024000),
-            recv_buffer_size: self.recv_buffer_size.unwrap(),
-            send_buffer_size: self.send_buffer_size.unwrap(),
-            handle,
-            inbox,
-        }
-        .set_name()
-    }
+pub(super) fn appends_num(reporter_count: u8) -> i16 {
+    MAX_STREAM_IDS / (reporter_count as i16)
 }
 
-/// impl name of the Node
-impl Name for Stage {
-    fn set_name(mut self) -> Self {
-        // create name from the shard_id
-        let name = self.shard_id.to_string();
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl AknShutdown<Stage> for NodeHandle {
-    async fn aknowledge_shutdown(self, mut _state: Stage, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        let event = NodeEvent::Service(_state.service.clone());
-        let _ = self.send(event);
-    }
+pub(super) fn compute_reporter_num(stream_id: i16, appends_num: i16) -> u8 {
+    (stream_id / appends_num) as u8
 }

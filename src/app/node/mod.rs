@@ -1,139 +1,94 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    cluster::{ClusterEvent, ClusterHandle},
-    stage::{ReportersHandles, StageBuilder, StageEvent, StageHandle},
-    *,
+use super::stage::Stage;
+use async_trait::async_trait;
+use backstage::core::{
+    Actor,
+    ActorResult,
+    Rt,
+    ScopeId,
+    Service,
+    ServiceStatus,
+    StreamExt,
+    SupHandle,
+    UnboundedChannel,
 };
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
-};
+use std::net::SocketAddr;
 
-mod event_loop;
-mod init;
-mod terminating;
-
-// Node builder
-builder!(NodeBuilder {
-    address: SocketAddr,
-    data_center: String,
-    reporter_count: u8,
-    shard_count: u16,
-    buffer_size: usize,
-    recv_buffer_size: Option<u32>,
-    send_buffer_size: Option<u32>,
-    authenticator: PasswordAuth
-});
-
-/// NodeHandle to be passed to the children (Stage)
-#[derive(Clone)]
-pub struct NodeHandle {
-    tx: mpsc::UnboundedSender<NodeEvent>,
-}
-/// NodeInbox is used to recv events
-pub struct NodeInbox {
-    rx: mpsc::UnboundedReceiver<NodeEvent>,
-}
-
-impl Deref for NodeHandle {
-    type Target = mpsc::UnboundedSender<NodeEvent>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tx
-    }
-}
-
-impl DerefMut for NodeHandle {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tx
-    }
-}
-impl Shutdown for NodeHandle {
-    fn shutdown(self) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let _ = self.tx.send(NodeEvent::Shutdown);
-        None
-    }
-}
 /// Node event enum.
+#[backstage::core::supervise]
 pub enum NodeEvent {
-    /// Shutdown the node.
+    #[report]
+    #[eol]
+    /// To keep the node with up to date stage(s) service
+    Microservice(ScopeId, Service),
+    #[shutdown]
+    /// Shutdown signal.
     Shutdown,
-    /// Register the stage reporters.
-    RegisterReporters(Service, ReportersHandles),
-    /// To keep the node with up to date stage service
-    Service(Service),
 }
+
 /// Node state
 pub struct Node {
-    service: Service,
     address: SocketAddr,
-    reporters_handles: Option<HashMap<SocketAddr, ReportersHandles>>,
-    reporter_count: u8,
-    stages: HashMap<u16, StageHandle>,
-    shard_count: u16,
-    buffer_size: usize,
-    recv_buffer_size: Option<u32>,
-    send_buffer_size: Option<u32>,
-    authenticator: PasswordAuth,
-    handle: Option<NodeHandle>,
-    inbox: NodeInbox,
+    shard_count: usize,
 }
+
 impl Node {
-    pub(crate) fn clone_handle(&self) -> NodeHandle {
-        self.handle.clone().unwrap()
+    /// Create new Node with the provided socket address
+    pub fn new(address: SocketAddr, shard_count: usize) -> Self {
+        Self { address, shard_count }
     }
 }
-impl ActorBuilder<ClusterHandle> for NodeBuilder {}
 
-/// implementation of builder
-impl Builder for NodeBuilder {
-    type State = Node;
-    fn build(self) -> Self::State {
-        let (tx, rx) = mpsc::unbounded_channel::<NodeEvent>();
-        let handle = Some(NodeHandle { tx });
-        let inbox = NodeInbox { rx };
-        Self::State {
-            service: Service::new(),
-            address: self.address.unwrap(),
-            reporters_handles: Some(HashMap::new()),
-            reporter_count: self.reporter_count.unwrap(),
-            stages: HashMap::new(),
-            shard_count: self.shard_count.unwrap(),
-            buffer_size: self.buffer_size.unwrap(),
-            recv_buffer_size: self.recv_buffer_size.unwrap(),
-            send_buffer_size: self.send_buffer_size.unwrap(),
-            authenticator: self.authenticator.unwrap(),
-            handle,
-            inbox,
+/// The Node actor lifecycle implementation
+#[async_trait]
+impl<S> Actor<S> for Node
+where
+    S: SupHandle<Self>,
+{
+    type Data = ();
+    type Channel = UnboundedChannel<NodeEvent>;
+    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        // start stages in sync
+        for shard_id in 0..self.shard_count {
+            let stage = Stage::new(self.address, shard_id, self.shard_count);
+            rt.start(format!("stage_{}", shard_id), stage).await?;
         }
-        .set_name()
+        Ok(())
     }
-}
-
-/// impl name of the Node
-impl Name for Node {
-    fn set_name(mut self) -> Self {
-        // create name from the address
-        let name = self.address.to_string();
-        self.service.update_name(name);
-        self
-    }
-    fn get_name(&self) -> String {
-        self.service.get_name()
-    }
-}
-
-#[async_trait::async_trait]
-impl AknShutdown<Node> for ClusterHandle {
-    async fn aknowledge_shutdown(self, mut _state: Node, _status: Result<(), Need>) {
-        _state.service.update_status(ServiceStatus::Stopped);
-        let event = ClusterEvent::Service(_state.service.clone());
-        let _ = self.send(event);
+    async fn run(&mut self, rt: &mut Rt<Self, S>, data: Self::Data) -> ActorResult<Self::Data> {
+        while let Some(event) = rt.inbox_mut().next().await {
+            match event {
+                NodeEvent::Microservice(scope_id, service) => {
+                    if service.is_stopped() {
+                        rt.remove_microservice(scope_id);
+                    } else {
+                        rt.upsert_microservice(scope_id, service);
+                    }
+                    if !rt.service().is_stopping() {
+                        if rt.microservices_all(|node| node.is_running()) {
+                            rt.update_status(ServiceStatus::Running).await;
+                        } else if rt.microservices_all(|node| node.is_maintenance()) {
+                            rt.update_status(ServiceStatus::Maintenance).await;
+                        } else {
+                            rt.update_status(ServiceStatus::Degraded).await;
+                        }
+                    } else {
+                        rt.update_status(ServiceStatus::Stopping).await;
+                        if rt.microservices_stopped() {
+                            rt.inbox_mut().close();
+                        }
+                    }
+                }
+                NodeEvent::Shutdown => {
+                    rt.stop().await;
+                    if rt.microservices_stopped() {
+                        rt.inbox_mut().close();
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

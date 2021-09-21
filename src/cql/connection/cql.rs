@@ -1,15 +1,29 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::tokens::{Info, Row};
+use super::tokens::{
+    Info,
+    Row,
+};
 use crate::cql::{
-    compression::{MyCompression, UNCOMPRESSED},
+    compression::{
+        MyCompression,
+        UNCOMPRESSED,
+    },
     frame::{
         auth_challenge::AuthChallenge,
-        auth_response::{AllowAllAuth, AuthResponse, Authenticator, PasswordAuth},
+        auth_response::{
+            AllowAllAuth,
+            AuthResponse,
+            Authenticator,
+            PasswordAuth,
+        },
         authenticate::Authenticate,
         consistency::Consistency,
-        decoder::{Decoder, Frame},
+        decoder::{
+            Decoder,
+            Frame,
+        },
         options::Options,
         query::Query,
         rows::Rows,
@@ -18,16 +32,33 @@ use crate::cql::{
         Statements,
     },
 };
-use anyhow::{anyhow, bail, ensure};
-use port_scanner::{local_port_available, request_open_port};
+use anyhow::{
+    anyhow,
+    bail,
+    ensure,
+};
+use port_scanner::{
+    local_port_available,
+    request_open_port,
+};
 use std::{
     collections::HashMap,
     convert::TryInto,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{
+        IpAddr,
+        Ipv4Addr,
+        SocketAddr,
+    },
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpSocket, TcpStream},
+    io::{
+        AsyncReadExt,
+        AsyncWriteExt,
+    },
+    net::{
+        TcpSocket,
+        TcpStream,
+    },
 };
 
 #[derive(Default)]
@@ -365,6 +396,11 @@ impl Cql {
     /// Get the socket stream behind the cql connection
     pub fn stream(&mut self) -> &mut TcpStream {
         &mut self.stream
+    }
+    /// Split the cql connection into Owned read and write halfs
+    pub fn split(self) -> (tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf) {
+        let stream: TcpStream = self.into();
+        stream.into_split()
     }
     /// Take the associated tokens of the connected scylla node
     pub fn take_tokens(&mut self) -> Option<Vec<i64>> {
