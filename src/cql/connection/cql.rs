@@ -265,6 +265,20 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
                                 // continue, request new open_port
                                 continue;
                             }
+                        } else {
+                            let local_address =
+                                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), requested_open_port);
+                            self.set_local_addr(local_address);
+                            // reconnect
+                            self.connect().await?;
+                            // take the cql_connection
+                            let mut cqlconn = self.cql.take().ok_or_else(|| anyhow!("No CQL connection!"))?;
+                            // assert shard_id is equal
+                            assert_eq!(cqlconn.shard_id, requested_shard_id);
+                            if self.tokens {
+                                cqlconn.fetch_tokens().await?;
+                            }
+                            return Ok(cqlconn);
                         }
                     }
                     // return error no fd/open_ports anymore?
