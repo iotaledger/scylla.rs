@@ -87,11 +87,7 @@ where
         }
     }
 
-    fn handle_error(
-        mut self: Box<Self>,
-        mut error: WorkerError,
-        reporter: &Option<ReporterHandle>,
-    ) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &Option<ReporterHandle>) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 handle_select_unprepared_error(
