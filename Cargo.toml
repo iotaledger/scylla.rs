@@ -44,6 +44,10 @@ tokio = { version = "1.5", features = ["macros", "rt-multi-thread", "signal", "n
 name = "scylla"
 path = "examples/scylla.rs"
 
+[[example]]
+name = "benchmark"
+path = "examples/benchmark.rs"
+
 [features]
 default = ["app"]
 app = [

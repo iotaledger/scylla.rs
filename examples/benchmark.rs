@@ -1,10 +1,9 @@
-use std::{borrow::Cow, marker::PhantomData, time::SystemTime};
-
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use anyhow::bail;
 use log::*;
 use scylla_rs::prelude::*;
+use std::{borrow::Cow, marker::PhantomData, time::SystemTime};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 launcher!(builder: AppsBuilder {[] -> Scylla<Sender>: ScyllaBuilder<Sender>}, state: Apps {reporter_count: u8});
