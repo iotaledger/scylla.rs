@@ -7,19 +7,22 @@ use super::{
     update::UpdateRecommended,
     *,
 };
-use crate::cql::{
-    BatchBuild,
-    BatchBuilder,
-    BatchFlags,
-    BatchStatementOrId,
-    BatchTimestamp,
-    BatchType,
-    BatchTypeCounter,
-    BatchTypeLogged,
-    BatchTypeUnlogged,
-    BatchTypeUnset,
-    BatchValues,
-    Consistency,
+use crate::{
+    app::ring::RingSendError,
+    cql::{
+        BatchBuild,
+        BatchBuilder,
+        BatchFlags,
+        BatchStatementOrId,
+        BatchTimestamp,
+        BatchType,
+        BatchTypeCounter,
+        BatchTypeLogged,
+        BatchTypeUnlogged,
+        BatchTypeUnset,
+        BatchValues,
+        Consistency,
+    },
 };
 use dyn_clone::DynClone;
 use std::{
@@ -27,7 +30,6 @@ use std::{
     collections::HashMap,
     marker::PhantomData,
 };
-
 /// An aggregation trait which defines a statement marker of any type
 pub trait AnyStatement<S>: Any + Statement<S> + Send + DynClone + std::fmt::Debug {}
 
@@ -132,25 +134,25 @@ impl<S: Keyspace> BatchRequest<S> {
     }
 
     /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
+    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
         send_local(
             self.token,
             self.inner,
             worker,
             self.keyspace.name().clone().into_owned(),
-        );
-        DecodeResult::batch()
+        )?;
+        Ok(DecodeResult::batch())
     }
 
     /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
+    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
         send_global(
             self.token,
             self.inner,
             worker,
             self.keyspace.name().clone().into_owned(),
-        );
-        DecodeResult::batch()
+        )?;
+        Ok(DecodeResult::batch())
     }
 
     /// Get a statement given an id from the request's map

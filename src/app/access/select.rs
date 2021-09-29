@@ -346,25 +346,25 @@ impl<S: Select<K, V>, K, V> SelectRequest<S, K, V> {
         DecodeResult::select()
     }
     /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
+    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeRows<S, K, V>>, RingSendError> {
         send_local(
             self.token,
             self.inner,
             worker,
             self.keyspace.name().clone().into_owned(),
-        );
-        DecodeResult::select()
+        )?;
+        Ok(DecodeResult::select())
     }
 
     /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeRows<S, K, V>> {
+    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeRows<S, K, V>>, RingSendError> {
         send_global(
             self.token,
             self.inner,
             worker,
             self.keyspace.name().clone().into_owned(),
-        );
-        DecodeResult::select()
+        )?;
+        Ok(DecodeResult::select())
     }
 
     /// Consume the request to retrieve the payload

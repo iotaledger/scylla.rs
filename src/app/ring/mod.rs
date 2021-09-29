@@ -121,7 +121,12 @@ thread_local! {
 #[allow(unused)]
 impl Ring {
     /// Send request to a given data_center with the given replica_index and token.
-    pub fn send(data_center: &str, replica_index: usize, token: Token, request: ReporterEvent) {
+    pub fn send(
+        data_center: &str,
+        replica_index: usize,
+        token: Token,
+        request: ReporterEvent,
+    ) -> Result<(), RingSendError> {
         RING.with(|local| {
             local
                 .borrow_mut()
@@ -130,15 +135,15 @@ impl Ring {
         })
     }
     /// Send request to the first local datacenter with the given replica_index and token.
-    pub fn send_local(replica_index: usize, token: Token, request: ReporterEvent) {
+    pub fn send_local(replica_index: usize, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
         RING.with(|local| local.borrow_mut().sending().local(replica_index, token, request))
     }
     /// Send request to the first local datacenter with the given token and a random replica.
-    pub fn send_local_random_replica(token: Token, request: ReporterEvent) {
+    pub fn send_local_random_replica(token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
         RING.with(|local| local.borrow_mut().sending().local_random_replica(token, request))
     }
     /// Send request to the global datacenter with the given token and a random replica.
-    pub fn send_global_random_replica(token: Token, request: ReporterEvent) {
+    pub fn send_global_random_replica(token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
         RING.with(|local| local.borrow_mut().sending().global_random_replica(token, request))
     }
     /// Rebuild the Ring the most up to date version
@@ -194,7 +199,13 @@ impl Ring {
     pub(crate) fn version() -> u8 {
         unsafe { super::ring::VERSION }
     }
-    fn global(&mut self, data_center: &str, replica_index: usize, token: Token, request: ReporterEvent) {
+    fn global(
+        &mut self,
+        data_center: &str,
+        replica_index: usize,
+        token: Token,
+        request: ReporterEvent,
+    ) -> Result<(), RingSendError> {
         // send request.
         self.root.as_mut().search(token).send(
             data_center,
@@ -204,9 +215,9 @@ impl Ring {
             &mut self.registry,
             &mut self.rng,
             self.uniform,
-        );
+        )
     }
-    fn local(&mut self, replica_index: usize, token: Token, request: ReporterEvent) {
+    fn local(&mut self, replica_index: usize, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
         // send request.
         self.root.as_mut().search(token).send(
             &self.dcs[0],
@@ -216,9 +227,9 @@ impl Ring {
             &mut self.registry,
             &mut self.rng,
             self.uniform,
-        );
+        )
     }
-    fn local_random_replica(&mut self, token: Token, request: ReporterEvent) {
+    fn local_random_replica(&mut self, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
         // send request.
         self.root.as_mut().search(token).send(
             &self.dcs[0],
@@ -228,9 +239,9 @@ impl Ring {
             &mut self.registry,
             &mut self.rng,
             self.uniform,
-        );
+        )
     }
-    fn global_random_replica(&mut self, token: Token, request: ReporterEvent) {
+    fn global_random_replica(&mut self, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
         // send request.
         self.root.as_mut().search(token).send(
             &self.dcs[self.rng.sample(self.uniform_dcs)],
@@ -240,7 +251,7 @@ impl Ring {
             &mut self.registry,
             &mut self.rng,
             self.uniform,
-        );
+        )
     }
     fn initialize_ring(version: u8, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
         // create empty Registry

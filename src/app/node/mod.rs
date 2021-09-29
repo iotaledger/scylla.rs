@@ -57,7 +57,8 @@ where
         }
         Ok(())
     }
-    async fn run(&mut self, rt: &mut Rt<Self, S>, data: Self::Data) -> ActorResult<Self::Data> {
+    async fn run(&mut self, rt: &mut Rt<Self, S>, _: Self::Data) -> ActorResult<Self::Data> {
+        log::info!("{} Node is {}", self.address, rt.service().status());
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
                 NodeEvent::Microservice(scope_id, service) => {
@@ -67,14 +68,26 @@ where
                         rt.upsert_microservice(scope_id, service);
                     }
                     if !rt.service().is_stopping() {
-                        if rt.microservices_all(|node| node.is_running()) {
+                        if rt.microservices_all(|stage| stage.is_running()) {
+                            if !rt.service().is_running() {
+                                log::info!("{} Node is Running", self.address);
+                            }
                             rt.update_status(ServiceStatus::Running).await;
-                        } else if rt.microservices_all(|node| node.is_maintenance()) {
+                        } else if rt.microservices_all(|stage| stage.is_maintenance()) {
+                            if !rt.service().is_maintenance() {
+                                log::info!("{} Node is Maintenance", self.address);
+                            }
                             rt.update_status(ServiceStatus::Maintenance).await;
                         } else {
+                            if !rt.service().is_degraded() {
+                                log::info!("{} Node is Degraded", self.address);
+                            }
                             rt.update_status(ServiceStatus::Degraded).await;
                         }
                     } else {
+                        if !rt.service().is_stopping() {
+                            log::info!("{} Node is Stopping", self.address);
+                        }
                         rt.update_status(ServiceStatus::Stopping).await;
                         if rt.microservices_stopped() {
                             rt.inbox_mut().close();

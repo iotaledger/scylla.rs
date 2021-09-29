@@ -93,13 +93,17 @@ where
     type Data = ();
     type Channel = UnboundedChannel<ScyllaEvent>;
     async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        log::info!("Scylla is {}", rt.service().status());
+        // todo add scylla banner
         // publish scylla as config
         rt.add_resource(self.clone()).await;
         let cluster = Cluster::new();
         rt.start("cluster".to_string(), cluster).await?;
+        rt.update_status(ServiceStatus::Idle).await;
         Ok(())
     }
     async fn run(&mut self, rt: &mut Rt<Self, S>, _data: Self::Data) -> ActorResult<()> {
+        log::info!("Scylla is {}", rt.service().status());
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
                 ScyllaEvent::Microservice(scope_id, service) => {
@@ -109,14 +113,31 @@ where
                         rt.upsert_microservice(scope_id, service);
                     }
                     if !rt.service().is_stopping() {
-                        if rt.microservices_all(|node| node.is_running()) {
+                        if rt.microservices_all(|cluster| cluster.is_running()) {
+                            if !rt.service().is_running() {
+                                log::info!("Scylla is Running");
+                            }
                             rt.update_status(ServiceStatus::Running).await;
-                        } else if rt.microservices_all(|node| node.is_maintenance()) {
+                        } else if rt.microservices_all(|cluster| cluster.is_maintenance()) {
+                            if !rt.service().is_maintenance() {
+                                log::info!("Scylla is Maintenance");
+                            }
                             rt.update_status(ServiceStatus::Maintenance).await;
+                        } else if rt.microservices_all(|cluster| cluster.is_idle()) {
+                            if !rt.service().is_idle() {
+                                log::info!("Scylla is Idle");
+                            }
+                            rt.update_status(ServiceStatus::Idle).await;
                         } else {
+                            if !rt.service().is_degraded() {
+                                log::info!("Scylla is Degraded");
+                            }
                             rt.update_status(ServiceStatus::Degraded).await;
                         }
                     } else {
+                        if !rt.service().is_stopping() {
+                            log::info!("Scylla is Stopping");
+                        }
                         rt.update_status(ServiceStatus::Stopping).await;
                         if rt.microservices_stopped() {
                             rt.inbox_mut().close();

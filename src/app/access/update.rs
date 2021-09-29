@@ -262,25 +262,25 @@ where
 
 impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
     /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
+    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
         send_local(
             self.token,
             self.inner,
             worker,
             self.keyspace.name().clone().into_owned(),
-        );
-        DecodeResult::update()
+        )?;
+        Ok(DecodeResult::update())
     }
 
     /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> DecodeResult<DecodeVoid<S>> {
+    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
         send_global(
             self.token,
             self.inner,
             worker,
             self.keyspace.name().clone().into_owned(),
-        );
-        DecodeResult::update()
+        )?;
+        Ok(DecodeResult::update())
     }
 
     /// Consume the request to retrieve the payload

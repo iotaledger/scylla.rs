@@ -16,22 +16,30 @@ use crate::{
 use async_trait::async_trait;
 
 use super::Scylla;
-use backstage::core::{
-    Actor,
-    ActorError,
-    ActorResult,
-    Rt,
-    ScopeId,
-    Service,
-    ServiceStatus,
-    Shutdown,
-    StreamExt,
-    SupHandle,
-    UnboundedChannel,
+use backstage::{
+    core::{
+        Actor,
+        ActorError,
+        ActorResult,
+        Rt,
+        ScopeId,
+        Service,
+        ServiceStatus,
+        Shutdown,
+        StreamExt,
+        SupHandle,
+        UnboundedChannel,
+    },
+    prefab::websocket::{
+        GenericResponder,
+        JsonMessage,
+        Responder,
+    },
 };
 
 use std::{
     collections::HashMap,
+    convert::TryFrom,
     net::SocketAddr,
     sync::Arc,
 };
@@ -50,7 +58,7 @@ pub struct Cluster {
 #[backstage::core::supervise]
 pub enum ClusterEvent {
     /// Topology configuration
-    Topology(Topology), // todo add responder
+    Topology(Topology, Responder),
     /// Used by the Node to keep the cluster up to date with its service
     #[report]
     #[eol]
@@ -61,6 +69,7 @@ pub enum ClusterEvent {
 }
 
 /// Cluster topology event
+#[derive(serde::Deserialize, serde::Serialize)]
 pub enum Topology {
     /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
     AddNode(SocketAddr),
@@ -111,6 +120,7 @@ where
     type Data = (Scylla, Arc<RwLock<Registry>>);
     type Channel = UnboundedChannel<ClusterEvent>;
     async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+        log::info!("Cluster is {}", rt.service().status());
         // add empty registry as resource
         let reporters_registry = Arc::new(RwLock::new(Registry::new()));
         rt.publish(reporters_registry.clone()).await;
@@ -121,30 +131,30 @@ where
             .lookup::<Scylla>(parent_id)
             .await
             .ok_or_else(|| ActorError::exit_msg("cluster unables to lookup for scylla as config"))?;
+        // add route to enable configuring the cluster topology over the ws
+        rt.add_route::<(JsonMessage, Responder)>().await.ok();
+        // cluster always starts with null nodes, therefore its status is IDLE from service perspective
+        rt.update_status(ServiceStatus::Idle).await;
         Ok((scylla, reporters_registry))
     }
     async fn run(&mut self, rt: &mut Rt<Self, S>, (scylla, registry): Self::Data) -> ActorResult<()> {
-        // todo remove this for test only
-        {
-            let add_node = Topology::AddNode(([172, 17, 0, 2], 19042).into());
-            rt.handle().send(ClusterEvent::Topology(add_node)).ok();
-            let build_ring = Topology::BuildRing(1);
-            rt.handle().send(ClusterEvent::Topology(build_ring)).ok();
-        }
+        log::info!("Cluster is {}", rt.service().status());
         let mut data_center = vec![scylla.local_dc];
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
-                ClusterEvent::Topology(topology) => {
+                ClusterEvent::Topology(topology, responder) => {
                     // configure topology only if the cluster is not stopping
                     if rt.service().is_stopping() {
-                        // respond to caller with topology error Err(topology)
+                        let error_response: Result<Topology, _> = Err(topology);
+                        responder.inner_reply(error_response).await.ok();
                         continue;
                     }
                     match topology {
                         Topology::AddNode(address) => {
                             // make sure it doesn't already exist in our cluster
                             if self.nodes.contains_key(&address) {
-                                // todo response to caller using the todo responder
+                                let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
+                                responder.inner_reply(error_response).await.ok();
                                 continue;
                             }
                             // to spawn node we first make sure it's online;
@@ -177,9 +187,13 @@ where
                                                 };
                                                 // add node_info to nodes
                                                 self.nodes.insert(address, node_info);
+                                                let ok_response: Result<_, Topology> = Ok(Topology::AddNode(address));
+                                                responder.inner_reply(ok_response).await.ok();
                                             }
                                             Err(_err) => {
-                                                // tell caller using responder
+                                                let error_response: Result<Topology, _> =
+                                                    Err(Topology::AddNode(address));
+                                                responder.inner_reply(error_response).await.ok();
                                             }
                                         }
                                     } else {
@@ -187,21 +201,26 @@ where
                                     }
                                 }
                                 Err(_) => {
-                                    // tell caller using responder
+                                    let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
+                                    responder.inner_reply(error_response).await.ok();
                                 }
                             }
                         }
                         Topology::RemoveNode(address) => {
                             // get and remove node_info
                             if let Some(node_info) = self.nodes.get(&address) {
-                                rt.shutdown_child(&node_info.scope_id).await;
-                                todo!("tell responder")
+                                if let Some(join_handle) = rt.shutdown_child(&node_info.scope_id).await {
+                                    // Await till it gets shutdown, it forces sync shutdown
+                                    join_handle.await.ok();
+                                };
                             } else {
                                 // Cannot remove non-existing node.
-                                todo!("tell responder")
+                                let error_response: Result<Topology, _> = Err(Topology::RemoveNode(address));
+                                responder.inner_reply(error_response).await.ok();
                             };
                         }
                         Topology::BuildRing(uniform_rf) => {
+                            // todo check if all nodes/children are in stable status
                             // do cleanup on weaks
                             self.cleanup(scylla.thread_count);
                             // re/build
@@ -227,7 +246,8 @@ where
                                 self.weak_rings.push(old_weak_ring);
                             }
                             Ring::rebuild();
-                            // todo respond with success
+                            let ok_response: Result<_, Topology> = Ok(Topology::BuildRing(uniform_rf));
+                            responder.inner_reply(ok_response).await.ok();
                         }
                     }
                 }
@@ -247,13 +267,25 @@ where
                     }
                     if !rt.service().is_stopping() {
                         if rt.microservices_all(|node| node.is_running()) {
+                            if !rt.service().is_running() {
+                                log::info!("Cluster is Running");
+                            }
                             rt.update_status(ServiceStatus::Running).await;
                         } else if rt.microservices_all(|node| node.is_maintenance()) {
+                            if !rt.service().is_maintenance() {
+                                log::info!("Cluster is Maintenance");
+                            }
                             rt.update_status(ServiceStatus::Maintenance).await;
                         } else {
+                            if !rt.service().is_degraded() {
+                                log::info!("Cluster is Degraded");
+                            }
                             rt.update_status(ServiceStatus::Degraded).await;
                         }
                     } else {
+                        if !rt.service().is_stopping() {
+                            log::info!("Cluster is Stopping");
+                        }
                         rt.update_status(ServiceStatus::Stopping).await;
                         if rt.microservices_stopped() {
                             rt.inbox_mut().close();
@@ -281,6 +313,13 @@ where
             }
         }
         Ok(())
+    }
+}
+
+impl TryFrom<(JsonMessage, Responder)> for ClusterEvent {
+    type Error = anyhow::Error;
+    fn try_from((msg, responder): (JsonMessage, Responder)) -> Result<Self, Self::Error> {
+        Ok(ClusterEvent::Topology(serde_json::from_str(msg.0.as_ref())?, responder))
     }
 }
 

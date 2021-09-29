@@ -30,6 +30,7 @@ use std::{
 use tokio::sync::RwLock;
 
 mod receiver;
+/// The reporter module
 pub mod reporter;
 mod sender;
 /// The max number
@@ -97,7 +98,7 @@ where
         let payloads = Arc::new(payloads);
         rt.publish(payloads).await;
         let all_stage_streams: Vec<i16> = (0..last_range).collect();
-        let mut streams_iter = all_stage_streams.chunks_exact(appends_num as usize);
+        let streams_iter = all_stage_streams.chunks_exact(appends_num as usize);
         // start sender first to let it awaits reporters_handles resources
         let cql = CqlBuilder::new()
             .address(self.address)
@@ -113,10 +114,11 @@ where
         };
         let (socket_rx, socket_tx) = cql_conn.split();
         let sender = sender::Sender::new(socket_tx, appends_num);
-        rt.spawn("sender".to_string(), sender).await?;
+        let (_, sender_init_signal) = rt.spawn("sender".to_string(), sender).await?;
         // spawn receiver
         let receiver = receiver::Receiver::new(scylla.buffer_size, appends_num);
-        rt.spawn_with_channel("receiver".to_string(), receiver, IoChannel(socket_rx))
+        let (_, receiver_init_signal) = rt
+            .spawn_with_channel("receiver".to_string(), receiver, IoChannel(socket_rx))
             .await?;
         let reporters_registry: Arc<RwLock<Registry>> = rt.lookup(cluster_scope_id).await.ok_or_else(|| {
             ActorError::exit_msg("stage unable to lookup for reporters registry in cluster data store")
@@ -124,7 +126,7 @@ where
         // start reporters where they can directly link to the sender handle
         let mut reporters_handles = HashMap::new();
         let mut reporter_id: u8 = 0;
-        for reporter_streams_ids in streams_iter.next() {
+        for reporter_streams_ids in streams_iter {
             let reporter = reporter::Reporter::new(reporter_streams_ids.into());
             let reporter_handle = rt.start(format!("reporter_{}", reporter_id), reporter).await?;
             reporters_handles.insert(reporter_id, reporter_handle);
@@ -137,6 +139,10 @@ where
             .write()
             .await
             .insert(shard_socket_addr.clone(), reporters_handles);
+        let (scope_id, receiver_service) = receiver_init_signal.initialized().await?;
+        rt.upsert_microservice(scope_id, receiver_service);
+        let (scope_id, sender_service) = sender_init_signal.initialized().await?;
+        rt.upsert_microservice(scope_id, sender_service);
         Ok((shard_socket_addr, reporters_registry))
     }
     async fn run(
@@ -144,6 +150,7 @@ where
         rt: &mut Rt<Self, S>,
         (shard_socket_addr, reporters_registry): Self::Data,
     ) -> ActorResult<()> {
+        log::info!("{} Stage is {}", shard_socket_addr, rt.service().status());
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
                 StageEvent::Microservice(scope_id, service) => {
@@ -153,11 +160,12 @@ where
                         rt.upsert_microservice(scope_id, service);
                     }
                     if !rt.service().is_stopping() {
-                        if rt.microservices_all(|node| node.is_running()) {
+                        if rt.microservices_all(|ms| ms.is_running()) {
                             rt.update_status(ServiceStatus::Running).await;
-                        } else if rt.microservices_all(|node| node.is_maintenance()) {
+                        } else if rt.microservices_all(|ms| ms.is_maintenance()) {
                             rt.update_status(ServiceStatus::Maintenance).await;
                         } else {
+                            log::info!("Stage is {}", rt.service());
                             rt.update_status(ServiceStatus::Degraded).await;
                         }
                     } else {

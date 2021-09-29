@@ -29,7 +29,10 @@ use super::{
 };
 use crate::{
     app::{
-        ring::Ring,
+        ring::{
+            Ring,
+            RingSendError,
+        },
         stage::reporter::{
             ReporterEvent,
             ReporterHandle,
@@ -204,17 +207,27 @@ impl<S> DecodeResult<DecodeVoid<S>> {
 }
 
 /// Send a local request to the Ring
-pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>, _keyspace: String) {
+pub fn send_local(
+    token: i64,
+    payload: Vec<u8>,
+    worker: Box<dyn Worker>,
+    _keyspace: String,
+) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
-    Ring::send_local_random_replica(token, request);
+    Ring::send_local_random_replica(token, request)
 }
 
 /// Send a global request to the Ring
-pub fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>, _keyspace: String) {
+pub fn send_global(
+    token: i64,
+    payload: Vec<u8>,
+    worker: Box<dyn Worker>,
+    _keyspace: String,
+) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
-    Ring::send_global_random_replica(token, request);
+    Ring::send_global_random_replica(token, request)
 }
 
 impl<T> Deref for DecodeResult<T> {
