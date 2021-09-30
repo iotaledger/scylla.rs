@@ -11,11 +11,14 @@ use backstage::core::{
     Actor,
     ActorError,
     ActorResult,
+    EolEvent,
     IoChannel,
+    ReportEvent,
     Rt,
     ScopeId,
     Service,
     ServiceStatus,
+    ShutdownEvent,
     StreamExt,
     SupHandle,
     UnboundedChannel,
@@ -156,23 +159,21 @@ where
                 StageEvent::Microservice(scope_id, service) => {
                     if service.is_stopped() {
                         rt.remove_microservice(scope_id);
+                        rt.shutdown_children().await;
+                        if !rt.service().is_stopping() {
+                            if rt.microservices_stopped() {
+                                return Err(ActorError::restart_msg("disconnected", None));
+                            } else {
+                                rt.update_status(ServiceStatus::Degraded).await;
+                            }
+                        } else {
+                            rt.update_status(ServiceStatus::Stopping).await;
+                            if rt.microservices_stopped() {
+                                rt.inbox_mut().close();
+                            }
+                        }
                     } else {
                         rt.upsert_microservice(scope_id, service);
-                    }
-                    if !rt.service().is_stopping() {
-                        if rt.microservices_all(|ms| ms.is_running()) {
-                            rt.update_status(ServiceStatus::Running).await;
-                        } else if rt.microservices_all(|ms| ms.is_maintenance()) {
-                            rt.update_status(ServiceStatus::Maintenance).await;
-                        } else {
-                            log::info!("Stage is {}", rt.service());
-                            rt.update_status(ServiceStatus::Degraded).await;
-                        }
-                    } else {
-                        rt.update_status(ServiceStatus::Stopping).await;
-                        if rt.microservices_stopped() {
-                            rt.inbox_mut().close();
-                        }
                     }
                 }
                 StageEvent::Shutdown => {

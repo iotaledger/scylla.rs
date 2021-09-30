@@ -20,15 +20,20 @@ use backstage::{
     core::{
         Actor,
         ActorError,
+        ActorRequest,
         ActorResult,
+        EolEvent,
+        ReportEvent,
         Rt,
         ScopeId,
         Service,
         ServiceStatus,
         Shutdown,
+        ShutdownEvent,
         StreamExt,
         SupHandle,
         UnboundedChannel,
+        UnboundedHandle,
     },
     prefab::websocket::{
         GenericResponder,
@@ -58,14 +63,19 @@ pub struct Cluster {
 #[backstage::core::supervise]
 pub enum ClusterEvent {
     /// Topology configuration
-    Topology(Topology, Responder),
+    Topology(Topology, Option<Responder>),
     /// Used by the Node to keep the cluster up to date with its service
     #[report]
-    #[eol]
-    Microservice(ScopeId, Service),
+    Microservice(ScopeId, Service, Option<ActorResult<()>>),
     /// Shutdown signal
     #[shutdown]
     Shutdown,
+}
+
+impl EolEvent<Node> for ClusterEvent {
+    fn eol_event(scope_id: ScopeId, service: Service, _: Node, r: ActorResult<()>) -> Self {
+        Self::Microservice(scope_id, service, Some(r))
+    }
 }
 
 /// Cluster topology event
@@ -142,22 +152,28 @@ where
         let mut data_center = vec![scylla.local_dc];
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
-                ClusterEvent::Topology(topology, responder) => {
+                ClusterEvent::Topology(topology, responder_opt) => {
                     // configure topology only if the cluster is not stopping
                     if rt.service().is_stopping() {
-                        let error_response: Result<Topology, _> = Err(topology);
-                        responder.inner_reply(error_response).await.ok();
+                        if let Some(responder) = responder_opt.as_ref() {
+                            let error_response: Result<Topology, _> = Err(topology);
+                            responder.inner_reply(error_response).await.ok();
+                        }
                         continue;
                     }
                     match topology {
                         Topology::AddNode(address) => {
-                            // make sure it doesn't already exist in our cluster
                             if self.nodes.contains_key(&address) {
-                                let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
-                                responder.inner_reply(error_response).await.ok();
+                                if let Some(responder) = responder_opt.as_ref() {
+                                    let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
+                                    responder.inner_reply(error_response).await.ok();
+                                    continue;
+                                }
+                            } else if responder_opt.is_none() {
+                                // skip re-adding a node, because it got removed
                                 continue;
                             }
-                            // to spawn node we first make sure it's online;
+                            // to spawn node we first make sure it's online
                             let cql = CqlBuilder::new()
                                 .address(address)
                                 .tokens()
@@ -167,7 +183,7 @@ where
                                 .build();
                             match cql.await {
                                 Ok(mut cqlconn) => {
-                                    log::info!("Successfully connected to node!");
+                                    log::info!("Successfully connected to node {}!", address);
                                     let shard_count = cqlconn.shard_count();
                                     if let (Some(dc), Some(tokens)) = (cqlconn.take_dc(), cqlconn.take_tokens()) {
                                         // create node
@@ -175,7 +191,6 @@ where
                                         // start the node and ensure it got initialized
                                         match rt.start(address.to_string(), node).await {
                                             Ok(h) => {
-                                                // Successfully added/spawned/started node
                                                 // create nodeinfo
                                                 let node_info = NodeInfo {
                                                     scope_id: h.scope_id(),
@@ -187,31 +202,65 @@ where
                                                 };
                                                 // add node_info to nodes
                                                 self.nodes.insert(address, node_info);
-                                                let ok_response: Result<_, Topology> = Ok(Topology::AddNode(address));
-                                                responder.inner_reply(ok_response).await.ok();
+                                                if let Some(responder) = responder_opt.as_ref() {
+                                                    rt.update_status(ServiceStatus::Maintenance).await;
+                                                    log::info!("Cluster is Maintenance");
+                                                    let ok_response: Result<_, Topology> =
+                                                        Ok(Topology::AddNode(address));
+                                                    responder.inner_reply(ok_response).await.ok();
+                                                } else {
+                                                    if !rt.service().is_maintenance() {
+                                                        // todo force rebuild the ring as this was a reconnect event
+
+                                                        // change status to running (if all nodes are running) or
+                                                        // degraded (if any is not running)
+                                                        self.update_service_status(rt).await;
+                                                    } // else the admin supposed to rebuild the ring
+                                                }
                                             }
                                             Err(_err) => {
-                                                let error_response: Result<Topology, _> =
-                                                    Err(Topology::AddNode(address));
-                                                responder.inner_reply(error_response).await.ok();
+                                                if let Some(responder) = responder_opt.as_ref() {
+                                                    let error_response: Result<Topology, _> =
+                                                        Err(Topology::AddNode(address));
+                                                    responder.inner_reply(error_response).await.ok();
+                                                } else {
+                                                    let my_handle = rt.handle().clone();
+                                                    Self::restart_node(my_handle, address);
+                                                }
                                             }
                                         }
                                     } else {
                                         log::error!("Failed to retrieve data from CQL Connection!");
+                                        return Err(ActorError::exit_msg(
+                                            "Failed to retrieve data from CQL Connection!",
+                                        ));
                                     }
                                 }
                                 Err(_) => {
-                                    let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
-                                    responder.inner_reply(error_response).await.ok();
+                                    if let Some(responder) = responder_opt.as_ref() {
+                                        let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
+                                        responder.inner_reply(error_response).await.ok();
+                                    }
+                                    let my_handle = rt.handle().clone();
+                                    Self::restart_node(my_handle, address);
                                 }
                             }
                         }
                         Topology::RemoveNode(address) => {
+                            let responder = responder_opt.as_ref().ok_or_else(|| {
+                                ActorError::exit_msg("cannot use remove node topology variant without responder")
+                            })?;
                             // get and remove node_info
                             if let Some(node_info) = self.nodes.get(&address) {
                                 if let Some(join_handle) = rt.shutdown_child(&node_info.scope_id).await {
+                                    // update status to maintenance, as this is a topology event
+                                    rt.update_status(ServiceStatus::Maintenance).await;
+                                    log::info!("Cluster is Maintenance");
                                     // Await till it gets shutdown, it forces sync shutdown
                                     join_handle.await.ok();
+                                    self.nodes.remove(&address);
+                                    let ok_response: Result<_, Topology> = Ok(Topology::RemoveNode(address));
+                                    responder.inner_reply(ok_response).await.ok();
                                 };
                             } else {
                                 // Cannot remove non-existing node.
@@ -220,22 +269,47 @@ where
                             };
                         }
                         Topology::BuildRing(uniform_rf) => {
-                            // todo check if all nodes/children are in stable status
+                            let responder = responder_opt
+                                .as_ref()
+                                .ok_or_else(|| ActorError::exit_msg("cannot build ring without responder"))?;
+
+                            if self.nodes.len() < uniform_rf as usize {
+                                let error_response: Result<Topology, _> = Err(Topology::BuildRing(uniform_rf));
+                                responder.inner_reply(error_response).await.ok();
+                                continue;
+                            }
                             // do cleanup on weaks
                             self.cleanup(scylla.thread_count);
                             // re/build
-                            let version = self.new_version();
+                            let status_change;
                             if self.nodes.is_empty() {
+                                let version = self.new_version();
                                 let (new_arc_ring, old_weak_ring) = initialize_ring(version, true);
                                 self.arc_ring.replace(new_arc_ring);
                                 if let Some(old_weak_ring) = old_weak_ring {
                                     self.weak_rings.push(old_weak_ring);
                                 }
+                                status_change = ServiceStatus::Idle;
                             } else {
+                                let registry_snapshot = registry.read().await.clone();
+                                // ensure all nodes are running
+                                if rt.microservices_any(|node| !node.is_running())
+                                    || self.nodes.len() != rt.service().microservices().len()
+                                {
+                                    log::error!(
+                                        "Unstable cluster, cannot build ring!, fix this by removing any dead node(s)"
+                                    );
+                                    // the cluster in critical state, we cannot rebuild new ring
+                                    if let Some(responder) = responder_opt.as_ref() {
+                                        let error_response: Result<Topology, _> = Err(Topology::BuildRing(uniform_rf));
+                                        responder.inner_reply(error_response).await.ok();
+                                    }
+                                }
+                                let version = self.new_version();
                                 let (new_arc_ring, old_weak_ring) = build_ring(
                                     &mut data_center,
                                     &self.nodes,
-                                    registry.read().await.clone(),
+                                    registry_snapshot,
                                     scylla.reporter_count,
                                     uniform_rf as usize,
                                     version,
@@ -244,52 +318,47 @@ where
                                 self.arc_ring.replace(new_arc_ring);
                                 // push weak to weak_rings
                                 self.weak_rings.push(old_weak_ring);
+                                status_change = ServiceStatus::Running;
                             }
                             Ring::rebuild();
+                            rt.update_status(status_change).await;
                             let ok_response: Result<_, Topology> = Ok(Topology::BuildRing(uniform_rf));
                             responder.inner_reply(ok_response).await.ok();
                         }
                     }
                 }
-                ClusterEvent::Microservice(scope_id, service) => {
+                ClusterEvent::Microservice(scope_id, service, result_opt) => {
                     if service.is_stopped() {
-                        rt.remove_microservice(scope_id);
-                        // remove it from node
-                        let address: SocketAddr = service
+                        let address: SocketAddr = rt
+                            .remove_microservice(scope_id)
+                            .ok_or_else(|| ActorError::exit_msg("microservice for stopped node"))?
                             .directory()
                             .as_ref()
-                            .expect("directory for node")
+                            .ok_or_else(|| ActorError::exit_msg("directory microservice for stopped node"))?
                             .parse()
-                            .expect("address as node directory name");
-                        self.nodes.remove(&address);
+                            .map_err(ActorError::exit)?;
+                        if !rt.service().is_stopping() && self.nodes.contains_key(&address) {
+                            // todo force to rebuild the ring with healthy/connected nodes
+
+                            if let Err(ActorError {
+                                source: _,
+                                request: Some(ActorRequest::Restart(_)),
+                            }) = result_opt.expect("node with eol service")
+                            {
+                                let my_handle = rt.handle().clone();
+                                Self::restart_node(my_handle, address);
+                            }
+                        }
                     } else {
                         rt.upsert_microservice(scope_id, service);
                     }
-                    if !rt.service().is_stopping() {
-                        if rt.microservices_all(|node| node.is_running()) {
-                            if !rt.service().is_running() {
-                                log::info!("Cluster is Running");
-                            }
-                            rt.update_status(ServiceStatus::Running).await;
-                        } else if rt.microservices_all(|node| node.is_maintenance()) {
-                            if !rt.service().is_maintenance() {
-                                log::info!("Cluster is Maintenance");
-                            }
-                            rt.update_status(ServiceStatus::Maintenance).await;
-                        } else {
-                            if !rt.service().is_degraded() {
-                                log::info!("Cluster is Degraded");
-                            }
-                            rt.update_status(ServiceStatus::Degraded).await;
-                        }
-                    } else {
-                        if !rt.service().is_stopping() {
-                            log::info!("Cluster is Stopping");
-                        }
-                        rt.update_status(ServiceStatus::Stopping).await;
-                        if rt.microservices_stopped() {
+                    if rt.service().is_maintenance() || rt.service().is_stopping() {
+                        rt.update_status(rt.service().status().clone()).await;
+                        if rt.service().is_stopping() && rt.microservices_stopped() {
                             rt.inbox_mut().close();
                         }
+                    } else {
+                        self.update_service_status(rt).await;
                     }
                 }
                 ClusterEvent::Shutdown => {
@@ -319,7 +388,10 @@ where
 impl TryFrom<(JsonMessage, Responder)> for ClusterEvent {
     type Error = anyhow::Error;
     fn try_from((msg, responder): (JsonMessage, Responder)) -> Result<Self, Self::Error> {
-        Ok(ClusterEvent::Topology(serde_json::from_str(msg.0.as_ref())?, responder))
+        Ok(ClusterEvent::Topology(
+            serde_json::from_str(msg.0.as_ref())?,
+            Some(responder),
+        ))
     }
 }
 
@@ -339,5 +411,33 @@ impl Cluster {
     fn new_version(&mut self) -> u8 {
         self.version = self.version.wrapping_add(1);
         self.version
+    }
+    fn restart_node(my_handle: UnboundedHandle<ClusterEvent>, address: SocketAddr) {
+        let restart_node_task = async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            my_handle
+                .send(ClusterEvent::Topology(Topology::AddNode(address), None))
+                .ok();
+        };
+        backstage::spawn_task(&format!("cluster restarting {} node", address), restart_node_task);
+    }
+    async fn update_service_status<S: SupHandle<Self>>(&self, rt: &mut Rt<Self, S>) {
+        if self.nodes.iter().all(|(_address, node_info)| {
+            if let Some(ms_node) = rt.service().microservices().get(&node_info.scope_id) {
+                ms_node.is_running()
+            } else {
+                false
+            }
+        }) {
+            rt.update_status(ServiceStatus::Running).await;
+        } else {
+            if rt.microservices_stopped() {
+                log::warn!("Cluster is Idle");
+                rt.update_status(ServiceStatus::Idle).await;
+            } else {
+                log::warn!("Cluster is Degraded");
+                rt.update_status(ServiceStatus::Degraded).await;
+            }
+        }
     }
 }

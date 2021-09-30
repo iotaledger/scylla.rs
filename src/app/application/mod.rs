@@ -6,10 +6,13 @@ use async_trait::async_trait;
 use backstage::core::{
     Actor,
     ActorResult,
+    EolEvent,
+    ReportEvent,
     Rt,
     ScopeId,
     Service,
     ServiceStatus,
+    ShutdownEvent,
     StreamExt,
     SupHandle,
     UnboundedChannel,

@@ -5,11 +5,15 @@ use super::stage::Stage;
 use async_trait::async_trait;
 use backstage::core::{
     Actor,
+    ActorError,
     ActorResult,
+    EolEvent,
+    ReportEvent,
     Rt,
     ScopeId,
     Service,
     ServiceStatus,
+    ShutdownEvent,
     StreamExt,
     SupHandle,
     UnboundedChannel,
@@ -64,34 +68,22 @@ where
                 NodeEvent::Microservice(scope_id, service) => {
                     if service.is_stopped() {
                         rt.remove_microservice(scope_id);
+                        rt.shutdown_children().await;
+                        if !rt.service().is_stopping() {
+                            if rt.microservices_stopped() {
+                                log::warn!("Node {:?} disconnected", rt.service().directory().as_ref());
+                                return Err(ActorError::restart_msg("disconnected", None));
+                            } else {
+                                rt.update_status(ServiceStatus::Degraded).await;
+                            }
+                        } else {
+                            rt.update_status(ServiceStatus::Stopping).await;
+                            if rt.microservices_stopped() {
+                                rt.inbox_mut().close();
+                            }
+                        }
                     } else {
                         rt.upsert_microservice(scope_id, service);
-                    }
-                    if !rt.service().is_stopping() {
-                        if rt.microservices_all(|stage| stage.is_running()) {
-                            if !rt.service().is_running() {
-                                log::info!("{} Node is Running", self.address);
-                            }
-                            rt.update_status(ServiceStatus::Running).await;
-                        } else if rt.microservices_all(|stage| stage.is_maintenance()) {
-                            if !rt.service().is_maintenance() {
-                                log::info!("{} Node is Maintenance", self.address);
-                            }
-                            rt.update_status(ServiceStatus::Maintenance).await;
-                        } else {
-                            if !rt.service().is_degraded() {
-                                log::info!("{} Node is Degraded", self.address);
-                            }
-                            rt.update_status(ServiceStatus::Degraded).await;
-                        }
-                    } else {
-                        if !rt.service().is_stopping() {
-                            log::info!("{} Node is Stopping", self.address);
-                        }
-                        rt.update_status(ServiceStatus::Stopping).await;
-                        if rt.microservices_stopped() {
-                            rt.inbox_mut().close();
-                        }
                     }
                 }
                 NodeEvent::Shutdown => {
