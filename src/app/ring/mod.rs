@@ -328,6 +328,8 @@ impl SmartId for Replica {
 #[derive(Debug)]
 /// Ring send error
 pub enum RingSendError {
+    /// No replicas
+    NoReplica(ReporterEvent),
     /// No ring exist error
     NoRing(ReporterEvent),
     /// Reporter's send error
@@ -341,6 +343,9 @@ impl std::fmt::Display for RingSendError {
                 write!(fmt, "no ring")
             }
             Self::SendError(tokio_send_error) => tokio_send_error.fmt(fmt),
+            Self::NoReplica(_) => {
+                write!(fmt, "no replica")
+            }
         }
     }
 }
@@ -351,6 +356,7 @@ impl Into<ReporterEvent> for RingSendError {
         match self {
             Self::NoRing(event) => event,
             Self::SendError(tokio_send_error) => tokio_send_error.0,
+            Self::NoReplica(event) => event,
         }
     }
 }
@@ -406,10 +412,14 @@ impl Endpoints for Replicas {
         if let Some(replica) = replicas.get_mut(replica_index) {
             replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
         } else {
-            // send to a random node
-            let rf = Uniform::new(0, replicas.len());
-            let mut replica = replicas[rng.sample(rf)];
-            replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
+            if replicas.len() != 0 {
+                // send to a random node
+                let rf = Uniform::new(0, replicas.len());
+                let mut replica = replicas[rng.sample(rf)];
+                replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
+            } else {
+                Err(RingSendError::NoReplica(request))
+            }
         }
     }
 }
