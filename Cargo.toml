@@ -25,7 +25,7 @@ md5 = "0.7"
 
 # App
 #backstage = { version = "0.1", optional = true }
-backstage = { git = "https://github.com/iotaledger/backstage", default-features = false, branch = "stable", optional = true }
+backstage = { git = "https://github.com/iotaledger/backstage", default-features = false, branch = "stable", optional = true, features = ["backserver"] }
 async-trait = { version = "0.1", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }

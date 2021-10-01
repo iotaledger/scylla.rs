@@ -40,22 +40,20 @@ async fn main() {
 
     for (n, r, t) in timings.iter().cloned() {
         let server_addr = ([127, 0, 0, 1], 10000).into();
-        let runtime = Runtime::new(None, Scylla::default())
+        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), r, Default::default()))
             .await
             .expect("runtime to run")
             .backserver(server_addr)
             .await
             .expect("backserver to run");
+        let handle = runtime.handle().clone();
         backstage::spawn_task("adding node task", async move {
             let ws = format!("ws://{}/", server_addr);
             match run_benchmark(&ws, n, t).await {
                 Ok(_) => info!("Successfully ran benchmark"),
                 Err(e) => error!("{}", e),
             }
-            match shutdown(&ws).await {
-                Ok(_) => info!("Successfully shutdown"),
-                Err(e) => error!("{}", e),
-            }
+            handle.shutdown().await;
         });
         runtime.block_on().await.expect("runtime to gracefully shutdown")
     }
@@ -109,14 +107,6 @@ async fn add_node(ws: &str, address: SocketAddr, uniform_rf: u8) -> anyhow::Resu
     Ok(())
 }
 
-async fn shutdown(ws: &str) -> anyhow::Result<()> {
-    let (mut stream, _) = tokio_tungstenite::connect_async(url::Url::parse(ws)?).await?;
-    let actor_path = ActorPath::new();
-    let request = Interface::new(actor_path.clone(), Event::Shutdown);
-    stream.send(request.to_message()).await?;
-    Ok(())
-}
-
 async fn run_benchmark(ws: &str, n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<()> {
     let node = ([127, 0, 0, 1], 9042).into();
     match add_node(&ws, node, 1).await {
@@ -152,7 +142,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         ))
         .consistency(Consistency::One)
         .build()?;
-    send_local(token, keyspace_statement.0, worker, keyspace.clone());
+    send_local(token, keyspace_statement.0, worker, keyspace.clone()).map_err(|e| {
+        error!("{}", e);
+        anyhow::anyhow!(e.to_string())
+    })?;
     if let Some(msg) = inbox.recv().await {
         match msg {
             Ok(_) => (),
@@ -167,7 +160,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
         .consistency(Consistency::One)
         .build()?;
-    send_local(token, drop_statement.0, worker, keyspace.clone());
+    send_local(token, drop_statement.0, worker, keyspace.clone()).map_err(|e| {
+        error!("{}", e);
+        anyhow::anyhow!(e.to_string())
+    })?;
     if let Some(msg) = inbox.recv().await {
         match msg {
             Ok(_) => (),
@@ -189,7 +185,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         .statement(table_query.as_str())
         .consistency(Consistency::One)
         .build()?;
-    send_local(token, statement.0, worker, keyspace.clone());
+    send_local(token, statement.0, worker, keyspace.clone()).map_err(|e| {
+        error!("{}", e);
+        anyhow::anyhow!(e.to_string())
+    })?;
     if let Some(msg) = inbox.recv().await {
         match msg {
             Ok(_) => (),
@@ -207,7 +206,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
     let Prepare(payload) = Prepare::new()
         .statement(&<MyKeyspace as Insert<String, i32>>::statement(&keyspace))
         .build()?;
-    send_local(token, payload, worker, keyspace.name().to_string());
+    send_local(token, payload, worker, keyspace.name().to_string()).map_err(|e| {
+        error!("{}", e);
+        anyhow::anyhow!(e.to_string())
+    })?;
 
     let worker = PrepareWorker::boxed(
         <MyKeyspace as Select<String, i32>>::id(&keyspace),
@@ -216,7 +218,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
     let Prepare(payload) = Prepare::new()
         .statement(&<MyKeyspace as Select<String, i32>>::statement(&keyspace))
         .build()?;
-    send_local(token, payload, worker, keyspace.name().to_string());
+    send_local(token, payload, worker, keyspace.name().to_string()).map_err(|e| {
+        error!("{}", e);
+        anyhow::anyhow!(e.to_string())
+    })?;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -227,7 +232,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
             .insert(&format!("Key {}", i), &i)
             .consistency(Consistency::One)
             .build()?;
-        request.send_local(worker);
+        request.send_local(worker).map_err(|e| {
+            error!("{}", e);
+            anyhow::anyhow!(e.to_string())
+        })?;
     }
 
     let (sender, mut inbox) = unbounded_channel();
@@ -243,7 +251,10 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
             .select(&format!("Key {}", i))
             .consistency(Consistency::One)
             .build()?;
-        request.send_local(worker);
+        request.send_local(worker).map_err(|e| {
+            error!("{}", e);
+            anyhow::anyhow!(e.to_string())
+        })?;
     }
     drop(sender);
     while let Some(res) = inbox.recv().await {
@@ -273,10 +284,12 @@ impl BatchWorker {
 
 impl Worker for BatchWorker {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        self.sender.send(Ok(()))?;
         Ok(())
     }
 
     fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+        self.sender.send(Err(error))?;
         Ok(())
     }
 }
