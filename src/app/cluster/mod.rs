@@ -212,8 +212,6 @@ where
                                                     if !rt.service().is_maintenance() {
                                                         // todo force rebuild the ring as this was a reconnect event
 
-                                                        // change status to running (if all nodes are running) or
-                                                        // degraded (if any is not running)
                                                         self.update_service_status(rt).await;
                                                     } // else the admin supposed to rebuild the ring
                                                 }
@@ -241,6 +239,7 @@ where
                                         let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
                                         responder.inner_reply(error_response).await.ok();
                                     }
+                                    log::warn!("At the moment unable to connect to node {}!", address);
                                     let my_handle = rt.handle().clone();
                                     Self::restart_node(my_handle, address);
                                 }
@@ -304,6 +303,7 @@ where
                                         let error_response: Result<Topology, _> = Err(Topology::BuildRing(uniform_rf));
                                         responder.inner_reply(error_response).await.ok();
                                     }
+                                    continue;
                                 }
                                 let version = self.new_version();
                                 let (new_arc_ring, old_weak_ring) = build_ring(
@@ -321,6 +321,9 @@ where
                                 status_change = ServiceStatus::Running;
                             }
                             Ring::rebuild();
+                            if rt.service().status() != &status_change {
+                                log::info!("Cluster is {}", status_change);
+                            }
                             rt.update_status(status_change).await;
                             let ok_response: Result<_, Topology> = Ok(Topology::BuildRing(uniform_rf));
                             responder.inner_reply(ok_response).await.ok();
@@ -414,6 +417,7 @@ impl Cluster {
     }
     fn restart_node(my_handle: UnboundedHandle<ClusterEvent>, address: SocketAddr) {
         let restart_node_task = async move {
+            log::warn!("After 5 seconds will try to restart/reconnect to {}", address);
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             my_handle
                 .send(ClusterEvent::Topology(Topology::AddNode(address), None))
@@ -429,6 +433,9 @@ impl Cluster {
                 false
             }
         }) {
+            if !rt.service().is_running() {
+                log::warn!("Cluster is Running");
+            }
             rt.update_status(ServiceStatus::Running).await;
         } else {
             if rt.microservices_stopped() {

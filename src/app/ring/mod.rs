@@ -316,7 +316,7 @@ impl SmartId for Replica {
         let mut key = self.0;
         key.set_port((((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u16);
         registry
-            .get_mut(&self.0)
+            .get_mut(&key)
             .unwrap()
             .get_mut(&rng.sample(uniform))
             .unwrap()
