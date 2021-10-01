@@ -98,7 +98,7 @@ where
         let payloads = rt
             .lookup(parent_id)
             .await
-            .ok_or_else(|| ActorError::exit_msg("sender unables to lookup for payloads"))?;
+            .ok_or_else(|| ActorError::exit_msg("reporter unables to lookup for payloads"))?;
         let sender_handle = rt.link(sender_scope_id).await.map_err(ActorError::exit)?;
         Ok((payloads, sender_handle))
     }
