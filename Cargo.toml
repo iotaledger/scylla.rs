@@ -46,6 +46,11 @@ name = "scylla"
 path = "examples/scylla.rs"
 required-features = ["backstage/backserver"]
 
+[[example]]
+name = "benchmark"
+path = "examples/benchmark.rs"
+required-features = ["backstage/backserver"]
+
 [features]
 default = ["app"]
 app = [
