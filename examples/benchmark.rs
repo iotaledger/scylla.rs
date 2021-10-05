@@ -27,7 +27,13 @@ use tokio::sync::{
 async fn main() {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
-
+    let node: SocketAddr = std::env::var("SCYLLA_NODE").map_or_else(
+        |_| ([127, 0, 0, 1], 19042).into(),
+        |n| {
+            n.parse()
+                .expect("Invalid SCYLLA_NODE env, use this format '127.0.0.1:19042' ")
+        },
+    );
     let combinations = vec![10i32, 100, 1000, 10000]
         .into_iter()
         .map(|n| std::iter::repeat(n).take(4))
@@ -49,7 +55,7 @@ async fn main() {
         let handle = runtime.handle().clone();
         backstage::spawn_task("adding node task", async move {
             let ws = format!("ws://{}/", server_addr);
-            match run_benchmark(&ws, n, t).await {
+            match run_benchmark_on_single_node(&ws, n, t, node).await {
                 Ok(_) => info!("Successfully ran benchmark"),
                 Err(e) => error!("{}", e),
             }
@@ -87,28 +93,10 @@ async fn add_node(ws: &str, address: SocketAddr, uniform_rf: u8) -> anyhow::Resu
             bail!(e);
         }
     }
-    // while let Some(res) = stream.next().await {
-    //    match res {
-    //        Ok(m) => {
-    //            info!("{}", m);
-    //            if let Ok(res) = serde_json::from_str::<Response>(&m.to_string()) {
-    //                if let Response::Response(json) = res {
-    //                    if let Ok(res) = serde_json::from_str::<Result<Topology, Topology>>(&json.0) {
-    //                        if let Ok(Topology::BuildRing(_)) = res {
-    //                            break;
-    //                        }
-    //                    }
-    //                }
-    //            }
-    //        }
-    //        Err(e) => bail!(e),
-    //    }
-    //}
     Ok(())
 }
 
-async fn run_benchmark(ws: &str, n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<()> {
-    let node = ([127, 0, 0, 1], 9042).into();
+async fn run_benchmark_on_single_node(ws: &str, n: i32, t: Arc<Mutex<u128>>, node: SocketAddr) -> anyhow::Result<()> {
     match add_node(&ws, node, 1).await {
         Ok(_) => match init_database(n).await {
             Ok(time) => {
@@ -116,12 +104,10 @@ async fn run_benchmark(ws: &str, n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<
             }
             Err(e) => {
                 error!("{}", e);
-                // scope.print_root().await;
             }
         },
         Err(e) => {
             error!("{}", e);
-            // scope.print_root().await;
         }
     }
     Ok(())
