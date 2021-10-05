@@ -19,7 +19,10 @@ async fn main() {
         .cluster_handle()
         .await
         .expect("running scylla application");
-    cluster_handle.add_node(example_scylla_node()).await.expect("to add node");
+    cluster_handle
+        .add_node(example_scylla_node())
+        .await
+        .expect("to add node");
     cluster_handle.build_ring(1).await.expect("to build ring");
     runtime.block_on().await.expect("runtime to gracefully shutdown")
 }
