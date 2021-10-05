@@ -1,6 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use super::cluster::Cluster;
+use crate::app::cluster::ClusterEvent;
 pub(crate) use crate::cql::PasswordAuth;
 use async_trait::async_trait;
 use backstage::core::{
@@ -16,6 +17,7 @@ use backstage::core::{
     StreamExt,
     SupHandle,
     UnboundedChannel,
+    UnboundedHandle,
 };
 use serde::{
     Deserialize,
@@ -78,6 +80,8 @@ impl Scylla {
 /// Event type of the Scylla Application
 #[backstage::core::supervise]
 pub enum ScyllaEvent {
+    /// Request the cluster handle
+    GetClusterHandle(tokio::sync::oneshot::Sender<UnboundedHandle<ClusterEvent>>),
     #[report]
     #[eol]
     /// Used by scylla children to push their service
@@ -93,7 +97,7 @@ impl<S> Actor<S> for Scylla
 where
     S: SupHandle<Self>,
 {
-    type Data = ();
+    type Data = UnboundedHandle<ClusterEvent>;
     type Channel = UnboundedChannel<ScyllaEvent>;
     async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
         log::info!("Scylla is {}", rt.service().status());
@@ -101,14 +105,17 @@ where
         // publish scylla as config
         rt.add_resource(self.clone()).await;
         let cluster = Cluster::new();
-        rt.start("cluster".to_string(), cluster).await?;
+        let cluster_handle = rt.start("cluster".to_string(), cluster).await?;
         rt.update_status(ServiceStatus::Idle).await;
-        Ok(())
+        Ok(cluster_handle)
     }
-    async fn run(&mut self, rt: &mut Rt<Self, S>, _data: Self::Data) -> ActorResult<()> {
+    async fn run(&mut self, rt: &mut Rt<Self, S>, cluster_handle: Self::Data) -> ActorResult<()> {
         log::info!("Scylla is {}", rt.service().status());
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
+                ScyllaEvent::GetClusterHandle(oneshot) => {
+                    oneshot.send(cluster_handle.clone());
+                }
                 ScyllaEvent::Microservice(scope_id, service) => {
                     if service.is_stopped() {
                         rt.remove_microservice(scope_id);
@@ -156,5 +163,28 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+/// The public interface of scylla handle, it provides access to the cluster handle
+pub trait ScyllaHandleExt {
+    /// Get the cluster handle
+    async fn cluster_handle(&self) -> Option<UnboundedHandle<ClusterEvent>>;
+}
+
+#[async_trait]
+impl ScyllaHandleExt for UnboundedHandle<ScyllaEvent> {
+    async fn cluster_handle(&self) -> Option<UnboundedHandle<ClusterEvent>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Ok(_) = self.send(ScyllaEvent::GetClusterHandle(tx)) {
+            if let Ok(handle) = rx.await {
+                Some(handle)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }

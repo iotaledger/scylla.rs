@@ -44,6 +44,10 @@ tokio = { version = "1.12", features = ["macros", "rt-multi-thread", "signal", "
 [[example]]
 name = "scylla"
 path = "examples/scylla.rs"
+
+[[example]]
+name = "ws_scylla"
+path = "examples/ws_scylla.rs"
 required-features = ["backstage/backserver"]
 
 [[example]]

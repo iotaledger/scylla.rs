@@ -16,6 +16,8 @@ use crate::{
     },
     cql::CqlBuilder,
 };
+use thiserror::Error;
+
 use async_trait::async_trait;
 use backstage::{
     core::{
@@ -65,7 +67,7 @@ pub struct Cluster {
 #[backstage::core::supervise]
 pub enum ClusterEvent {
     /// Topology configuration
-    Topology(Topology, Option<Responder>),
+    Topology(Topology, Option<TopologyResponder>),
     /// Used by the Node to keep the cluster up to date with its service
     #[report]
     Microservice(ScopeId, Service, Option<ActorResult<()>>),
@@ -81,7 +83,7 @@ impl EolEvent<Node> for ClusterEvent {
 }
 
 /// Cluster topology event
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum Topology {
     /// Used by Scylla/dashboard to add/connect to new scylla node in the cluster
     AddNode(SocketAddr),
@@ -98,20 +100,27 @@ pub enum TopologyResponder {
     /// OneShot Responder
     OneShot(tokio::sync::oneshot::Sender<TopologyResponse>),
 }
-
+impl TopologyResponder {
+    async fn reply(self, response: TopologyResponse) -> anyhow::Result<()> {
+        match self {
+            Self::WsResponder(r) => r.inner_reply(response).await,
+            Self::OneShot(tx) => tx.send(response).map_err(|_| anyhow::Error::msg("caller out of scope")),
+        }
+    }
+}
 /// The topology response, sent after the cluster processes a topology event
 pub type TopologyResponse = Result<Topology, TopologyErr>;
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Error)]
+#[error("message: {message:?}")]
 /// Topology error,
 pub struct TopologyErr {
-    source: Topology,
     message: String,
 }
 
 impl TopologyErr {
-    fn new(source: Topology, message: String) -> Self {
-        Self { source, message }
+    fn new(message: String) -> Self {
+        Self { message }
     }
 }
 
@@ -180,21 +189,26 @@ where
         let mut recent_uniform_rf = 0;
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
-                ClusterEvent::Topology(topology, responder_opt) => {
+                ClusterEvent::Topology(topology, mut responder_opt) => {
                     // configure topology only if the cluster is not stopping
                     if rt.service().is_stopping() {
-                        if let Some(responder) = responder_opt.as_ref() {
-                            let error_response: Result<Topology, _> = Err(topology);
-                            responder.inner_reply(error_response).await.ok();
+                        if let Some(responder) = responder_opt.take() {
+                            let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
+                                "Cannot configure topology while the cluster is stopping"
+                            )));
+                            responder.reply(error_response).await.ok();
                         }
                         continue;
                     }
                     match topology {
                         Topology::AddNode(address) => {
                             if self.nodes.contains_key(&address) {
-                                if let Some(responder) = responder_opt.as_ref() {
-                                    let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
-                                    responder.inner_reply(error_response).await.ok();
+                                if let Some(responder) = responder_opt.take() {
+                                    let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
+                                        "Cannot add existing {} node into the cluster",
+                                        address
+                                    )));
+                                    responder.reply(error_response).await.ok();
                                     continue;
                                 }
                             } else if responder_opt.is_none() {
@@ -233,12 +247,12 @@ where
                                                 // add node_info to nodes
                                                 self.nodes.insert(address, node_info);
                                                 log::info!("Added {} node!", address);
-                                                if let Some(responder) = responder_opt.as_ref() {
+                                                if let Some(responder) = responder_opt.take() {
                                                     rt.update_status(ServiceStatus::Maintenance).await;
                                                     log::info!("Cluster is Maintenance");
-                                                    let ok_response: Result<_, Topology> =
+                                                    let ok_response: Result<_, TopologyErr> =
                                                         Ok(Topology::AddNode(address));
-                                                    responder.inner_reply(ok_response).await.ok();
+                                                    responder.reply(ok_response).await.ok();
                                                 } else {
                                                     if !rt.service().is_maintenance() {
                                                         let maybe_unstable_registry = registry.read().await.clone();
@@ -253,11 +267,12 @@ where
                                                     } // else the admin supposed to rebuild the ring
                                                 }
                                             }
-                                            Err(_err) => {
-                                                if let Some(responder) = responder_opt.as_ref() {
-                                                    let error_response: Result<Topology, _> =
-                                                        Err(Topology::AddNode(address));
-                                                    responder.inner_reply(error_response).await.ok();
+                                            Err(err) => {
+                                                if let Some(responder) = responder_opt.take() {
+                                                    let error_response: Result<Topology, _> = Err(TopologyErr::new(
+                                                        format!("unable to add {} node, error: {}", address, err),
+                                                    ));
+                                                    responder.reply(error_response).await.ok();
                                                 } else {
                                                     let my_handle = rt.handle().clone();
                                                     Self::restart_node(my_handle, address);
@@ -271,11 +286,14 @@ where
                                         ));
                                     }
                                 }
-                                Err(_) => {
+                                Err(error) => {
                                     log::info!("Unable to connect to node {}!", address);
-                                    if let Some(responder) = responder_opt.as_ref() {
-                                        let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
-                                        responder.inner_reply(error_response).await.ok();
+                                    if let Some(responder) = responder_opt.take() {
+                                        let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
+                                            "Unable to add {} node, error: {}",
+                                            address, error
+                                        )));
+                                        responder.reply(error_response).await.ok();
                                     } else {
                                         let my_handle = rt.handle().clone();
                                         Self::restart_node(my_handle, address);
@@ -284,7 +302,7 @@ where
                             }
                         }
                         Topology::RemoveNode(address) => {
-                            let responder = responder_opt.as_ref().ok_or_else(|| {
+                            let responder = responder_opt.take().ok_or_else(|| {
                                 ActorError::exit_msg("cannot use remove node topology variant without responder")
                             })?;
                             // get and remove node_info
@@ -296,23 +314,27 @@ where
                                     // Await till it gets shutdown, it forces sync shutdown
                                     join_handle.await.ok();
                                     self.nodes.remove(&address);
-                                    let ok_response: Result<_, Topology> = Ok(Topology::RemoveNode(address));
-                                    responder.inner_reply(ok_response).await.ok();
+                                    let ok_response: Result<_, TopologyErr> = Ok(Topology::RemoveNode(address));
+                                    responder.reply(ok_response).await.ok();
                                 };
                             } else {
                                 // Cannot remove non-existing node.
-                                let error_response: Result<Topology, _> = Err(Topology::RemoveNode(address));
-                                responder.inner_reply(error_response).await.ok();
+                                let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
+                                    "unable to remove non-existing {} node",
+                                    address
+                                )));
+                                responder.reply(error_response).await.ok();
                             };
                         }
                         Topology::BuildRing(uniform_rf) => {
                             let responder = responder_opt
-                                .as_ref()
+                                .take()
                                 .ok_or_else(|| ActorError::exit_msg("cannot build ring without responder"))?;
 
                             if self.nodes.len() < uniform_rf as usize {
-                                let error_response: Result<Topology, _> = Err(Topology::BuildRing(uniform_rf));
-                                responder.inner_reply(error_response).await.ok();
+                                let error_response: Result<Topology, _> =
+                                    Err(TopologyErr::new(format!("Cannot build ring with replication factor greater than the total number of existing nodes")));
+                                responder.reply(error_response).await.ok();
                                 continue;
                             }
                             // do cleanup on weaks
@@ -343,9 +365,10 @@ where
                                         "Unstable cluster, cannot build ring!, fix this by removing any dead node(s)"
                                     );
                                     // the cluster in critical state, we cannot rebuild new ring
-                                    if let Some(responder) = responder_opt.as_ref() {
-                                        let error_response: Result<Topology, _> = Err(Topology::BuildRing(uniform_rf));
-                                        responder.inner_reply(error_response).await.ok();
+                                    if let Some(responder) = responder_opt.take() {
+                                        let error_response: Result<Topology, _> =
+                                            Err(TopologyErr::new(format!("Unstable cluster, unable to build ring")));
+                                        responder.reply(error_response).await.ok();
                                     }
                                     continue;
                                 }
@@ -369,8 +392,8 @@ where
                                 log::info!("Cluster is {}", status_change);
                             }
                             rt.update_status(status_change).await;
-                            let ok_response: Result<_, Topology> = Ok(Topology::BuildRing(uniform_rf));
-                            responder.inner_reply(ok_response).await.ok();
+                            let ok_response: Result<_, TopologyErr> = Ok(Topology::BuildRing(uniform_rf));
+                            responder.reply(ok_response).await.ok();
                             recent_uniform_rf = uniform_rf;
                         }
                     }
@@ -445,7 +468,7 @@ impl TryFrom<(JsonMessage, Responder)> for ClusterEvent {
     fn try_from((msg, responder): (JsonMessage, Responder)) -> Result<Self, Self::Error> {
         Ok(ClusterEvent::Topology(
             serde_json::from_str(msg.0.as_ref())?,
-            Some(responder),
+            Some(TopologyResponder::WsResponder(responder)),
         ))
     }
 }
@@ -556,5 +579,60 @@ impl Cluster {
             }
         }
         Ring::rebuild();
+    }
+}
+
+#[async_trait]
+/// The public interface of cluster handle, it enables adding/removing and building ring.
+/// Note: you must invoke build ring to expose the changes
+pub trait ClusterHandleExt {
+    /// Add scylla node to the cluster,
+    async fn add_node(&self, node: SocketAddr) -> TopologyResponse;
+    /// Remove scylla node to the cluster
+    async fn remove_node(&self, address: SocketAddr) -> TopologyResponse;
+    /// Build ring with uniform replication factor
+    async fn build_ring(&self, uniform_replication_factor: u8) -> TopologyResponse;
+}
+
+#[async_trait]
+impl ClusterHandleExt for UnboundedHandle<ClusterEvent> {
+    async fn add_node(&self, address: SocketAddr) -> TopologyResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let event = ClusterEvent::Topology(Topology::AddNode(address), Some(TopologyResponder::OneShot(tx)));
+        self.send(event)
+            .map_err(|_| TopologyErr::new(format!("Unable to add {} node, error: closed cluster handle", address)))?;
+        rx.await.map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to add {} node, error: closed oneshot receiver",
+                address
+            ))
+        })?
+    }
+    async fn remove_node(&self, address: SocketAddr) -> TopologyResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let event = ClusterEvent::Topology(Topology::RemoveNode(address), Some(TopologyResponder::OneShot(tx)));
+        self.send(event).map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to remove {} node, error: closed cluster handle",
+                address
+            ))
+        })?;
+        rx.await.map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to remove {} node, error: closed oneshot receiver",
+                address
+            ))
+        })?
+    }
+    async fn build_ring(&self, uniform_replication_factor: u8) -> TopologyResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let event = ClusterEvent::Topology(
+            Topology::BuildRing(uniform_replication_factor),
+            Some(TopologyResponder::OneShot(tx)),
+        );
+        self.send(event)
+            .map_err(|_| TopologyErr::new(format!("Unable to build ring, error: closed cluster handle")))?;
+        rx.await
+            .map_err(|_| TopologyErr::new(format!("Unable to build ring, error: closed oneshot receiver")))?
     }
 }

@@ -11,7 +11,9 @@ pub mod prelude {
     pub use super::{
         app::{
             access::*,
+            cluster::ClusterHandleExt,
             worker::*,
+            ScyllaHandleExt,
             *,
         },
         cql::{

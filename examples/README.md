@@ -4,6 +4,12 @@
 $ RUST_LOG=info cargo run --example scylla
 ```
 
+### Websocket Scylla
+
+```sh
+$ RUST_LOG=info cargo run --example ws_scylla --features="backstage/backserver"
+```
+
 ### Benchmark
 
 ```sh
