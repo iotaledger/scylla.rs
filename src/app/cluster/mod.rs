@@ -1,7 +1,10 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::node::Node;
+use super::{
+    node::Node,
+    Scylla,
+};
 use crate::{
     app::ring::{
         build_ring,
@@ -14,8 +17,6 @@ use crate::{
     cql::CqlBuilder,
 };
 use async_trait::async_trait;
-
-use super::Scylla;
 use backstage::{
     core::{
         Actor,
@@ -41,6 +42,7 @@ use backstage::{
         Responder,
     },
 };
+use std::collections::HashSet;
 
 use std::{
     collections::HashMap,
@@ -89,6 +91,30 @@ pub enum Topology {
     BuildRing(u8),
 }
 
+/// Topology responder
+pub enum TopologyResponder {
+    /// Websocket responder
+    WsResponder(Responder),
+    /// OneShot Responder
+    OneShot(tokio::sync::oneshot::Sender<TopologyResponse>),
+}
+
+/// The topology response, sent after the cluster processes a topology event
+pub type TopologyResponse = Result<Topology, TopologyErr>;
+
+#[derive(serde::Deserialize, serde::Serialize)]
+/// Topology error,
+pub struct TopologyErr {
+    source: Topology,
+    message: String,
+}
+
+impl TopologyErr {
+    fn new(source: Topology, message: String) -> Self {
+        Self { source, message }
+    }
+}
+
 impl Cluster {
     /// Create new cluster with empty state
     pub fn new() -> Self {
@@ -106,6 +132,7 @@ impl Cluster {
 }
 
 /// `NodeInfo` contains the field to identify a ScyllaDB node.
+#[derive(Clone)]
 pub struct NodeInfo {
     /// The scope id of the node
     pub(crate) scope_id: ScopeId,
@@ -149,7 +176,8 @@ where
     }
     async fn run(&mut self, rt: &mut Rt<Self, S>, (scylla, registry): Self::Data) -> ActorResult<()> {
         log::info!("Cluster is {}", rt.service().status());
-        let mut data_center = vec![scylla.local_dc];
+        let mut data_center = vec![scylla.local_dc.clone()];
+        let mut recent_uniform_rf = 0;
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
                 ClusterEvent::Topology(topology, responder_opt) => {
@@ -171,8 +199,10 @@ where
                                 }
                             } else if responder_opt.is_none() {
                                 // skip re-adding a node, because it got removed
+                                log::warn!("skipping re-adding a {} node, as it got removed", address);
                                 continue;
                             }
+                            log::info!("Adding {} node!", address);
                             // to spawn node we first make sure it's online
                             let cql = CqlBuilder::new()
                                 .address(address)
@@ -202,6 +232,7 @@ where
                                                 };
                                                 // add node_info to nodes
                                                 self.nodes.insert(address, node_info);
+                                                log::info!("Added {} node!", address);
                                                 if let Some(responder) = responder_opt.as_ref() {
                                                     rt.update_status(ServiceStatus::Maintenance).await;
                                                     log::info!("Cluster is Maintenance");
@@ -210,8 +241,14 @@ where
                                                     responder.inner_reply(ok_response).await.ok();
                                                 } else {
                                                     if !rt.service().is_maintenance() {
-                                                        // todo force rebuild the ring as this was a reconnect event
-
+                                                        let maybe_unstable_registry = registry.read().await.clone();
+                                                        log::warn!("Rebuilding healthy ring");
+                                                        self.build_healthy_ring(
+                                                            maybe_unstable_registry,
+                                                            &scylla,
+                                                            &mut data_center,
+                                                            recent_uniform_rf,
+                                                        );
                                                         self.update_service_status(rt).await;
                                                     } // else the admin supposed to rebuild the ring
                                                 }
@@ -235,13 +272,14 @@ where
                                     }
                                 }
                                 Err(_) => {
+                                    log::info!("Unable to connect to node {}!", address);
                                     if let Some(responder) = responder_opt.as_ref() {
                                         let error_response: Result<Topology, _> = Err(Topology::AddNode(address));
                                         responder.inner_reply(error_response).await.ok();
+                                    } else {
+                                        let my_handle = rt.handle().clone();
+                                        Self::restart_node(my_handle, address);
                                     }
-                                    log::warn!("At the moment unable to connect to node {}!", address);
-                                    let my_handle = rt.handle().clone();
-                                    Self::restart_node(my_handle, address);
                                 }
                             }
                         }
@@ -291,9 +329,15 @@ where
                                 status_change = ServiceStatus::Idle;
                             } else {
                                 let registry_snapshot = registry.read().await.clone();
+                                // compute total shards count for all nodes
+                                let mut total_shard_count = 0;
+                                self.nodes
+                                    .iter()
+                                    .for_each(|(_addr, node_info)| total_shard_count += node_info.shard_count as usize);
                                 // ensure all nodes are running
                                 if rt.microservices_any(|node| !node.is_running())
                                     || self.nodes.len() != rt.service().microservices().len()
+                                    || registry_snapshot.len() != total_shard_count
                                 {
                                     log::error!(
                                         "Unstable cluster, cannot build ring!, fix this by removing any dead node(s)"
@@ -327,6 +371,7 @@ where
                             rt.update_status(status_change).await;
                             let ok_response: Result<_, Topology> = Ok(Topology::BuildRing(uniform_rf));
                             responder.inner_reply(ok_response).await.ok();
+                            recent_uniform_rf = uniform_rf;
                         }
                     }
                 }
@@ -341,8 +386,15 @@ where
                             .parse()
                             .map_err(ActorError::exit)?;
                         if !rt.service().is_stopping() && self.nodes.contains_key(&address) {
-                            // todo force to rebuild the ring with healthy/connected nodes
-
+                            {
+                                let maybe_unstable_registry = registry.read().await.clone();
+                                self.build_healthy_ring(
+                                    maybe_unstable_registry,
+                                    &scylla,
+                                    &mut data_center,
+                                    recent_uniform_rf,
+                                );
+                            }
                             if let Err(ActorError {
                                 source: _,
                                 request: Some(ActorRequest::Restart(_)),
@@ -434,7 +486,7 @@ impl Cluster {
             }
         }) {
             if !rt.service().is_running() {
-                log::warn!("Cluster is Running");
+                log::info!("Cluster is Running");
             }
             rt.update_status(ServiceStatus::Running).await;
         } else {
@@ -446,5 +498,63 @@ impl Cluster {
                 rt.update_status(ServiceStatus::Degraded).await;
             }
         }
+    }
+    fn build_healthy_ring(
+        &mut self,
+        mut registry: Registry,
+        scylla: &Scylla,
+        data_center: &mut Vec<String>,
+        uniform_rf: u8,
+    ) {
+        // check if all nodes do have entries for their stages in the registry
+        let mut healthy_nodes: HashMap<SocketAddr, NodeInfo> = HashMap::new();
+        self.nodes.iter().for_each(|(addr, info)| {
+            let mut stage_addr_key = addr.clone();
+            let mut healthy = true;
+            for shard_id in 0..info.shard_count {
+                stage_addr_key.set_port(shard_id);
+                healthy &= registry.contains_key(&stage_addr_key);
+            }
+            if healthy {
+                healthy_nodes.insert(addr.clone(), info.clone());
+            } else {
+                // delete all the node's entries from registry
+                for shard_id in 0..info.shard_count {
+                    stage_addr_key.set_port(shard_id);
+                    registry.remove(&stage_addr_key);
+                }
+                log::warn!("Removing unhealthy {} node from the Ring", addr);
+            }
+        });
+        // do cleanup on weaks
+        self.cleanup(scylla.thread_count);
+        let version = self.new_version();
+        if healthy_nodes.is_empty() {
+            let (new_arc_ring, old_weak_ring) = initialize_ring(version, true);
+            self.arc_ring.replace(new_arc_ring);
+            if let Some(old_weak_ring) = old_weak_ring {
+                self.weak_rings.push(old_weak_ring);
+            }
+            log::warn!("Enforcing healthy empty Ring");
+        } else {
+            let (new_arc_ring, old_weak_ring) = build_ring(
+                data_center,
+                &self.nodes,
+                registry,
+                scylla.reporter_count,
+                uniform_rf as usize,
+                version,
+            );
+            // replace self.arc_ring
+            self.arc_ring.replace(new_arc_ring);
+            // push weak to weak_rings
+            self.weak_rings.push(old_weak_ring);
+            if self.nodes.len() != healthy_nodes.len() {
+                log::warn!("Enforcing healthy Ring with only {} healthy nodes", healthy_nodes.len());
+            } else {
+                log::info!("Building stable Ring with {} nodes", self.nodes.len());
+            }
+        }
+        Ring::rebuild();
     }
 }
