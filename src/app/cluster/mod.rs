@@ -56,7 +56,7 @@ pub(crate) type Nodes = HashMap<SocketAddr, NodeInfo>;
 /// Cluster state
 pub struct Cluster {
     nodes: Nodes,
-    version: u8,
+    version: u32,
     arc_ring: Option<ArcRing>,
     weak_rings: Vec<Box<WeakRing>>,
 }
@@ -463,7 +463,7 @@ impl Cluster {
             log::error!("Cleanup failed!")
         }
     }
-    fn new_version(&mut self) -> u8 {
+    fn new_version(&mut self) -> u32 {
         self.version = self.version.wrapping_add(1);
         self.version
     }

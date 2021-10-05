@@ -27,6 +27,7 @@ use std::{
     sync::{
         atomic::{
             AtomicPtr,
+            AtomicU32,
             Ordering,
         },
         Arc,
@@ -57,7 +58,7 @@ pub type GlobalRing = (
     Uniform<usize>,
     Uniform<usize>,
     Uniform<u8>,
-    u8,
+    u32,
     Registry,
     Vcell,
 );
@@ -71,7 +72,7 @@ pub type WeakRing = Weak<GlobalRing>;
 /// The Ring structure used to handle the access to ScyllaDB ring.
 pub struct Ring {
     /// Version of the Ring
-    pub version: u8,
+    pub version: u32,
     /// Most recent weak global ring
     pub weak: Option<Weak<GlobalRing>>,
     /// Registry which holds all scylla reporters
@@ -90,7 +91,7 @@ pub struct Ring {
     pub uniform_rf: Uniform<usize>,
 }
 
-static mut VERSION: u8 = 0;
+static mut VERSION: AtomicU32 = AtomicU32::new(0);
 static mut GLOBAL_RING: Option<AtomicRing> = None;
 
 thread_local! {
@@ -151,11 +152,12 @@ impl Ring {
         RING.with(|local| {
             let mut ring = local.borrow_mut();
             unsafe {
-                if VERSION != ring.version {
+                if VERSION.load(Ordering::Relaxed) != ring.version {
                     // load weak and upgrade to arc if strong_count > 0;
-                    if let Some(mut arc) =
-                        Weak::upgrade(GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap())
-                    {
+                    if let Some(mut arc) = {
+                        let global_ring = GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap();
+                        Weak::upgrade(global_ring)
+                    } {
                         let new_weak = Arc::downgrade(&arc);
                         let (dcs, uniform_dcs, uniform_rf, uniform, version, registry, root) = Arc::make_mut(&mut arc);
                         // update the local ring
@@ -174,7 +176,7 @@ impl Ring {
     }
     fn sending(&mut self) -> &mut Self {
         unsafe {
-            if VERSION != self.version {
+            if VERSION.load(Ordering::Relaxed) != self.version {
                 // load weak and upgrade to arc if strong_count > 0;
                 if let Some(mut arc) =
                     Weak::upgrade(GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap())
@@ -196,8 +198,8 @@ impl Ring {
         self
     }
     /// Return the current ring version
-    pub(crate) fn version() -> u8 {
-        unsafe { super::ring::VERSION }
+    pub(crate) fn version() -> u32 {
+        unsafe { super::ring::VERSION.load(Ordering::Relaxed) }
     }
     fn global(
         &mut self,
@@ -253,7 +255,7 @@ impl Ring {
             self.uniform,
         )
     }
-    fn initialize_ring(version: u8, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
+    fn initialize_ring(version: u32, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
         // create empty Registry
         let registry: Registry = HashMap::new();
         // create initial vnode
@@ -279,14 +281,14 @@ impl Ring {
         if rebuild {
             let old_weak = unsafe {
                 let old_weak = GLOBAL_RING.as_mut().unwrap().swap(raw_box, Ordering::Relaxed);
-                VERSION = version;
+                VERSION.store(version, Ordering::Relaxed);
                 old_weak
             };
             (arc_ring, Some(unsafe { Box::from_raw(old_weak) }))
         } else {
             unsafe {
                 GLOBAL_RING = Some(atomic_ptr);
-                VERSION = version;
+                VERSION.store(version, Ordering::Relaxed);
             }
             (arc_ring, None)
         }
@@ -362,7 +364,7 @@ impl Into<ReporterEvent> for RingSendError {
 }
 
 /// Endpoints trait which should be implemented by `Replicas`.
-pub trait Endpoints: EndpointsClone + Send + Sync {
+pub trait Endpoints: EndpointsClone + Send + Sync + std::fmt::Debug {
     /// Send the request through the endpoints.
     fn send(
         &mut self,
@@ -441,7 +443,7 @@ impl Endpoints for Option<Replicas> {
 }
 
 /// Search the endpoint of the virtual node.
-pub trait Vnode: VnodeClone + Sync + Send {
+pub trait Vnode: VnodeClone + Sync + Send + std::fmt::Debug {
     /// Search the endpoints by the given token.
     fn search(&mut self, token: Token) -> &mut Box<dyn Endpoints>;
 }
@@ -501,7 +503,7 @@ impl Vnode for DeadEnd {
 // this struct represent a vnode without left or right child,
 // we don't need to set conditions because it's a deadend during search(),
 // and condition must be true.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DeadEnd {
     replicas: Box<dyn Endpoints>,
 }
@@ -515,7 +517,7 @@ impl DeadEnd {
 }
 // this struct represent the mild possible vnode(..)
 // condition: token > left, and token <= right
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Mild {
     left: Token,
     right: Token,
@@ -525,7 +527,7 @@ struct Mild {
 }
 
 // as mild but with left child.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct LeftMild {
     left: Token,
     right: Token,
@@ -594,7 +596,7 @@ pub fn build_ring(
     registry: Registry,
     reporter_count: u8,
     uniform_rf: usize,
-    version: u8,
+    version: u32,
 ) -> (Arc<GlobalRing>, Box<Weak<GlobalRing>>) {
     // complete tokens-range
     let mut tokens: Tokens = Vec::new();
@@ -673,7 +675,7 @@ pub fn build_ring(
         // swap
         let old_weak = GLOBAL_RING.as_mut().unwrap().swap(raw_box, Ordering::Relaxed);
         // update version with new one.// this must be atomic and safe because it's u8.
-        VERSION = version;
+        VERSION.store(version, Ordering::Relaxed);
         old_weak
     };
 
@@ -714,7 +716,7 @@ fn compute_chain(vnodes: &[VnodeTuple]) -> Vec<(Token, Token, Replicas)> {
 }
 
 /// Initialize the ScyllaDB ring.
-pub fn initialize_ring(version: u8, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
+pub fn initialize_ring(version: u32, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
     Ring::initialize_ring(version, rebuild)
 }
 
