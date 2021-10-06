@@ -8,17 +8,8 @@ use scylla_rs::prelude::*;
 async fn main() {
     env_logger::init();
     let scylla = Scylla::default();
-    let runtime = Runtime::new(None, scylla)
-        .await
-        .expect("runtime to run")
-        .backserver("127.0.0.1:10000".parse().unwrap())
-        .await
-        .expect("backserver to run");
-    let cluster_handle = runtime
-        .handle()
-        .cluster_handle()
-        .await
-        .expect("running scylla application");
+    let runtime = Runtime::new(None, scylla).await.expect("runtime to run");
+    let cluster_handle = runtime.cluster_handle().await.expect("running scylla application");
     cluster_handle
         .add_node(example_scylla_node())
         .await

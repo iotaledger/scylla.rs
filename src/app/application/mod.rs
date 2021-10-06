@@ -188,3 +188,10 @@ impl ScyllaHandleExt for UnboundedHandle<ScyllaEvent> {
         }
     }
 }
+
+#[async_trait]
+impl ScyllaHandleExt for backstage::core::Runtime<UnboundedHandle<ScyllaEvent>> {
+    async fn cluster_handle(&self) -> Option<UnboundedHandle<ClusterEvent>> {
+        self.handle().cluster_handle().await
+    }
+}

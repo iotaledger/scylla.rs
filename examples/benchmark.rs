@@ -45,17 +45,19 @@ async fn main() {
         .collect::<Vec<_>>();
 
     for (n, r, t) in timings.iter().cloned() {
-        let server_addr = ([127, 0, 0, 1], 10000).into();
         let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), r, Default::default()))
             .await
-            .expect("runtime to run")
-            .backserver(server_addr)
+            .expect("runtime to run");
+        let cluster_handle = runtime
+            .handle()
+            .cluster_handle()
             .await
-            .expect("backserver to run");
+            .expect("running scylla application");
+        cluster_handle.add_node(node).await.expect("to add node");
+        cluster_handle.build_ring(1).await.expect("to build ring");
         let handle = runtime.handle().clone();
         backstage::spawn_task("adding node task", async move {
-            let ws = format!("ws://{}/", server_addr);
-            match run_benchmark_on_single_node(&ws, n, t, node).await {
+            match run_benchmark_on_single_node(n, t, node).await {
                 Ok(_) => info!("Successfully ran benchmark"),
                 Err(e) => error!("{}", e),
             }
@@ -70,42 +72,11 @@ async fn main() {
     }
 }
 
-async fn add_node(ws: &str, address: SocketAddr, uniform_rf: u8) -> anyhow::Result<()> {
-    let (mut stream, _) = tokio_tungstenite::connect_async(url::Url::parse(ws)?).await?;
-    let actor_path = ActorPath::new().push("cluster".into());
-    let request = Interface::new(
-        actor_path.clone(),
-        Event::Call(serde_json::to_string(&Topology::AddNode(address))?.into()),
-    );
-    stream.send(request.to_message()).await?;
-    let request = Interface::new(
-        actor_path,
-        Event::Call(serde_json::to_string(&Topology::BuildRing(uniform_rf))?.into()),
-    );
-    stream.send(request.to_message()).await?;
-    if let Some(res) = stream.next().await {
-        if let Err(e) = res {
-            bail!(e);
+async fn run_benchmark_on_single_node(n: i32, t: Arc<Mutex<u128>>, node: SocketAddr) -> anyhow::Result<()> {
+    match init_database(n).await {
+        Ok(time) => {
+            *t.lock().await = time;
         }
-    }
-    if let Some(res) = stream.next().await {
-        if let Err(e) = res {
-            bail!(e);
-        }
-    }
-    Ok(())
-}
-
-async fn run_benchmark_on_single_node(ws: &str, n: i32, t: Arc<Mutex<u128>>, node: SocketAddr) -> anyhow::Result<()> {
-    match add_node(&ws, node, 1).await {
-        Ok(_) => match init_database(n).await {
-            Ok(time) => {
-                *t.lock().await = time;
-            }
-            Err(e) => {
-                error!("{}", e);
-            }
-        },
         Err(e) => {
             error!("{}", e);
         }
