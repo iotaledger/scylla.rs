@@ -155,6 +155,7 @@ where
                     }
                 }
                 ScyllaEvent::Shutdown => {
+                    log::warn!("Scylla is Stopping");
                     rt.stop().await;
                     if rt.microservices_stopped() {
                         rt.inbox_mut().close();
@@ -162,6 +163,7 @@ where
                 }
             }
         }
+        log::info!("Scylla gracefully shutdown");
         Ok(())
     }
 }

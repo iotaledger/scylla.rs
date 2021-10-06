@@ -204,6 +204,7 @@ where
                         Topology::AddNode(address) => {
                             if self.nodes.contains_key(&address) {
                                 if let Some(responder) = responder_opt.take() {
+                                    log::error!("Cannot add existing {} node into the cluster", address);
                                     let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
                                         "Cannot add existing {} node into the cluster",
                                         address
@@ -269,6 +270,7 @@ where
                                             }
                                             Err(err) => {
                                                 if let Some(responder) = responder_opt.take() {
+                                                    log::error!("unable to add {} node, error: {}", address, err);
                                                     let error_response: Result<Topology, _> = Err(TopologyErr::new(
                                                         format!("unable to add {} node, error: {}", address, err),
                                                     ));
@@ -305,6 +307,7 @@ where
                             let responder = responder_opt.take().ok_or_else(|| {
                                 ActorError::exit_msg("cannot use remove node topology variant without responder")
                             })?;
+                            log::info!("Removing {} node!", address);
                             // get and remove node_info
                             if let Some(node_info) = self.nodes.get(&address) {
                                 if let Some(join_handle) = rt.shutdown_child(&node_info.scope_id).await {
@@ -314,10 +317,12 @@ where
                                     // Await till it gets shutdown, it forces sync shutdown
                                     join_handle.await.ok();
                                     self.nodes.remove(&address);
+                                    log::info!("Removed {} node!", address);
                                     let ok_response: Result<_, TopologyErr> = Ok(Topology::RemoveNode(address));
                                     responder.reply(ok_response).await.ok();
                                 };
                             } else {
+                                log::error!("unable to remove non-existing {} node!", address);
                                 // Cannot remove non-existing node.
                                 let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
                                     "unable to remove non-existing {} node",
@@ -440,6 +445,7 @@ where
                     }
                 }
                 ClusterEvent::Shutdown => {
+                    log::warn!("Cluster is Stopping");
                     self.cleanup(scylla.thread_count);
                     // stop all the children/nodes
                     rt.stop().await;
@@ -459,6 +465,7 @@ where
                 }
             }
         }
+        log::info!("Cluster gracefully shutdown");
         Ok(())
     }
 }
@@ -492,7 +499,7 @@ impl Cluster {
     }
     fn restart_node(my_handle: UnboundedHandle<ClusterEvent>, address: SocketAddr) {
         let restart_node_task = async move {
-            log::warn!("After 5 seconds will try to restart/reconnect to {}", address);
+            log::warn!("After 5 seconds will try to restart/reconnect {}", address);
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             my_handle
                 .send(ClusterEvent::Topology(Topology::AddNode(address), None))
@@ -588,7 +595,7 @@ impl Cluster {
 pub trait ClusterHandleExt {
     /// Add scylla node to the cluster,
     async fn add_node(&self, node: SocketAddr) -> TopologyResponse;
-    /// Remove scylla node to the cluster
+    /// Remove scylla node from the cluster
     async fn remove_node(&self, address: SocketAddr) -> TopologyResponse;
     /// Build ring with uniform replication factor
     async fn build_ring(&self, uniform_replication_factor: u8) -> TopologyResponse;

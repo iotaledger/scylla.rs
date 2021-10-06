@@ -87,6 +87,7 @@ where
                     }
                 }
                 NodeEvent::Shutdown => {
+                    log::warn!("{} node is Stopping", self.address);
                     rt.stop().await;
                     if rt.microservices_stopped() {
                         rt.inbox_mut().close();
@@ -94,6 +95,7 @@ where
                 }
             }
         }
+        log::info!("{} node gracefully shutdown", self.address);
         Ok(())
     }
 }
