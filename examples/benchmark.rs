@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 use anyhow::bail;
 use backstage::prefab::websocket::*;
-use futures::SinkExt;
+use futures::{
+    SinkExt,
+    StreamExt,
+    TryStreamExt,
+};
 use log::*;
 use scylla_rs::{
     app::cluster::Topology,
@@ -27,7 +31,7 @@ async fn main() {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     let node: SocketAddr = std::env::var("SCYLLA_NODE").map_or_else(
-        |_| ([127, 0, 0, 1], 19042).into(),
+        |_| ([127, 0, 0, 1], 9042).into(),
         |n| {
             n.parse()
                 .expect("Invalid SCYLLA_NODE env, use this format '127.0.0.1:19042' ")
@@ -194,13 +198,14 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
             })?;
     }
 
+    let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
+        let worker = ValueWorker::<_, i32, SelectRequest<MyKeyspace, _, _>>::new::<MyKeyspace>(sender.clone());
         keyspace
             .select(&format!("Key {}", i))
             .consistency(Consistency::One)
             .build()?
-            .get_local()
-            .await
+            .send_local(worker)
             .map_err(|e| {
                 error!("{}", e);
                 anyhow::anyhow!(e.to_string())
