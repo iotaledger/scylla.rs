@@ -1,19 +1,15 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use super::ComputeToken;
 use crate::cql::{
     murmur3_cassandra_x64_128,
     Decoder,
     RowsDecoder,
     VoidDecoder,
 };
-
-use super::ComputeToken;
-
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.
-///
-/// ## Usage
 /// A keyspace can have predefined queries and functionality to
 /// decode the results they return. To make use of this, implement
 /// the following traits on a `Keyspace`:
