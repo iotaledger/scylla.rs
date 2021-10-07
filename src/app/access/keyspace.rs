@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::Cow;
-use crate::cql::{Decoder, RowsDecoder, VoidDecoder};
+use crate::cql::{
+    Decoder,
+    RowsDecoder,
+    VoidDecoder,
+};
 
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.

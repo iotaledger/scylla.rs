@@ -289,7 +289,7 @@ where
                                     }
                                 }
                                 Err(error) => {
-                                    log::info!("Unable to connect to node {}!", address);
+                                    log::warn!("Unable to connect to node {}!", address);
                                     if let Some(responder) = responder_opt.take() {
                                         let error_response: Result<Topology, _> = Err(TopologyErr::new(format!(
                                             "Unable to add {} node, error: {}",
@@ -405,14 +405,17 @@ where
                 }
                 ClusterEvent::Microservice(scope_id, service, result_opt) => {
                     if service.is_stopped() {
-                        let address: SocketAddr = rt
-                            .remove_microservice(scope_id)
-                            .ok_or_else(|| ActorError::exit_msg("microservice for stopped node"))?
+                        let address: SocketAddr = service
                             .directory()
                             .as_ref()
                             .ok_or_else(|| ActorError::exit_msg("directory microservice for stopped node"))?
                             .parse()
                             .map_err(ActorError::exit)?;
+                        if self.nodes.contains_key(&address) {
+                            rt.upsert_microservice(scope_id, service);
+                        } else {
+                            rt.remove_microservice(scope_id);
+                        }
                         if !rt.service().is_stopping() && self.nodes.contains_key(&address) {
                             {
                                 let maybe_unstable_registry = registry.read().await.clone();
@@ -521,8 +524,13 @@ impl Cluster {
             rt.update_status(ServiceStatus::Running).await;
         } else {
             if rt.microservices_stopped() {
-                log::warn!("Cluster is Idle");
-                rt.update_status(ServiceStatus::Idle).await;
+                if self.nodes.is_empty() {
+                    log::warn!("Cluster is Idle");
+                    rt.update_status(ServiceStatus::Idle).await;
+                } else {
+                    log::warn!("Cluster is experiencing an Outage");
+                    rt.update_status(ServiceStatus::Outage).await;
+                }
             } else {
                 log::warn!("Cluster is Degraded");
                 rt.update_status(ServiceStatus::Degraded).await;

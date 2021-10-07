@@ -138,6 +138,11 @@ where
                                 log::info!("Scylla is Idle");
                             }
                             rt.update_status(ServiceStatus::Idle).await;
+                        } else if rt.microservices_all(|cluster| cluster.is_outage()) {
+                            if !rt.service().is_outage() {
+                                log::info!("Scylla is experiencing an Outage");
+                            }
+                            rt.update_status(ServiceStatus::Outage).await;
                         } else {
                             if !rt.service().is_degraded() {
                                 log::info!("Scylla is Degraded");
