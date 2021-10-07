@@ -1,12 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    delete::DeleteRecommended,
-    insert::InsertRecommended,
-    update::UpdateRecommended,
-    *,
-};
+use super::*;
 use crate::{
     app::ring::RingSendError,
     cql::{
@@ -44,6 +39,20 @@ pub struct BatchRequest<S> {
     inner: Vec<u8>,
     map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
     keyspace: S,
+}
+
+impl<S> Request for BatchRequest<S> {
+    fn statement(&self) -> &Cow<'static, str> {
+        panic!("BatchRequest::statement() should never be called")
+    }
+
+    fn payload(&self) -> &Vec<u8> {
+        &self.inner
+    }
+
+    fn into_payload(self) -> Vec<u8> {
+        self.inner
+    }
 }
 
 /// A marker trait which holds dynamic types for a statement
@@ -135,23 +144,13 @@ impl<S: Keyspace> BatchRequest<S> {
 
     /// Send a local request using the keyspace impl and return a type marker
     pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_local(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
+        send_local(self.token, self.inner, worker)?;
         Ok(DecodeResult::batch())
     }
 
     /// Send a global request using the keyspace impl and return a type marker
     pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_global(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
+        send_global(self.token, self.inner, worker)?;
         Ok(DecodeResult::batch())
     }
 
@@ -268,7 +267,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -281,7 +280,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         S: Insert<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -305,7 +304,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -332,7 +331,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         };
 
         // this will advnace the builder as defined in the Update<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -345,7 +344,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         S: Update<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -369,7 +368,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -396,7 +395,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
@@ -409,7 +408,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         S: Delete<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
@@ -433,7 +432,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
@@ -462,7 +461,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -475,7 +474,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         S: Insert<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -499,7 +498,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as InsertRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -526,7 +525,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         };
 
         // this will advnace the builder as defined in the Update<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -539,7 +538,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         S: Update<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -563,7 +562,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as UpdateRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -590,7 +589,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
-        let builder = S::QueryOrPrepared::make(self.builder, &self.keyspace);
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
@@ -603,7 +602,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         S: Delete<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = <QueryStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
@@ -627,7 +626,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         );
 
         // this will advnace the builder with PreparedStatement
-        let builder = <PreparedStatement as DeleteRecommended<S, K, V>>::make(self.builder, &self.keyspace);
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 

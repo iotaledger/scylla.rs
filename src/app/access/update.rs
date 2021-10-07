@@ -1,7 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::*;
+use super::{
+    insert::UpsertBuilder,
+    *,
+};
+use crate::cql::query::StatementType;
 
 /// Update query trait which creates an `UpdateRequest`
 /// that can be sent to the `Ring`.
@@ -47,7 +51,6 @@ use super::*;
 /// #         rand::random()
 /// #     }
 /// # }
-/// # impl VoidDecoder for MyKeyspace {}
 /// # type MyKeyType = i32;
 /// # type MyValueType = f32;
 /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
@@ -71,7 +74,7 @@ use super::*;
 /// ```
 pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
-    type QueryOrPrepared: UpdateRecommended<Self, K, V>;
+    type QueryOrPrepared: QueryOrPrepared;
 
     /// Create your update statement here.
     fn statement(&self) -> Cow<'static, str>;
@@ -85,206 +88,104 @@ pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
 }
 
-pub trait UpdateRecommended<S: Update<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
-        Self::encode_statement(query_or_batch, &keyspace.statement())
-    }
-}
-
-impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for QueryStatement {}
-
-impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for PreparedStatement {}
-
 /// Wrapper for the `Update` trait which provides the `update` function
-pub trait GetUpdateRequest<S, K, V> {
+pub trait GetUpdateRequest<K, V>: Keyspace {
     /// Calls the appropriate `Update` implementation for this Key/Value pair
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Update<K, V>;
+        Self: Update<K, V>,
+    {
+        UpsertBuilder {
+            keyspace: self,
+            statement: self.statement(),
+            key,
+            value,
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            _marker: PhantomData,
+        }
+    }
     /// Calls the `Update` implementation for this Key/Value pair using a query statement
-    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    fn update_query<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Update<K, V>;
+        Self: Update<K, V>,
+    {
+        UpsertBuilder {
+            keyspace: self,
+            statement: self.statement(),
+            key,
+            value,
+            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            _marker: PhantomData,
+        }
+    }
     /// Calls the `Update` implementation for this Key/Value pair using a prepared statement id
-    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+    fn update_prepared<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Update<K, V>;
-}
-
-impl<S: Update<K, V>, K, V> GetUpdateRequest<S, K, V> for S {
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Update<K, V>,
+        Self: Update<K, V>,
     {
-        UpdateBuilder {
-            _marker: PhantomData,
+        UpsertBuilder {
             keyspace: self,
+            statement: self.statement(),
             key,
             value,
-            builder: S::QueryOrPrepared::make(Query::new(), self),
+            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            _marker: PhantomData,
         }
     }
-    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Update<K, V>,
-    {
-        UpdateBuilder {
-            _marker: PhantomData,
+
+    /// Specifies the returned Value type for an upcoming select request
+    fn update_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a K,
+        value: &'a V,
+        statement_type: StatementType,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, DynamicRequest> {
+        match statement_type {
+            StatementType::Query => self.update_query_with(statement, key, value),
+            StatementType::Prepared => self.update_prepared_with(statement, key, value),
+        }
+    }
+    /// Specifies the returned Value type for an upcoming select request using a query statement
+    fn update_query_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, DynamicRequest> {
+        UpsertBuilder {
             keyspace: self,
+            statement: statement.to_owned().into(),
             key,
             value,
-            builder: <QueryStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+            builder: QueryStatement::encode_statement(Query::new(), statement),
+            _marker: PhantomData,
         }
     }
-    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Update<K, V>,
-    {
-        UpdateBuilder {
-            _marker: PhantomData,
+    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
+    fn update_prepared_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, DynamicRequest> {
+        UpsertBuilder {
             keyspace: self,
+            statement: statement.to_owned().into(),
             key,
             value,
-            builder: <PreparedStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
-        }
-    }
-}
-pub struct UpdateBuilder<'a, S, K, V, Stage> {
-    _marker: PhantomData<(&'a S, &'a K, &'a V)>,
-    keyspace: &'a S,
-    key: &'a K,
-    value: &'a V,
-    builder: QueryBuilder<Stage>,
-}
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryConsistency> {
-    pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, QueryValues> {
-        UpdateBuilder {
-            _marker: self._marker,
-            keyspace: self.keyspace,
-            key: self.key,
-            value: self.value,
-            builder: S::bind_values(self.builder.consistency(consistency), self.key, self.value),
-        }
-    }
-}
-
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryValues> {
-    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild> {
-        UpdateBuilder {
-            _marker: self._marker,
-            keyspace: self.keyspace,
-            key: self.key,
-            value: self.value,
-            builder: self.builder.timestamp(timestamp),
-        }
-    }
-    /// Build the UpdateRequest
-    pub fn build(self) -> anyhow::Result<UpdateRequest<S, K, V>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(self.keyspace.create_request(query, S::token(self.key)))
-    }
-}
-
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryBuild> {
-    /// Build the UpdateRequest
-    pub fn build(self) -> anyhow::Result<UpdateRequest<S, K, V>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(self.keyspace.create_request(query, S::token(self.key)))
-    }
-}
-
-/// Defines two helper methods to specify statement / id
-pub trait GetUpdateStatement<S> {
-    /// Specifies the Key and Value type for an update statement
-    fn update_statement<K, V>(&self) -> Cow<'static, str>
-    where
-        S: Update<K, V>;
-
-    /// Specifies the Key and Value type for a prepared update statement id
-    fn update_id<K, V>(&self) -> [u8; 16]
-    where
-        S: Update<K, V>;
-}
-
-impl<S: Keyspace> GetUpdateStatement<S> for S {
-    fn update_statement<K, V>(&self) -> Cow<'static, str>
-    where
-        S: Update<K, V>,
-    {
-        S::statement(self)
-    }
-
-    fn update_id<K, V>(&self) -> [u8; 16]
-    where
-        S: Update<K, V>,
-    {
-        S::id(self)
-    }
-}
-
-/// A request to update a record which can be sent to the ring
-#[derive(Clone, Debug)]
-pub struct UpdateRequest<S, K, V> {
-    token: i64,
-    inner: Vec<u8>,
-    keyspace: S,
-    _marker: PhantomData<(S, K, V)>,
-}
-
-impl<K, V, S: Update<K, V> + Clone> CreateRequest<UpdateRequest<S, K, V>> for S {
-    /// Create a new Update Request from a Query/Execute, token, and the keyspace.
-    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> UpdateRequest<S, K, V> {
-        UpdateRequest::<S, K, V> {
-            token,
-            inner: query.into(),
-            keyspace: self.clone(),
+            builder: PreparedStatement::encode_statement(Query::new(), statement),
             _marker: PhantomData,
         }
     }
 }
 
-impl<S, K, V> Request for UpdateRequest<S, K, V>
-where
-    S: Update<K, V> + std::fmt::Debug + Clone,
-    K: Send + std::fmt::Debug,
-    V: Send + std::fmt::Debug,
-{
-    fn statement(&self) -> Cow<'static, str> {
-        self.keyspace.update_statement::<K, V>()
-    }
-
-    fn payload(&self) -> &Vec<u8> {
-        &self.inner
-    }
-}
-
-impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
-    /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_local(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
-        Ok(DecodeResult::update())
-    }
-
-    /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_global(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
-        Ok(DecodeResult::update())
-    }
-
-    /// Consume the request to retrieve the payload
-    pub fn into_payload(self) -> Vec<u8> {
-        self.inner
-    }
-}
+impl<S: Keyspace, K, V> GetUpdateRequest<K, V> for S {}

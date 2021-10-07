@@ -51,7 +51,6 @@ use crate::{
         QueryStatement,
         QueryValues,
         RowsDecoder,
-        Statements,
         Values,
         VoidDecoder,
     },
@@ -61,18 +60,15 @@ pub use delete::{
     Delete,
     DeleteRequest,
     GetDeleteRequest,
-    GetDeleteStatement,
 };
 pub use insert::{
     GetInsertRequest,
-    GetInsertStatement,
     Insert,
-    InsertRequest,
+    UpsertRequest,
 };
 pub use keyspace::Keyspace;
 pub use select::{
-    GetSelectRequest,
-    GetSelectStatement,
+    GetStaticSelectRequest,
     Select,
     SelectRequest,
 };
@@ -82,16 +78,15 @@ use std::{
     marker::PhantomData,
     ops::Deref,
 };
+use thiserror::Error;
 pub use update::{
     GetUpdateRequest,
-    GetUpdateStatement,
     Update,
-    UpdateRequest,
 };
 
 #[repr(u8)]
 #[derive(Copy, Clone)]
-enum RequestType {
+pub enum RequestType {
     Insert = 0,
     Update = 1,
     Delete = 2,
@@ -99,44 +94,196 @@ enum RequestType {
     Batch = 4,
 }
 
+pub struct DynamicRequest;
+pub struct StaticRequest;
+
+#[derive(Error, Debug)]
+pub enum RequestError {
+    #[error("Error sending to the Ring: {0}")]
+    Send(#[from] RingSendError),
+    #[error("{0}")]
+    Worker(#[from] WorkerError),
+    #[error("Error receiving response from Scylla: {0}")]
+    Receive(#[from] anyhow::Error),
+}
+
 /// Defines a computed token for a key type
-pub trait ComputeToken<K>: Keyspace {
+pub trait ComputeToken<K: ?Sized> {
     /// Compute the token from the provided partition_key by using murmur3 hash function
     fn token(key: &K) -> i64;
 }
 
-/// Create request from cql frame
-pub trait CreateRequest<T>: Keyspace {
-    /// Create request of Type T
-    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> T;
-}
-
-/// Unifying trait for requests which defines shared functionality
-pub trait Request: Send + std::fmt::Debug {
+pub trait Request {
     /// Get the statement that was used to create this request
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> &Cow<'static, str>;
 
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
+
+    fn into_payload(self) -> Vec<u8>;
 }
+
+pub trait SendRequestExt: Request {
+    type Marker: Send;
+    const TYPE: RequestType;
+
+    fn token(&self) -> i64;
+
+    fn marker() -> Self::Marker;
+
+    /// Send a local request using the keyspace impl and return a type marker
+    fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RingSendError>
+    where
+        Self: Sized,
+    {
+        send_local(self.token(), self.into_payload(), worker)?;
+        Ok(DecodeResult::new(Self::marker(), Self::TYPE))
+    }
+
+    /// Send a global request using the keyspace impl and return a type marker
+    fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RingSendError>
+    where
+        Self: Sized,
+    {
+        send_global(self.token(), self.into_payload(), worker)?;
+        Ok(DecodeResult::new(Self::marker(), Self::TYPE))
+    }
+}
+
+/// Unifying trait for requests which defines shared functionality
+#[async_trait::async_trait]
+pub trait GetRequestExt<O: Send>: SendRequestExt {
+    fn worker(handle: tokio::sync::mpsc::UnboundedSender<Result<O, WorkerError>>) -> Box<dyn Worker>;
+
+    async fn get_local(self) -> Result<O, RequestError>
+    where
+        Self: Sized,
+    {
+        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let worker = Self::worker(sender);
+        self.send_local(worker)?;
+        Ok(inbox
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+    }
+
+    fn get_local_blocking(self) -> Result<O, RequestError>
+    where
+        Self: Sized,
+    {
+        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let worker = Self::worker(sender);
+        self.send_local(worker)?;
+        Ok(inbox
+            .blocking_recv()
+            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+    }
+
+    async fn get_global(self) -> Result<O, RequestError>
+    where
+        Self: Sized,
+    {
+        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let worker = Self::worker(sender);
+        self.send_global(worker)?;
+        Ok(inbox
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+    }
+
+    fn get_global_blocking(self) -> Result<O, RequestError>
+    where
+        Self: Sized,
+    {
+        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let worker = Self::worker(sender);
+        self.send_global(worker)?;
+        Ok(inbox
+            .blocking_recv()
+            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+    }
+}
+
+/// Defines two helper methods to specify statement / id
+pub trait GetStatementIdExt {
+    fn select_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Select<K, V>,
+    {
+        self.statement()
+    }
+
+    fn select_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Select<K, V>,
+    {
+        self.id()
+    }
+
+    fn insert_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Insert<K, V>,
+    {
+        self.statement()
+    }
+
+    fn insert_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Insert<K, V>,
+    {
+        self.id()
+    }
+
+    fn update_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Update<K, V>,
+    {
+        self.statement()
+    }
+
+    fn update_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Update<K, V>,
+    {
+        self.id()
+    }
+
+    fn delete_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Delete<K, V>,
+    {
+        self.statement()
+    }
+
+    fn delete_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Delete<K, V>,
+    {
+        self.id()
+    }
+}
+
+impl<S: Keyspace> GetStatementIdExt for S {}
 
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
 #[derive(Clone, Copy, Default)]
-pub struct DecodeRows<S, K, V> {
-    _marker: PhantomData<(S, K, V)>,
+pub struct DecodeRows<S, V> {
+    _marker: PhantomData<fn(S, V) -> (S, V)>,
 }
 
-impl<S, K, V> DecodeRows<S, K, V> {
+impl<S, V> DecodeRows<S, V> {
     fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
+impl<'a, S: RowsDecoder<V>, V> DecodeRows<S, V> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
-        S::try_decode(bytes.try_into()?)
+        S::try_decode_rows(bytes.try_into()?)
     }
 }
 
@@ -145,7 +292,7 @@ impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
 /// via `VoidDecoder` later
 #[derive(Copy, Clone)]
 pub struct DecodeVoid<S> {
-    _marker: PhantomData<S>,
+    _marker: PhantomData<fn(S) -> S>,
 }
 
 impl<S> DecodeVoid<S> {
@@ -157,7 +304,7 @@ impl<S> DecodeVoid<S> {
 impl<S: VoidDecoder> DecodeVoid<S> {
     /// Decode a result payload using the `VoidDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        S::try_decode(bytes.try_into()?)
+        S::try_decode_void(bytes.try_into()?)
     }
 }
 
@@ -170,10 +317,15 @@ pub struct DecodeResult<T> {
     inner: T,
     request_type: RequestType,
 }
-impl<S, K, V> DecodeResult<DecodeRows<S, K, V>> {
+impl<T> DecodeResult<T> {
+    fn new(inner: T, request_type: RequestType) -> Self {
+        Self { inner, request_type }
+    }
+}
+impl<S, V> DecodeResult<DecodeRows<S, V>> {
     fn select() -> Self {
         Self {
-            inner: DecodeRows::<S, K, V>::new(),
+            inner: DecodeRows::<S, V>::new(),
             request_type: RequestType::Select,
         }
     }
@@ -207,24 +359,14 @@ impl<S> DecodeResult<DecodeVoid<S>> {
 }
 
 /// Send a local request to the Ring
-pub fn send_local(
-    token: i64,
-    payload: Vec<u8>,
-    worker: Box<dyn Worker>,
-    _keyspace: String,
-) -> Result<(), RingSendError> {
+pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     Ring::send_local_random_replica(token, request)
 }
 
 /// Send a global request to the Ring
-pub fn send_global(
-    token: i64,
-    payload: Vec<u8>,
-    worker: Box<dyn Worker>,
-    _keyspace: String,
-) -> Result<(), RingSendError> {
+pub fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     Ring::send_global_random_replica(token, request)
@@ -241,7 +383,13 @@ impl<T> Deref for DecodeResult<T> {
 #[doc(hidden)]
 pub mod tests {
 
-    use crate::app::worker::InsertWorker;
+    use crate::{
+        cql::query::StatementType,
+        prelude::{
+            select::GetDynamicSelectRequest,
+            BasicWorker,
+        },
+    };
 
     use super::*;
 
@@ -258,9 +406,9 @@ pub mod tests {
         }
     }
 
-    impl Keyspace for MyKeyspace {
-        fn name(&self) -> &Cow<'static, str> {
-            &self.name
+    impl ToString for MyKeyspace {
+        fn to_string(&self) -> String {
+            self.name.to_string()
         }
     }
 
@@ -285,11 +433,6 @@ pub mod tests {
         }
     }
 
-    impl ComputeToken<u32> for MyKeyspace {
-        fn token(_key: &u32) -> i64 {
-            rand::random()
-        }
-    }
     impl Insert<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
@@ -333,25 +476,28 @@ pub mod tests {
         }
     }
 
-    impl RowsDecoder<u32, f32> for MyKeyspace {
+    impl RowsDecoder<f32> for MyKeyspace {
         type Row = f32;
-        fn try_decode(_decoder: Decoder) -> anyhow::Result<Option<f32>> {
+        fn try_decode_rows(_decoder: Decoder) -> anyhow::Result<Option<f32>> {
             todo!()
         }
     }
 
-    impl RowsDecoder<u32, i32> for MyKeyspace {
+    impl RowsDecoder<i32> for MyKeyspace {
         type Row = i32;
-        fn try_decode(_decoder: Decoder) -> anyhow::Result<Option<i32>> {
+        fn try_decode_rows(_decoder: Decoder) -> anyhow::Result<Option<i32>> {
             todo!()
         }
     }
 
-    impl VoidDecoder for MyKeyspace {}
-
-    #[derive(Debug)]
     struct TestWorker {
-        request: Box<dyn Request>,
+        request: Box<dyn Request + Send>,
+    }
+
+    impl std::fmt::Debug for TestWorker {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("TestWorker").finish()
+        }
     }
 
     impl Worker for TestWorker {
@@ -457,37 +603,34 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let req1 = keyspace
-            .select::<f32>(&3)
+        let res = keyspace
+            .select_with::<f32>(
+                "SELECT col1 FROM keyspace.table WHERE key = ?",
+                &[&3],
+                StatementType::Query,
+            )
             .consistency(Consistency::One)
             .build()
-            .unwrap();
-        assert_eq!(req1.payload().len(), 100);
-        let worker1 = TestWorker {
-            request: Box::new(req1.clone()),
-        };
+            .unwrap()
+            .get_local_blocking();
+        assert!(res.is_err());
         let req2 = keyspace
             .select::<i32>(&3)
             .consistency(Consistency::One)
             .page_size(500)
             .build()
             .unwrap();
-        let worker2 = TestWorker {
-            request: Box::new(req1.clone()),
-        };
         let worker3 = TestWorker {
             request: Box::new(req2.clone()),
         };
-        let _res = req1.clone().send_local(Box::new(worker1));
-        let _res = req1.send_local(Box::new(worker2));
-        let _res = req2.send_local(Box::new(worker3));
+        let _res = req2.clone().send_local(Box::new(worker3));
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
-        let worker = InsertWorker::boxed(keyspace, 3, 8.0, 0);
+        let worker = BasicWorker::new();
 
         let _res = req.send_local(worker);
     }

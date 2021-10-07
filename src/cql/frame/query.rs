@@ -5,12 +5,25 @@
 
 use super::{
     consistency::Consistency,
-    encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
-    opcode::{EXECUTE, QUERY},
+    encoder::{
+        ColumnEncoder,
+        BE_8_BYTES_LEN,
+        BE_NULL_BYTES_LEN,
+        BE_UNSET_BYTES_LEN,
+    },
+    opcode::{
+        EXECUTE,
+        QUERY,
+    },
     queryflags::*,
-    QueryOrPrepared, Statements, Values,
+    QueryOrPrepared,
+    Statements,
+    Values,
 };
-use crate::cql::compression::{Compression, MyCompression};
+use crate::cql::compression::{
+    Compression,
+    MyCompression,
+};
 
 /// Blanket cql frame header for query frame.
 const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
@@ -20,7 +33,12 @@ const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
 ///
 /// ## Example
 /// ```
-/// use scylla_rs::cql::{Consistency, Query, Statements, Values};
+/// use scylla_rs::cql::{
+///     Consistency,
+///     Query,
+///     Statements,
+///     Values,
+/// };
 ///
 /// let builder = Query::new();
 /// let query = builder
@@ -47,6 +65,11 @@ pub struct PreparedStatement;
 
 /// Gating type for query consistency
 pub struct QueryConsistency;
+
+pub enum StatementType {
+    Query,
+    Prepared,
+}
 
 /// Gating type for query flags
 pub struct QueryFlags {
@@ -577,7 +600,10 @@ impl Into<Vec<u8>> for Query {
 mod tests {
     use super::*;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{
+        SystemTime,
+        UNIX_EPOCH,
+    };
     #[test]
     // note: junk data
     fn simple_query_builder_test() {

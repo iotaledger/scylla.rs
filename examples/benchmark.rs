@@ -10,7 +10,6 @@ use scylla_rs::{
 };
 use std::{
     borrow::Cow,
-    marker::PhantomData,
     net::SocketAddr,
     sync::Arc,
     time::SystemTime,
@@ -142,7 +141,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         ))
         .consistency(Consistency::One)
         .build()?;
-    send_local(token, keyspace_statement.0, worker, keyspace.clone()).map_err(|e| {
+    send_local(token, keyspace_statement.0, worker).map_err(|e| {
         error!("{}", e);
         anyhow::anyhow!(e.to_string())
     })?;
@@ -160,7 +159,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
         .consistency(Consistency::One)
         .build()?;
-    send_local(token, drop_statement.0, worker, keyspace.clone()).map_err(|e| {
+    send_local(token, drop_statement.0, worker).map_err(|e| {
         error!("{}", e);
         anyhow::anyhow!(e.to_string())
     })?;
@@ -185,7 +184,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         .statement(table_query.as_str())
         .consistency(Consistency::One)
         .build()?;
-    send_local(token, statement.0, worker, keyspace.clone()).map_err(|e| {
+    send_local(token, statement.0, worker).map_err(|e| {
         error!("{}", e);
         anyhow::anyhow!(e.to_string())
     })?;
@@ -206,7 +205,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
     let Prepare(payload) = Prepare::new()
         .statement(&<MyKeyspace as Insert<String, i32>>::statement(&keyspace))
         .build()?;
-    send_local(token, payload, worker, keyspace.name().to_string()).map_err(|e| {
+    send_local(token, payload, worker).map_err(|e| {
         error!("{}", e);
         anyhow::anyhow!(e.to_string())
     })?;
@@ -218,7 +217,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
     let Prepare(payload) = Prepare::new()
         .statement(&<MyKeyspace as Select<String, i32>>::statement(&keyspace))
         .build()?;
-    send_local(token, payload, worker, keyspace.name().to_string()).map_err(|e| {
+    send_local(token, payload, worker).map_err(|e| {
         error!("{}", e);
         anyhow::anyhow!(e.to_string())
     })?;
@@ -227,34 +226,28 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
 
     let start = SystemTime::now();
     for i in 0..n {
-        let worker = InsertWorker::boxed(keyspace.clone(), format!("Key {}", i), i, 3);
-        let request = keyspace
+        keyspace
             .insert(&format!("Key {}", i), &i)
             .consistency(Consistency::One)
-            .build()?;
-        request.send_local(worker).map_err(|e| {
-            error!("{}", e);
-            anyhow::anyhow!(e.to_string())
-        })?;
+            .build()?
+            .send_local(BasicWorker::new())
+            .map_err(|e| {
+                error!("{}", e);
+                anyhow::anyhow!(e.to_string())
+            })?;
     }
 
-    let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
-        let worker = ValueWorker::boxed(
-            sender.clone(),
-            keyspace.clone(),
-            format!("Key {}", i),
-            2,
-            PhantomData::<i32>,
-        );
-        let request = keyspace
+        keyspace
             .select(&format!("Key {}", i))
             .consistency(Consistency::One)
-            .build()?;
-        request.send_local(worker).map_err(|e| {
-            error!("{}", e);
-            anyhow::anyhow!(e.to_string())
-        })?;
+            .build()?
+            .get_local()
+            .await
+            .map_err(|e| {
+                error!("{}", e);
+                anyhow::anyhow!(e.to_string())
+            })?;
     }
     drop(sender);
     while let Some(res) = inbox.recv().await {
@@ -307,28 +300,20 @@ impl MyKeyspace {
     }
 }
 
-impl Keyspace for MyKeyspace {
-    fn name(&self) -> &Cow<'static, str> {
-        &self.name
+impl ToString for MyKeyspace {
+    fn to_string(&self) -> String {
+        self.name.to_string()
     }
 }
 
-impl VoidDecoder for MyKeyspace {}
-
-impl RowsDecoder<String, i32> for MyKeyspace {
+impl RowsDecoder<i32> for MyKeyspace {
     type Row = i32;
-    fn try_decode(decoder: Decoder) -> anyhow::Result<Option<i32>> {
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<i32>> {
         anyhow::ensure!(decoder.is_rows()?, "Decoded response is not rows!");
         Self::Row::rows_iter(decoder)?
             .next()
             .map(|row| Some(row))
             .ok_or_else(|| anyhow::anyhow!("Row not found!"))
-    }
-}
-
-impl<T> ComputeToken<T> for MyKeyspace {
-    fn token(_key: &T) -> i64 {
-        rand::random()
     }
 }
 

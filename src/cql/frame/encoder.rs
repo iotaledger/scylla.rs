@@ -6,7 +6,11 @@
 use std::{
     collections::HashMap,
     io::Cursor,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{
+        IpAddr,
+        Ipv4Addr,
+        Ipv6Addr,
+    },
 };
 
 /// The 16-byte body length.
@@ -73,9 +77,24 @@ pub trait ColumnEncoder {
     }
 
     /// Start an encoding chain
-    fn chain_encode<T: ColumnEncoder>(&self, other: &T) -> ColumnEncodeChain {
+    fn chain_encode<T: ColumnEncoder>(&self, other: &T) -> ColumnEncodeChain
+    where
+        Self: Sized,
+    {
         let buffer = self.encode_new();
         ColumnEncodeChain { buffer }.chain(other)
+    }
+}
+
+impl<T: ColumnEncoder + ?Sized> ColumnEncoder for &T {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        T::encode(*self, buffer)
+    }
+}
+
+impl<T: ColumnEncoder + ?Sized> ColumnEncoder for Box<T> {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        T::encode(&*self, buffer)
     }
 }
 
@@ -275,16 +294,26 @@ impl ColumnEncoder for Null {
 }
 
 /// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
+#[derive(Default)]
 pub struct TokenEncodeChain {
     buffer: Vec<u8>,
 }
 
 impl TokenEncodeChain {
     /// Chain a new value
-    pub fn chain<T: TokenEncoder>(mut self, other: &T) -> Self {
+    pub fn chain<T: TokenEncoder>(mut self, other: &T) -> Self
+    where
+        Self: Sized,
+    {
         self.buffer.extend_from_slice(other.encode_new()[2..].into());
         self.buffer.push(0);
         self
+    }
+
+    /// Chain a new value
+    pub fn dyn_chain(&mut self, other: &dyn TokenEncoder) {
+        self.buffer.extend_from_slice(other.encode_new()[2..].into());
+        self.buffer.push(0);
     }
 
     /// Complete the chain and return the token
@@ -301,10 +330,22 @@ pub trait TokenEncoder: ColumnEncoder {
     }
 
     /// Start an encode chain
-    fn chain_token<T: TokenEncoder>(&self, other: &T) -> TokenEncodeChain {
+    fn chain_token<T: TokenEncoder>(&self, other: &T) -> TokenEncodeChain
+    where
+        Self: Sized,
+    {
         let mut buffer: Vec<u8> = self.encode_new()[2..].into();
         buffer.push(0);
         TokenEncodeChain { buffer }.chain(other)
+    }
+
+    /// Start an encode chain
+    fn dyn_chain_token(&self, other: &dyn TokenEncoder) -> TokenEncodeChain {
+        let mut buffer: Vec<u8> = self.encode_new()[2..].into();
+        buffer.push(0);
+        let mut chain = TokenEncodeChain { buffer };
+        chain.dyn_chain(other);
+        chain
     }
 }
 

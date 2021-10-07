@@ -1,6 +1,14 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::{
+    cql::{
+        query::StatementType,
+        QueryFlags,
+    },
+    prelude::BasicWorker,
+};
+
 use super::*;
 
 /// Insert query trait which creates an `InsertRequest`
@@ -50,7 +58,6 @@ use super::*;
 /// #         rand::random()
 /// #     }
 /// # }
-/// # impl VoidDecoder for MyKeyspace {}
 /// # type MyKeyType = i32;
 /// # type MyValueType = f32;
 /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
@@ -76,7 +83,7 @@ use super::*;
 /// ```
 pub trait Insert<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
-    type QueryOrPrepared: InsertRecommended<Self, K, V>;
+    type QueryOrPrepared: QueryOrPrepared;
     /// Create your insert statement here.
     fn statement(&self) -> Cow<'static, str>;
     /// Get the MD5 hash of this implementation's statement
@@ -89,206 +96,274 @@ pub trait Insert<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
 }
 
-pub trait InsertRecommended<S: Insert<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
-        Self::encode_statement(query_or_batch, &keyspace.statement())
-    }
-}
-
-impl<S: Insert<K, V>, K, V> InsertRecommended<S, K, V> for QueryStatement {}
-
-impl<S: Insert<K, V>, K, V> InsertRecommended<S, K, V> for PreparedStatement {}
-
 /// Wrapper for the `Insert` trait which provides the `insert` function
-pub trait GetInsertRequest<S, K, V> {
+pub trait GetInsertRequest<K, V>: Keyspace {
     /// Calls the appropriate `Insert` implementation for this Key/Value pair
-    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Insert<K, V>;
-    /// Calls `Insert` implementation for this Key/Value pair using a query statement
-    fn insert_query<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+        Self: Insert<K, V>,
+    {
+        UpsertBuilder {
+            keyspace: self,
+            statement: self.statement(),
+            key,
+            value,
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            _marker: PhantomData,
+        }
+    }
+    /// Calls the `Insert` implementation for this Key/Value pair using a query statement
+    fn insert_query<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Insert<K, V>;
-    /// Calls `Insert` implementation for this Key/Value pair using a prepared statement id
-    fn insert_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
+        Self: Insert<K, V>,
+    {
+        UpsertBuilder {
+            keyspace: self,
+            statement: self.statement(),
+            key,
+            value,
+            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            _marker: PhantomData,
+        }
+    }
+    /// Calls the `Insert` implementation for this Key/Value pair using a prepared statement id
+    fn insert_prepared<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Insert<K, V>;
+        Self: Insert<K, V>,
+    {
+        UpsertBuilder {
+            keyspace: self,
+            statement: self.statement(),
+            key,
+            value,
+            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Specifies the returned Value type for an upcoming select request
+    fn insert_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a K,
+        value: &'a V,
+        statement_type: StatementType,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, DynamicRequest> {
+        match statement_type {
+            StatementType::Query => self.insert_query_with(statement, key, value),
+            StatementType::Prepared => self.insert_prepared_with(statement, key, value),
+        }
+    }
+    /// Specifies the returned Value type for an upcoming select request using a query statement
+    fn insert_query_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, DynamicRequest> {
+        UpsertBuilder {
+            keyspace: self,
+            statement: statement.to_owned().into(),
+            key,
+            value,
+            builder: QueryStatement::encode_statement(Query::new(), statement),
+            _marker: PhantomData,
+        }
+    }
+    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
+    fn insert_prepared_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpsertBuilder<'a, Self, K, V, QueryConsistency, DynamicRequest> {
+        UpsertBuilder {
+            keyspace: self,
+            statement: statement.to_owned().into(),
+            key,
+            value,
+            builder: PreparedStatement::encode_statement(Query::new(), statement),
+            _marker: PhantomData,
+        }
+    }
 }
 
-impl<S: Insert<K, V>, K, V> GetInsertRequest<S, K, V> for S {
-    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Insert<K, V>,
-    {
-        InsertBuilder {
-            _marker: PhantomData,
-            keyspace: self,
-            key,
-            value,
-            builder: S::QueryOrPrepared::make(Query::new(), self),
-        }
-    }
-    fn insert_query<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Insert<K, V>,
-    {
-        InsertBuilder {
-            _marker: PhantomData,
-            keyspace: self,
-            key,
-            value,
-            builder: <QueryStatement as InsertRecommended<S, K, V>>::make(Query::new(), self),
-        }
-    }
-    fn insert_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Insert<K, V>,
-    {
-        InsertBuilder {
-            _marker: PhantomData,
-            keyspace: self,
-            key,
-            value,
-            builder: <PreparedStatement as InsertRecommended<S, K, V>>::make(Query::new(), self),
-        }
-    }
+impl<S: Keyspace, K, V> GetInsertRequest<K, V> for S {}
+pub struct UpsertBuilder<'a, S, K, V, Stage, T> {
+    pub(crate) keyspace: &'a S,
+    pub(crate) statement: Cow<'static, str>,
+    pub(crate) key: &'a K,
+    pub(crate) value: &'a V,
+    pub(crate) builder: QueryBuilder<Stage>,
+    pub(crate) _marker: PhantomData<fn(T) -> T>,
 }
-pub struct InsertBuilder<'a, S, K, V, Stage> {
-    _marker: PhantomData<(&'a S, &'a K, &'a V)>,
-    keyspace: &'a S,
-    key: &'a K,
-    value: &'a V,
-    builder: QueryBuilder<Stage>,
-}
-impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryConsistency> {
-    pub fn consistency(self, consistency: Consistency) -> InsertBuilder<'a, S, K, V, QueryValues> {
-        InsertBuilder {
-            _marker: self._marker,
+impl<'a, S: Insert<K, V>, K, V, T> UpsertBuilder<'a, S, K, V, QueryConsistency, T> {
+    pub fn consistency(self, consistency: Consistency) -> UpsertBuilder<'a, S, K, V, QueryFlags, T> {
+        UpsertBuilder {
             keyspace: self.keyspace,
+            statement: self.statement,
             key: self.key,
             value: self.value,
-            builder: S::bind_values(self.builder.consistency(consistency), self.key, self.value),
+            builder: self.builder.consistency(consistency),
+            _marker: self._marker,
         }
     }
 }
 
-impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryValues> {
-    pub fn timestamp(self, timestamp: i64) -> InsertBuilder<'a, S, K, V, QueryBuild> {
-        InsertBuilder {
+impl<'a, S: Keyspace, K, V> UpsertBuilder<'a, S, K, V, QueryFlags, DynamicRequest> {
+    pub fn bind_values<F: Fn(QueryBuilder<QueryFlags>, &K, &V) -> QueryBuilder<QueryValues>>(
+        self,
+        bind_fn: F,
+    ) -> UpsertBuilder<'a, S, K, V, QueryValues, DynamicRequest> {
+        UpsertBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: bind_fn(self.builder, &self.key, &self.value),
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<'a, S: Insert<K, V>, K, V, T> UpsertBuilder<'a, S, K, V, QueryFlags, T> {
+    pub fn timestamp(self, timestamp: i64) -> UpsertBuilder<'a, S, K, V, QueryBuild, T> {
+        UpsertBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: S::bind_values(self.builder, &self.key, &self.value).timestamp(timestamp),
+        }
+    }
+}
+impl<'a, S: Keyspace + ComputeToken<K>, K, V> UpsertBuilder<'a, S, K, V, QueryFlags, DynamicRequest> {
+    /// Build the InsertRequest
+    pub fn build(self) -> anyhow::Result<UpsertRequest<S, K, V, DynamicRequest>> {
+        let query = self.builder.build()?;
+        // create the request
+        Ok(UpsertRequest {
+            token: S::token(self.key),
+            inner: query.into(),
+            statement: self.statement,
+            _marker: PhantomData,
+        })
+    }
+}
+impl<'a, S: Insert<K, V>, K, V> UpsertBuilder<'a, S, K, V, QueryFlags, StaticRequest> {
+    /// Build the InsertRequest
+    pub fn build(self) -> anyhow::Result<UpsertRequest<S, K, V, StaticRequest>> {
+        let query = S::bind_values(self.builder, &self.key, &self.value).build()?;
+        // create the request
+        Ok(UpsertRequest {
+            token: S::token(self.key),
+            inner: query.into(),
+            statement: self.statement,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<'a, S: Insert<K, V>, K, V, T> UpsertBuilder<'a, S, K, V, QueryValues, T> {
+    pub fn timestamp(self, timestamp: i64) -> UpsertBuilder<'a, S, K, V, QueryBuild, T> {
+        UpsertBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
             key: self.key,
             value: self.value,
             builder: self.builder.timestamp(timestamp),
+            _marker: self._marker,
         }
     }
     /// Build the InsertRequest
-    pub fn build(self) -> anyhow::Result<InsertRequest<S, K, V>> {
+    pub fn build(self) -> anyhow::Result<UpsertRequest<S, K, V, T>> {
         let query = self.builder.build()?;
         // create the request
-        Ok(self.keyspace.create_request(query, S::token(self.key)))
+        Ok(UpsertRequest {
+            token: S::token(self.key),
+            inner: query.into(),
+            statement: self.statement,
+            _marker: PhantomData,
+        })
     }
 }
 
-impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryBuild> {
+impl<'a, S: Insert<K, V>, K, V, T> UpsertBuilder<'a, S, K, V, QueryBuild, T> {
     /// Build the InsertRequest
-    pub fn build(self) -> anyhow::Result<InsertRequest<S, K, V>> {
+    pub fn build(self) -> anyhow::Result<UpsertRequest<S, K, V, T>> {
         let query = self.builder.build()?;
         // create the request
-        Ok(self.keyspace.create_request(query, S::token(self.key)))
-    }
-}
-
-/// Defines two helper methods to specify statement / id
-pub trait GetInsertStatement<S> {
-    /// Specifies the Key and Value type for an insert statement
-    fn insert_statement<K, V>(&self) -> Cow<'static, str>
-    where
-        S: Insert<K, V>;
-
-    /// Specifies the Key and Value type for a prepared insert statement id
-    fn insert_id<K, V>(&self) -> [u8; 16]
-    where
-        S: Insert<K, V>;
-}
-
-impl<S: Keyspace> GetInsertStatement<S> for S {
-    fn insert_statement<K, V>(&self) -> Cow<'static, str>
-    where
-        S: Insert<K, V>,
-    {
-        S::statement(self)
-    }
-
-    fn insert_id<K, V>(&self) -> [u8; 16]
-    where
-        S: Insert<K, V>,
-    {
-        S::id(self)
+        Ok(UpsertRequest {
+            token: S::token(self.key),
+            inner: query.into(),
+            statement: self.statement,
+            _marker: PhantomData,
+        })
     }
 }
 
 /// A request to insert a record which can be sent to the ring
-#[derive(Clone, Debug)]
-pub struct InsertRequest<S, K, V> {
+pub struct UpsertRequest<S, K, V, T> {
     token: i64,
     inner: Vec<u8>,
-    keyspace: S,
-    _marker: PhantomData<(S, K, V)>,
+    statement: Cow<'static, str>,
+    _marker: PhantomData<fn(S, K, V, T) -> (S, K, V, T)>,
 }
 
-impl<K, V, S: Insert<K, V> + Clone> CreateRequest<InsertRequest<S, K, V>> for S {
-    /// Create a new Insert Request from a Query/Execute, token, and the keyspace.
-    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> InsertRequest<S, K, V> {
-        InsertRequest {
-            token,
-            inner: query.into(),
-            keyspace: self.clone(),
+impl<S, K, V, T> std::fmt::Debug for UpsertRequest<S, K, V, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpsertRequest")
+            .field("token", &self.token)
+            .field("inner", &self.inner)
+            .field("statement", &self.statement)
+            .finish()
+    }
+}
+
+impl<S, K, V, T> Clone for UpsertRequest<S, K, V, T> {
+    fn clone(&self) -> Self {
+        Self {
+            token: self.token,
+            inner: self.inner.clone(),
+            statement: self.statement.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<S, K, V> Request for InsertRequest<S, K, V>
-where
-    S: Insert<K, V> + std::fmt::Debug,
-    K: Send + std::fmt::Debug,
-    V: Send + std::fmt::Debug,
-{
-    fn statement(&self) -> Cow<'static, str> {
-        self.keyspace.insert_statement::<K, V>()
+impl<S, K, V, T> Request for UpsertRequest<S, K, V, T> {
+    fn statement(&self) -> &Cow<'static, str> {
+        &self.statement
     }
 
     fn payload(&self) -> &Vec<u8> {
         &self.inner
     }
+
+    fn into_payload(self) -> Vec<u8> {
+        self.inner
+    }
 }
 
-impl<S: Insert<K, V>, K, V> InsertRequest<S, K, V> {
-    /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_local(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
-        Ok(DecodeResult::insert())
+impl<S, K, V, T> SendRequestExt for UpsertRequest<S, K, V, T> {
+    type Marker = DecodeVoid<S>;
+    // TODO: Since this request is used for both Inserts and Updates, maybe split this again?
+    const TYPE: RequestType = RequestType::Insert;
+
+    fn token(&self) -> i64 {
+        self.token
     }
 
-    /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_global(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
-        Ok(DecodeResult::insert())
-    }
-
-    /// Consume the request to retrieve the payload
-    pub fn into_payload(self) -> Vec<u8> {
-        self.inner
+    fn marker() -> Self::Marker {
+        DecodeVoid::<S>::new()
     }
 }

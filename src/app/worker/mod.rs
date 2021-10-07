@@ -8,37 +8,25 @@ pub use crate::app::stage::reporter::{
 use crate::{
     app::access::*,
     cql::{
-        Consistency,
         CqlError,
         Decoder,
         Prepare,
     },
 };
 use anyhow::anyhow;
-pub use delete::{
-    handle_unprepared_error as handle_delete_unprepared_error,
-    DeleteWorker,
-};
-pub use insert::{
-    handle_unprepared_error as handle_insert_unprepared_error,
-    InsertWorker,
+pub use basic::{
+    BasicRetryWorker,
+    BasicWorker,
 };
 use log::*;
 pub use prepare::PrepareWorker;
-pub use select::{
-    handle_unprepared_error as handle_select_unprepared_error,
-    SelectWorker,
-};
-use std::convert::{
-    TryFrom,
-    TryInto,
-};
+pub use select::SelectWorker;
+use std::convert::TryFrom;
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
 pub use value::ValueWorker;
 
-mod delete;
-mod insert;
+mod basic;
 mod prepare;
 mod select;
 mod value;
@@ -72,26 +60,68 @@ pub enum WorkerError {
 }
 
 /// should be implemented on the handle of the worker
-pub trait HandleResponse<W: Worker + DecodeResponse<Self::Response>>: Send {
+pub trait HandleResponse<W: Worker> {
     /// Defines the response type
     type Response;
     /// Handle response for worker of type W
-    fn handle_response(worker: Box<W>, response: Self::Response) -> anyhow::Result<()>;
+    fn handle_response(&self, response: Self::Response) -> anyhow::Result<()>;
 }
 /// should be implemented on the handle of the worker
-pub trait HandleError<W: Worker>: Send {
+pub trait HandleError<W: Worker> {
     /// Handle error for worker of type W
-    fn handle_error(worker: Box<W>, worker_error: WorkerError) -> anyhow::Result<()>;
+    fn handle_error(&self, worker_error: WorkerError) -> anyhow::Result<()>;
 }
 
-/// Decode response as T
-pub trait DecodeResponse<T> {
-    /// Decode decoder into T type
-    fn decode_response(decoder: Decoder) -> anyhow::Result<T>;
-}
+pub trait RetryableWorker<R, O>: Worker
+where
+    R: 'static + GetRequestExt<O> + Clone + Send,
+    <R as SendRequestExt>::Marker: 'static,
+    O: Send,
+{
+    fn retries(&mut self) -> &mut usize;
+    fn request(&self) -> Option<&R>;
 
-impl<W: Worker> DecodeResponse<Decoder> for W {
-    fn decode_response(decoder: Decoder) -> anyhow::Result<Decoder> {
-        Ok(decoder)
+    fn retry(mut self: Box<Self>) -> Result<(), Box<Self>>
+    where
+        Self: 'static + Sized,
+    {
+        if *self.retries() > 0 && self.request().is_some() {
+            *self.retries() -= 1;
+            // currently we assume all cql/worker errors are retryable, but we might change this in future
+            let req = self.request().cloned().unwrap();
+            tokio::spawn(async { req.send_global(self) });
+            Ok(())
+        } else {
+            Err(self)
+        }
     }
+}
+
+/// Handle an unprepared CQL error by sending a prepare
+/// request and resubmitting the original query as an
+/// unprepared statement
+pub fn handle_unprepared_error<W, R, O>(
+    worker: Box<W>,
+    request: R,
+    id: [u8; 16],
+    reporter: &ReporterHandle,
+) -> anyhow::Result<()>
+where
+    W: 'static + Worker,
+    R: GetRequestExt<O>,
+    O: Send,
+{
+    let statement = request.statement();
+    info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
+    let Prepare(payload) = Prepare::new().statement(&statement).build()?;
+    let prepare_worker = Box::new(PrepareWorker::new(id, statement));
+    let prepare_request = ReporterEvent::Request {
+        worker: prepare_worker,
+        payload,
+    };
+    reporter.send(prepare_request).ok();
+    let payload = request.into_payload();
+    let retry_request = ReporterEvent::Request { worker, payload };
+    reporter.send(retry_request).ok();
+    Ok(())
 }
