@@ -36,20 +36,17 @@ where
 
 impl<H, V, R> ValueWorker<H, V, R>
 where
-    V: 'static,
+    V: 'static + RowsDecoder,
 {
     /// Create a new value selecting worker with a number of retries and a response handle
-    pub fn new<S>(handle: H) -> Box<Self>
-    where
-        S: 'static + RowsDecoder<V>,
-    {
+    pub fn new(handle: H) -> Box<Self> {
         Box::new(Self {
             request: None,
             handle,
             page_size: None,
             paging_state: None,
             retries: 0,
-            decode_fn: Box::new(S::try_decode_rows),
+            decode_fn: Box::new(V::try_decode_rows),
         })
     }
 }

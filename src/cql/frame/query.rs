@@ -178,46 +178,8 @@ impl QueryBuilder<QueryConsistency> {
 
 impl Values for QueryBuilder<QueryFlags> {
     type Return = QueryBuilder<QueryValues>;
-    /// Set the first value to be null in the query frame.
-    fn null_value(mut self) -> QueryBuilder<QueryValues> {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // apply null value
-        self.buffer.extend(&BE_NULL_BYTES_LEN);
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
-    /// Set the value to be unset in the query frame.
-    fn unset_value(mut self) -> QueryBuilder<QueryValues> {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // apply null value
-        self.buffer.extend(&BE_UNSET_BYTES_LEN);
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
     /// Set the first value in the query frame.
-    fn value<V: ColumnEncoder>(mut self, value: &V) -> QueryBuilder<QueryValues> {
+    fn dyn_value(mut self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -230,10 +192,49 @@ impl Values for QueryBuilder<QueryFlags> {
         };
         // push value
         value.encode(&mut self.buffer);
-        QueryBuilder::<QueryValues> {
+        Box::new(QueryBuilder::<QueryValues> {
             buffer: self.buffer,
             stage: query_values,
-        }
+        })
+    }
+    /// Set the value to be unset in the query frame.
+    fn dyn_unset_value(mut self: Box<Self>) -> Box<Self::Return> {
+        // push SKIP_METADATA and VALUES query_flag to the buffer
+        self.buffer.push(SKIP_METADATA | VALUES);
+        let value_count = 1;
+        // push value_count
+        self.buffer.extend(&u16::to_be_bytes(value_count));
+        // apply null value
+        self.buffer.extend(&BE_UNSET_BYTES_LEN);
+        // create query_values
+        let query_values = QueryValues {
+            query_flags: self.stage,
+            value_count,
+        };
+        Box::new(QueryBuilder::<QueryValues> {
+            buffer: self.buffer,
+            stage: query_values,
+        })
+    }
+
+    /// Set the first value to be null in the query frame.
+    fn dyn_null_value(mut self: Box<Self>) -> Box<Self::Return> {
+        // push SKIP_METADATA and VALUES query_flag to the buffer
+        self.buffer.push(SKIP_METADATA | VALUES);
+        let value_count = 1;
+        // push value_count
+        self.buffer.extend(&u16::to_be_bytes(value_count));
+        // apply null value
+        self.buffer.extend(&BE_NULL_BYTES_LEN);
+        // create query_values
+        let query_values = QueryValues {
+            query_flags: self.stage,
+            value_count,
+        };
+        Box::new(QueryBuilder::<QueryValues> {
+            buffer: self.buffer,
+            stage: query_values,
+        })
     }
 }
 impl QueryBuilder<QueryFlags> {
@@ -317,7 +318,7 @@ impl QueryBuilder<QueryFlags> {
 impl Values for QueryBuilder<QueryValues> {
     type Return = QueryBuilder<QueryValues>;
     /// Set the next value in the query frame.
-    fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
+    fn dyn_value(mut self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -325,15 +326,16 @@ impl Values for QueryBuilder<QueryValues> {
         self
     }
     /// Set the value to be unset in the query frame.
-    fn unset_value(mut self) -> Self {
+    fn dyn_unset_value(mut self: Box<Self>) -> Box<Self::Return> {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
         self.buffer.extend(&BE_UNSET_BYTES_LEN);
         self
     }
+
     /// Set the value to be null in the query frame.
-    fn null_value(mut self) -> Self {
+    fn dyn_null_value(mut self: Box<Self>) -> Box<Self::Return> {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value

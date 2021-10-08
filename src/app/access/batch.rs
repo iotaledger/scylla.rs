@@ -126,9 +126,9 @@ impl<S: Keyspace> BatchRequest<S> {
     /// Compute the murmur3 token from the provided K
     pub fn compute_token<K>(mut self, key: &K) -> Self
     where
-        S: ComputeToken<K>,
+        K: ComputeToken,
     {
-        self.token = S::token(key);
+        self.token = K::token(key);
         self
     }
 
@@ -143,13 +143,13 @@ impl<S: Keyspace> BatchRequest<S> {
     }
 
     /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
+    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid>, RingSendError> {
         send_local(self.token, self.inner, worker)?;
         Ok(DecodeResult::batch())
     }
 
     /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
+    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid>, RingSendError> {
         send_global(self.token, self.inner, worker)?;
         Ok(DecodeResult::batch())
     }
@@ -194,7 +194,7 @@ impl<S: Keyspace> BatchRequest<S> {
 ///     .compute_token(&token_key);
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage> {
+pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage: Copy> {
     builder: BatchBuilder<Type, Stage>,
     map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
     keyspace: S,
@@ -271,7 +271,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
@@ -284,7 +284,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
@@ -308,7 +308,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
@@ -335,7 +335,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
@@ -348,7 +348,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
@@ -372,7 +372,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
@@ -399,7 +399,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
@@ -412,7 +412,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
@@ -436,7 +436,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 }
 
@@ -465,7 +465,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
@@ -478,7 +478,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
@@ -502,7 +502,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
@@ -529,7 +529,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
@@ -542,7 +542,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
@@ -566,7 +566,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, value);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
@@ -593,7 +593,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
@@ -606,7 +606,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
@@ -630,7 +630,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key);
 
-        Self::step(builder, self.map, self.keyspace)
+        Self::step(*builder, self.map, self.keyspace)
     }
 
     /// Set the consistency for this batch
@@ -687,8 +687,8 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchBuild> {
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>, Stage> BatchCollector<S, Type, Stage> {
-    fn step<NextType: Copy + Into<u8>, NextStage>(
+impl<S: Keyspace, Type: Copy + Into<u8>, Stage: Copy> BatchCollector<S, Type, Stage> {
+    fn step<NextType: Copy + Into<u8>, NextStage: Copy>(
         builder: BatchBuilder<NextType, NextStage>,
         map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
         keyspace: S,

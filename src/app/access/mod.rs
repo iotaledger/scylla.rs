@@ -40,7 +40,6 @@ use crate::{
     },
     cql::{
         Consistency,
-        Decoder,
         Prepare,
         PreparedStatement,
         Query,
@@ -54,20 +53,29 @@ use crate::{
         Values,
         VoidDecoder,
     },
+    prelude::{
+        ColumnEncoder,
+        TokenEncoder,
+    },
 };
 pub use batch::*;
 pub use delete::{
     Delete,
     DeleteRequest,
-    GetDeleteRequest,
+    GetDynamicDeleteRequest,
+    GetStaticDeleteRequest,
 };
 pub use insert::{
-    GetInsertRequest,
+    AsDynamicInsertRequest,
+    GetDynamicInsertRequest,
+    GetStaticInsertRequest,
     Insert,
-    UpsertRequest,
+    InsertRequest,
 };
 pub use keyspace::Keyspace;
 pub use select::{
+    AsDynamicSelectRequest,
+    GetDynamicSelectRequest,
     GetStaticSelectRequest,
     Select,
     SelectRequest,
@@ -80,8 +88,11 @@ use std::{
 };
 use thiserror::Error;
 pub use update::{
-    GetUpdateRequest,
+    AsDynamicUpdateRequest,
+    GetDynamicUpdateRequest,
+    GetStaticUpdateRequest,
     Update,
+    UpdateRequest,
 };
 
 #[repr(u8)]
@@ -94,8 +105,20 @@ pub enum RequestType {
     Batch = 4,
 }
 
+pub trait Statement: ToString {}
+impl<T> Statement for T where T: ToString {}
+
 pub struct DynamicRequest;
 pub struct StaticRequest;
+pub struct ManualBoundRequest {
+    pub(crate) bind_fn: Box<
+        dyn Fn(
+            Box<dyn Values<Return = QueryBuilder<QueryValues>>>,
+            &[&dyn TokenEncoder],
+            &[&dyn ColumnEncoder],
+        ) -> Box<QueryBuilder<QueryValues>>,
+    >,
+}
 
 #[derive(Error, Debug)]
 pub enum RequestError {
@@ -108,9 +131,9 @@ pub enum RequestError {
 }
 
 /// Defines a computed token for a key type
-pub trait ComputeToken<K: ?Sized> {
+pub trait ComputeToken {
     /// Compute the token from the provided partition_key by using murmur3 hash function
-    fn token(key: &K) -> i64;
+    fn token(&self) -> i64;
 }
 
 pub trait Request {
@@ -270,20 +293,20 @@ impl<S: Keyspace> GetStatementIdExt for S {}
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
 #[derive(Clone, Copy, Default)]
-pub struct DecodeRows<S, V> {
-    _marker: PhantomData<fn(S, V) -> (S, V)>,
+pub struct DecodeRows<V> {
+    _marker: PhantomData<fn(V) -> V>,
 }
 
-impl<S, V> DecodeRows<S, V> {
+impl<V> DecodeRows<V> {
     fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<'a, S: RowsDecoder<V>, V> DecodeRows<S, V> {
+impl<'a, V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
-        S::try_decode_rows(bytes.try_into()?)
+        V::try_decode_rows(bytes.try_into()?)
     }
 }
 
@@ -291,20 +314,12 @@ impl<'a, S: RowsDecoder<V>, V> DecodeRows<S, V> {
 /// so that it may be decoded (checked for errors)
 /// via `VoidDecoder` later
 #[derive(Copy, Clone)]
-pub struct DecodeVoid<S> {
-    _marker: PhantomData<fn(S) -> S>,
-}
+pub struct DecodeVoid;
 
-impl<S> DecodeVoid<S> {
-    fn new() -> Self {
-        Self { _marker: PhantomData }
-    }
-}
-
-impl<S: VoidDecoder> DecodeVoid<S> {
+impl DecodeVoid {
     /// Decode a result payload using the `VoidDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        S::try_decode_void(bytes.try_into()?)
+        VoidDecoder::try_decode_void(bytes.try_into()?)
     }
 }
 
@@ -322,37 +337,37 @@ impl<T> DecodeResult<T> {
         Self { inner, request_type }
     }
 }
-impl<S, V> DecodeResult<DecodeRows<S, V>> {
+impl<V> DecodeResult<DecodeRows<V>> {
     fn select() -> Self {
         Self {
-            inner: DecodeRows::<S, V>::new(),
+            inner: DecodeRows::<V>::new(),
             request_type: RequestType::Select,
         }
     }
 }
 
-impl<S> DecodeResult<DecodeVoid<S>> {
+impl DecodeResult<DecodeVoid> {
     fn insert() -> Self {
         Self {
-            inner: DecodeVoid::<S>::new(),
+            inner: DecodeVoid,
             request_type: RequestType::Insert,
         }
     }
     fn update() -> Self {
         Self {
-            inner: DecodeVoid::<S>::new(),
+            inner: DecodeVoid,
             request_type: RequestType::Update,
         }
     }
     fn delete() -> Self {
         Self {
-            inner: DecodeVoid::<S>::new(),
+            inner: DecodeVoid,
             request_type: RequestType::Delete,
         }
     }
     fn batch() -> Self {
         Self {
-            inner: DecodeVoid::<S>::new(),
+            inner: DecodeVoid,
             request_type: RequestType::Batch,
         }
     }
@@ -386,7 +401,10 @@ pub mod tests {
     use crate::{
         cql::query::StatementType,
         prelude::{
-            select::GetDynamicSelectRequest,
+            select::{
+                AsDynamicSelectRequest,
+                GetDynamicSelectRequest,
+            },
             BasicWorker,
         },
     };
@@ -417,7 +435,7 @@ pub mod tests {
         fn statement(&self) -> Cow<'static, str> {
             "SELECT col1 FROM keyspace.table WHERE key = ?".into()
         }
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
             builder.value(key)
         }
     }
@@ -428,7 +446,7 @@ pub mod tests {
             format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
             builder.value(key)
         }
     }
@@ -439,7 +457,7 @@ pub mod tests {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
+        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> Box<T::Return> {
             builder.value(key).value(value).value(value)
         }
     }
@@ -449,7 +467,7 @@ pub mod tests {
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
-        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
+        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> Box<T::Return> {
             builder.value(value).value(value).value(key)
         }
     }
@@ -460,7 +478,7 @@ pub mod tests {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
             builder.value(key).value(key)
         }
     }
@@ -471,22 +489,8 @@ pub mod tests {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
             builder.value(key)
-        }
-    }
-
-    impl RowsDecoder<f32> for MyKeyspace {
-        type Row = f32;
-        fn try_decode_rows(_decoder: Decoder) -> anyhow::Result<Option<f32>> {
-            todo!()
-        }
-    }
-
-    impl RowsDecoder<i32> for MyKeyspace {
-        type Row = i32;
-        fn try_decode_rows(_decoder: Decoder) -> anyhow::Result<Option<i32>> {
-            todo!()
         }
     }
 
@@ -603,12 +607,19 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let res = keyspace
+        let res: Result<Option<f32>, RequestError> = keyspace
             .select_with::<f32>(
                 "SELECT col1 FROM keyspace.table WHERE key = ?",
                 &[&3],
                 StatementType::Query,
             )
+            .consistency(Consistency::One)
+            .build()
+            .unwrap()
+            .get_local_blocking();
+        assert!(res.is_err());
+        let res: Result<Option<f32>, RequestError> = "SELECT col1 FROM keyspace.table WHERE key = ?"
+            .as_select_prepared::<f32>(&[&3])
             .consistency(Consistency::One)
             .build()
             .unwrap()
@@ -631,8 +642,30 @@ pub mod tests {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
         let worker = BasicWorker::new();
+        let _res = req.send_local(worker.clone());
 
-        let _res = req.send_local(worker);
+        "my_keyspace"
+            .insert_with(
+                "INSERT INTO {keyspace}.table (key, val1, val2) VALUES (?,?,?)",
+                &[&3],
+                &[&8.0, &"hello"],
+                StatementType::Query,
+            )
+            .bind_values(|builder, keys, values| builder.values(keys).values(values))
+            .consistency(Consistency::One)
+            .build()
+            .unwrap()
+            .send_local(worker.clone())
+            .unwrap();
+
+        "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+            .as_insert_query(&[&3], &[&8.0, &"hello"])
+            .bind_values(|builder, keys, values| builder.values(keys).values(values))
+            .consistency(Consistency::One)
+            .build()
+            .unwrap()
+            .send_local(worker)
+            .unwrap();
     }
 
     #[allow(dead_code)]

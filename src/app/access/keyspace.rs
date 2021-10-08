@@ -25,18 +25,15 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
     fn name(&self) -> String;
 
     /// Decode void result
-    fn decode_void(decoder: Decoder) -> anyhow::Result<()>
-    where
-        Self: VoidDecoder,
-    {
-        Self::try_decode_void(decoder)
+    fn decode_void(decoder: Decoder) -> anyhow::Result<()> {
+        VoidDecoder::try_decode_void(decoder)
     }
     /// Decode rows result
     fn decode_rows<V>(decoder: Decoder) -> anyhow::Result<Option<V>>
     where
-        Self: RowsDecoder<V>,
+        V: RowsDecoder,
     {
-        Self::try_decode_rows(decoder)
+        V::try_decode_rows(decoder)
     }
     // TODO replication_refactor, strategy, options,etc.
 }
@@ -50,15 +47,12 @@ where
     }
 }
 
-impl<T> VoidDecoder for T where T: Keyspace {}
-
-impl<T, K> ComputeToken<K> for T
+impl<T> ComputeToken for T
 where
-    T: Keyspace,
-    K: AsBytes,
+    T: AsBytes,
 {
-    fn token(key: &K) -> i64 {
-        murmur3_cassandra_x64_128(&key.as_bytes(), 0).0
+    fn token(&self) -> i64 {
+        murmur3_cassandra_x64_128(&self.as_bytes(), 0).0
     }
 }
 

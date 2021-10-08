@@ -25,17 +25,42 @@ pub(crate) mod rows;
 pub(crate) mod startup;
 pub(crate) mod supported;
 
-pub use auth_response::{AllowAllAuth, PasswordAuth};
+pub use auth_response::{
+    AllowAllAuth,
+    PasswordAuth,
+};
 pub use auth_success::AuthSuccess;
 pub use batch::*;
 pub use consistency::Consistency;
-pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
-pub use encoder::{ColumnEncodeChain, ColumnEncoder, TokenEncodeChain, TokenEncoder};
-pub use error::{CqlError, ErrorCodes};
+pub use decoder::{
+    ColumnDecoder,
+    Decoder,
+    Frame,
+    RowsDecoder,
+    VoidDecoder,
+};
+pub use encoder::{
+    ColumnEncodeChain,
+    ColumnEncoder,
+    TokenEncodeChain,
+    TokenEncoder,
+};
+pub use error::{
+    CqlError,
+    ErrorCodes,
+};
 pub use prepare::Prepare;
 pub use query::{
-    PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency, QueryFlags, QueryPagingState,
-    QuerySerialConsistency, QueryStatement, QueryValues,
+    PreparedStatement,
+    Query,
+    QueryBuild,
+    QueryBuilder,
+    QueryConsistency,
+    QueryFlags,
+    QueryPagingState,
+    QuerySerialConsistency,
+    QueryStatement,
+    QueryValues,
 };
 pub use rows::*;
 pub use std::convert::TryInto;
@@ -62,13 +87,127 @@ pub trait Statements {
 }
 
 /// Defines shared functionality for frames that can receive statement values
-pub trait Values: Sized {
+pub trait Values {
     /// The return type after applying a value
     type Return: Values<Return = Self::Return>;
-    /// Value of type V.
-    fn value<V: ColumnEncoder>(self, value: &V) -> Self::Return;
-    /// Unset value.
-    fn unset_value(self) -> Self::Return;
+    /// Add a single value
+    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        Box::new(self).dyn_value(&value)
+    }
+    /// Add a slice of values
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        match values.len() {
+            0 => self.null_value(),
+            1 => self.value(values.first().unwrap()),
+            _ => {
+                let mut iter = values.iter();
+                let mut builder = self.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
+    }
+    /// Add a single dynamic value
+    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return>;
+    /// Add a slice of dynamic values
+    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Box<Self::Return> {
+        match values.len() {
+            0 => self.dyn_null_value(),
+            1 => self.dyn_value(values.first().unwrap()),
+            _ => {
+                let mut iter = values.iter();
+                let mut builder = self.dyn_value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.dyn_value(v);
+                }
+                builder
+            }
+        }
+    }
+    /// Unset value
+    fn unset_value(self) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        Box::new(self).dyn_unset_value()
+    }
     /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> Self::Return;
+    fn null_value(self) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        Box::new(self).dyn_null_value()
+    }
+
+    /// Unset value dynamically
+    fn dyn_unset_value(self: Box<Self>) -> Box<Self::Return>;
+    /// Set Null value dynamically, note: for write queries this will create tombstone for V;
+    fn dyn_null_value(self: Box<Self>) -> Box<Self::Return>;
+}
+
+impl<T: Values + ?Sized> Values for Box<T> {
+    type Return = T::Return;
+
+    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
+        T::dyn_value(*self, value)
+    }
+
+    fn dyn_unset_value(self: Box<Self>) -> Box<Self::Return> {
+        T::dyn_unset_value(*self)
+    }
+
+    fn dyn_null_value(self: Box<Self>) -> Box<Self::Return> {
+        T::dyn_null_value(*self)
+    }
+
+    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        T::dyn_value(self, &value)
+    }
+
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        match values.len() {
+            0 => self.null_value(),
+            1 => self.value(values.first().unwrap()),
+            _ => {
+                let mut iter = values.iter();
+                let mut builder = self.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
+    }
+
+    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Box<Self::Return> {
+        T::dyn_values(*self, values)
+    }
+
+    fn unset_value(self) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        T::dyn_unset_value(self)
+    }
+
+    fn null_value(self) -> Box<Self::Return>
+    where
+        Self: Sized,
+    {
+        T::dyn_null_value(self)
+    }
 }

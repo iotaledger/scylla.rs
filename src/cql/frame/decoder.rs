@@ -15,9 +15,12 @@ use super::{
         PagingState,
     },
 };
-use crate::cql::compression::{
-    Compression,
-    MyCompression,
+use crate::{
+    cql::compression::{
+        Compression,
+        MyCompression,
+    },
+    prelude::Row,
 };
 use anyhow::{
     anyhow,
@@ -39,21 +42,63 @@ use std::{
     str,
 };
 /// RowsDecoder trait to decode the rows result from scylla
-pub trait RowsDecoder<V> {
+pub trait RowsDecoder: Sized {
     /// The Row to decode. Must implement [`super::Row`].
-    type Row: super::Row;
+    type Row: Row;
     /// Try to decode the provided Decoder with an expected Rows result
-    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<V>>;
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>>;
     /// Decode the provided Decoder with deterministic Rows result
-    fn decode_rows(decoder: Decoder) -> Option<V> {
+    fn decode_rows(decoder: Decoder) -> Option<Self> {
         Self::try_decode_rows(decoder).unwrap()
     }
 }
 
+impl<T> RowsDecoder for T
+where
+    T: ColumnDecoder + Row,
+{
+    type Row = T;
+
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
+        Ok(Self::Row::rows_iter(decoder)?.next())
+    }
+}
+
+impl<T> RowsDecoder for crate::prelude::Iter<T>
+where
+    T: ColumnDecoder + Row,
+{
+    type Row = T;
+
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
+        ensure!(decoder.is_rows()?, "Decoded response is not rows!");
+        let rows_iter = Self::Row::rows_iter(decoder)?;
+        if rows_iter.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(rows_iter))
+        }
+    }
+}
+
+// impl<T> RowsDecoder for Vec<T>
+// where
+//    T: ColumnDecoder + Row,
+//{
+//    type Row = T;
+//
+//    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
+//        ensure!(decoder.is_rows()?, "Decoded response is not rows!");
+//        Ok(Some(Self::Row::rows_iter(decoder)?.collect()))
+//    }
+//}
+
 /// VoidDecoder trait to decode the VOID result from scylla
-pub trait VoidDecoder {
+pub struct VoidDecoder;
+
+impl VoidDecoder {
     /// Try to decode the provided Decoder with an expected Void result
-    fn try_decode_void(decoder: Decoder) -> anyhow::Result<()> {
+    pub fn try_decode_void(decoder: Decoder) -> anyhow::Result<()> {
         if decoder.is_error()? {
             Err(anyhow!(decoder.get_error()?))
         } else {
@@ -61,7 +106,7 @@ pub trait VoidDecoder {
         }
     }
     /// Decode the provided Decoder with an deterministic Void result
-    fn decode_void(decoder: Decoder) {
+    pub fn decode_void(decoder: Decoder) {
         Self::try_decode_void(decoder).unwrap()
     }
 }

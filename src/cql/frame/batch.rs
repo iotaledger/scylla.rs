@@ -6,11 +6,21 @@
 use super::{
     batchflags::*,
     consistency::Consistency,
-    encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
+    encoder::{
+        ColumnEncoder,
+        BE_8_BYTES_LEN,
+        BE_NULL_BYTES_LEN,
+        BE_UNSET_BYTES_LEN,
+    },
     opcode::BATCH,
-    Statements, Values, MD5_BE_LENGTH,
+    Statements,
+    Values,
+    MD5_BE_LENGTH,
 };
-use crate::cql::compression::{Compression, MyCompression};
+use crate::cql::compression::{
+    Compression,
+    MyCompression,
+};
 
 /// Blanket cql frame header for BATCH frame.
 const BATCH_HEADER: &'static [u8] = &[4, 0, 0, 0, BATCH, 0, 0, 0, 0];
@@ -34,7 +44,11 @@ pub enum BatchTypes {
 ///
 /// ## Example
 /// ```
-/// use scylla_rs::cql::{Batch, Consistency, Statements};
+/// use scylla_rs::cql::{
+///     Batch,
+///     Consistency,
+///     Statements,
+/// };
 ///
 /// let builder = Batch::new();
 /// let batch = builder
@@ -45,7 +59,8 @@ pub enum BatchTypes {
 /// let payload = batch.0;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct BatchBuilder<Type: Copy + Into<u8>, Stage> {
+#[derive(Clone)]
+pub struct BatchBuilder<Type: Copy + Into<u8>, Stage: Copy> {
     buffer: Vec<u8>,
     query_count: u16,
     batch_type: Type,
@@ -53,9 +68,11 @@ pub struct BatchBuilder<Type: Copy + Into<u8>, Stage> {
 }
 
 /// Gating type for batch headers
+#[derive(Copy, Clone)]
 pub struct BatchHeader;
 
 /// Gating type for batch type
+#[derive(Copy, Clone)]
 pub struct BatchType;
 
 /// Gating type for unset batch type
@@ -95,21 +112,26 @@ impl Into<u8> for BatchTypeCounter {
 }
 
 /// Gating type for statement / prepared id
+#[derive(Copy, Clone)]
 pub struct BatchStatementOrId;
 
 /// Gating type for statement values
+#[derive(Copy, Clone)]
 pub struct BatchValues {
     value_count: u16,
     index: usize,
 }
 
 /// Gating type for batch flags
+#[derive(Copy, Clone)]
 pub struct BatchFlags;
 
 /// Gating type for batch timestamp
+#[derive(Copy, Clone)]
 pub struct BatchTimestamp;
 
 /// Gating type for completed batch
+#[derive(Copy, Clone)]
 pub struct BatchBuild;
 
 impl BatchBuilder<BatchTypeUnset, BatchHeader> {
@@ -225,19 +247,20 @@ impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchStatementOrId
 impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
     type Return = BatchBuilder<Type, BatchValues>;
     /// Set the value in the Batch frame.
-    fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
+    fn dyn_value(mut self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
         value.encode(&mut self.buffer);
         self.stage.value_count += 1;
         self
     }
     /// Set the value to be unset in the Batch frame.
-    fn unset_value(mut self) -> Self {
+    fn dyn_unset_value(mut self: Box<Self>) -> Box<Self::Return> {
         self.buffer.extend(&BE_UNSET_BYTES_LEN);
         self.stage.value_count += 1;
         self
     }
+
     /// Set the value to be null in the Batch frame.
-    fn null_value(mut self) -> Self {
+    fn dyn_null_value(mut self: Box<Self>) -> Box<Self::Return> {
         self.buffer.extend(&BE_NULL_BYTES_LEN);
         self.stage.value_count += 1;
         self

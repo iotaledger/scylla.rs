@@ -12,7 +12,6 @@ use crate::{
         TokenEncodeChain,
     },
     prelude::{
-        SelectWorker,
         TokenEncoder,
         ValueWorker,
     },
@@ -100,7 +99,7 @@ use crate::{
 ///     .build()?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Select<K, V>: Keyspace + RowsDecoder<V> + ComputeToken<K> {
+pub trait Select<K, V>: Keyspace {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
     type QueryOrPrepared: QueryOrPrepared;
 
@@ -114,7 +113,7 @@ pub trait Select<K, V>: Keyspace + RowsDecoder<V> + ComputeToken<K> {
         md5::compute(self.select_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
+    fn bind_values<T: Values>(builder: T, key: &K) -> Box<T::Return>;
 }
 
 /// Defines a helper method to specify the Value type
@@ -204,8 +203,52 @@ pub trait GetDynamicSelectRequest: Keyspace {
     }
 }
 
+pub trait AsDynamicSelectRequest: Statement
+where
+    Self: Sized,
+{
+    /// Specifies the returned Value type for an upcoming select request
+    fn as_select<'a, V>(
+        &'a self,
+        variables: &'a [&dyn TokenEncoder],
+        statement_type: StatementType,
+    ) -> SelectBuilder<'a, Self, [&'a dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        match statement_type {
+            StatementType::Query => self.as_select_query(variables),
+            StatementType::Prepared => self.as_select_prepared(variables),
+        }
+    }
+    /// Specifies the returned Value type for an upcoming select request using a query statement
+    fn as_select_query<'a, V>(
+        &'a self,
+        variables: &'a [&dyn TokenEncoder],
+    ) -> SelectBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        SelectBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            statement: self.to_string().to_owned().into(),
+            key: variables,
+            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
+        }
+    }
+    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
+    fn as_select_prepared<'a, V>(
+        &'a self,
+        variables: &'a [&dyn TokenEncoder],
+    ) -> SelectBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        SelectBuilder {
+            _marker: PhantomData,
+            keyspace: self,
+            statement: self.to_string().to_owned().into(),
+            key: variables,
+            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
+        }
+    }
+}
+
 impl<S: Keyspace, K> GetStaticSelectRequest<K> for S {}
 impl<S: Keyspace> GetDynamicSelectRequest for S {}
+impl<S: Statement> AsDynamicSelectRequest for S {}
 
 pub struct SelectBuilder<'a, S, K: ?Sized, V, Stage, T> {
     keyspace: &'a S,
@@ -222,7 +265,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency, Sta
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: S::bind_values(self.builder.consistency(consistency), &self.key),
+            builder: *S::bind_values(self.builder.consistency(consistency), &self.key),
         }
     }
 }
@@ -233,7 +276,7 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryConsi
         consistency: Consistency,
     ) -> SelectBuilder<'a, S, [&'a dyn TokenEncoder], V, QueryValues, DynamicRequest> {
         let builder = self.builder.consistency(consistency);
-        let builder = match self.key.len() {
+        let builder = *match self.key.len() {
             0 => builder.null_value(),
             _ => {
                 let mut iter = self.key.iter();
@@ -284,9 +327,9 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
         }
     }
 }
-impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
+impl<'a, S: Keyspace, V: RowsDecoder> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
     /// Build the SelectRequest
-    pub fn build_encoded(self) -> anyhow::Result<SelectRequest<S, V, DynamicRequest>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.key.iter() {
             token_chain.dyn_chain(*v);
@@ -302,9 +345,23 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryValue
     }
 }
 
-impl<'a, S: RowsDecoder<V>, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
+impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V, QueryValues, StaticRequest> {
     /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<S, V, StaticRequest>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+        let query = self.builder.build()?;
+        // create the request
+        Ok(SelectRequest {
+            token: self.key.token(),
+            inner: query.into(),
+            statement: self.statement,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<'a, S: Keyspace, V: RowsDecoder> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
+    /// Build the SelectRequest
+    pub fn build_encoded(self) -> anyhow::Result<SelectRequest<V>> {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.key.iter() {
             token_chain.dyn_chain(*v);
@@ -320,63 +377,13 @@ impl<'a, S: RowsDecoder<V>, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, Quer
     }
 }
 
-impl<'a, S: Keyspace + ComputeToken<K>, K, V> SelectBuilder<'a, S, K, V, QueryValues, StaticRequest> {
+impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
     /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<S, V, StaticRequest>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(SelectRequest {
-            token: S::token(self.key),
-            inner: query.into(),
-            statement: self.statement,
-            _marker: PhantomData,
-        })
-    }
-}
-
-impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
-    /// Build the SelectRequest
-    pub fn build_encoded(self) -> anyhow::Result<SelectRequest<S, V, DynamicRequest>> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
-        let query = self.builder.build()?;
-        // create the request
-        Ok(SelectRequest {
-            token: token_chain.finish(),
-            inner: query.into(),
-            statement: self.statement,
-            _marker: PhantomData,
-        })
-    }
-}
-
-impl<'a, S: RowsDecoder<V>, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
-    /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<S, V, StaticRequest>> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
-        let query = self.builder.build()?;
-        // create the request
-        Ok(SelectRequest {
-            token: token_chain.finish(),
-            inner: query.into(),
-            statement: self.statement,
-            _marker: PhantomData,
-        })
-    }
-}
-
-impl<'a, S: Keyspace + ComputeToken<K>, K, V> SelectBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
-    /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<S, V, StaticRequest>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(SelectRequest {
-            token: S::token(self.key),
+            token: self.key.token(),
             inner: query.into(),
             statement: self.statement,
             _marker: PhantomData,
@@ -407,12 +414,12 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
         }
     }
 }
-impl<'a, S: Keyspace + ComputeToken<K>, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
-    pub fn build(self) -> anyhow::Result<SelectRequest<S, V, T>> {
+impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(SelectRequest {
-            token: S::token(self.key),
+            token: self.key.token(),
             inner: query.into(),
             statement: self.statement,
             _marker: PhantomData,
@@ -432,12 +439,12 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
     }
 }
 
-impl<'a, S: Keyspace + ComputeToken<K>, K, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
-    pub fn build(self) -> anyhow::Result<SelectRequest<S, V, T>> {
+impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(SelectRequest {
-            token: S::token(self.key),
+            token: self.key.token(),
             inner: query.into(),
             statement: self.statement,
             _marker: PhantomData,
@@ -446,14 +453,14 @@ impl<'a, S: Keyspace + ComputeToken<K>, K, V, T> SelectBuilder<'a, S, K, V, Quer
 }
 
 /// A request to select a record which can be sent to the ring
-pub struct SelectRequest<S, V, T> {
+pub struct SelectRequest<V> {
     token: i64,
     inner: Vec<u8>,
     statement: Cow<'static, str>,
-    _marker: PhantomData<fn(S, V, T) -> (S, V, T)>,
+    _marker: PhantomData<fn(V) -> V>,
 }
 
-impl<S, V, T> Debug for SelectRequest<S, V, T> {
+impl<V> Debug for SelectRequest<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectRequest")
             .field("token", &self.token)
@@ -463,7 +470,7 @@ impl<S, V, T> Debug for SelectRequest<S, V, T> {
     }
 }
 
-impl<S, V, T> Clone for SelectRequest<S, V, T> {
+impl<V> Clone for SelectRequest<V> {
     fn clone(&self) -> Self {
         Self {
             token: self.token,
@@ -474,7 +481,7 @@ impl<S, V, T> Clone for SelectRequest<S, V, T> {
     }
 }
 
-impl<S, V, T> Request for SelectRequest<S, V, T> {
+impl<V> Request for SelectRequest<V> {
     fn statement(&self) -> &Cow<'static, str> {
         &self.statement
     }
@@ -488,8 +495,8 @@ impl<S, V, T> Request for SelectRequest<S, V, T> {
     }
 }
 
-impl<S, V, T> SendRequestExt for SelectRequest<S, V, T> {
-    type Marker = DecodeRows<S, V>;
+impl<V> SendRequestExt for SelectRequest<V> {
+    type Marker = DecodeRows<V>;
     const TYPE: RequestType = RequestType::Select;
 
     fn token(&self) -> i64 {
@@ -497,26 +504,20 @@ impl<S, V, T> SendRequestExt for SelectRequest<S, V, T> {
     }
 
     fn marker() -> Self::Marker {
-        DecodeRows::<S, V>::new()
+        DecodeRows::<V>::new()
     }
 }
 
-impl<S: 'static + RowsDecoder<V>, V: 'static + Send> GetRequestExt<Option<V>> for SelectRequest<S, V, StaticRequest> {
+impl<V: 'static + Send + RowsDecoder> GetRequestExt<Option<V>> for SelectRequest<V> {
     fn worker(handle: tokio::sync::mpsc::UnboundedSender<Result<Option<V>, WorkerError>>) -> Box<dyn Worker> {
-        ValueWorker::<_, V, Self>::new::<S>(handle)
+        ValueWorker::<_, V, Self>::new(handle)
     }
 }
 
-impl<S: 'static, V: 'static + Send> GetRequestExt<Decoder> for SelectRequest<S, V, DynamicRequest> {
-    fn worker(handle: tokio::sync::mpsc::UnboundedSender<Result<Decoder, WorkerError>>) -> Box<dyn Worker> {
-        SelectWorker::<_, Self>::new(handle)
-    }
-}
-
-impl<S, V, T> SelectRequest<S, V, T> {
+impl<V> SelectRequest<V> {
     /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
     /// decoder in order to decode the response inside handle_response method.
-    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<S, V>> {
+    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<V>> {
         DecodeResult::select()
     }
 }
