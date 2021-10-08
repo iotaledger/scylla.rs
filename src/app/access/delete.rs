@@ -329,6 +329,17 @@ impl Clone for DeleteRequest {
 }
 
 impl Request for DeleteRequest {
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Delete;
+
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn marker() -> Self::Marker {
+        DecodeVoid
+    }
+
     fn statement(&self) -> &Cow<'static, str> {
         &self.statement
     }
@@ -342,16 +353,24 @@ impl Request for DeleteRequest {
     }
 }
 
-impl SendRequestExt for DeleteRequest {
-    type Marker = DecodeVoid;
-    // TODO: Since this request is used for both Deletes and Updates, maybe split this again?
-    const TYPE: RequestType = RequestType::Delete;
-
-    fn token(&self) -> i64 {
-        self.token
+impl DeleteRequest {
+    pub fn send_local(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
+    where
+        Self: 'static + Sized,
+    {
+        send_local(self.token(), self.into_payload(), BasicWorker::new())?;
+        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
     }
 
-    fn marker() -> Self::Marker {
-        DecodeVoid
+    pub fn send_global(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
+    where
+        Self: 'static + Sized,
+    {
+        send_global(self.token(), self.into_payload(), BasicWorker::new())?;
+        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
+    }
+
+    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+        BasicRetryWorker::new(self)
     }
 }

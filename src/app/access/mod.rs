@@ -24,6 +24,10 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 use super::{
+    worker::{
+        BasicRetryWorker,
+        BasicWorker,
+    },
     Worker,
     WorkerError,
 };
@@ -55,9 +59,11 @@ use crate::{
     },
     prelude::{
         ColumnEncoder,
+        RetryableWorker,
         TokenEncoder,
     },
 };
+use async_trait::async_trait;
 pub use batch::*;
 pub use delete::{
     Delete,
@@ -123,11 +129,11 @@ pub struct ManualBoundRequest {
 #[derive(Error, Debug)]
 pub enum RequestError {
     #[error("Error sending to the Ring: {0}")]
-    Send(#[from] RingSendError),
+    Ring(#[from] RingSendError),
     #[error("{0}")]
     Worker(#[from] WorkerError),
-    #[error("Error receiving response from Scylla: {0}")]
-    Receive(#[from] anyhow::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 /// Defines a computed token for a key type
@@ -137,6 +143,12 @@ pub trait ComputeToken {
 }
 
 pub trait Request {
+    type Marker: 'static + Send;
+    const TYPE: RequestType;
+
+    fn token(&self) -> i64;
+
+    fn marker() -> Self::Marker;
     /// Get the statement that was used to create this request
     fn statement(&self) -> &Cow<'static, str>;
 
@@ -146,87 +158,59 @@ pub trait Request {
     fn into_payload(self) -> Vec<u8>;
 }
 
-pub trait SendRequestExt: Request {
-    type Marker: Send;
-    const TYPE: RequestType;
-
-    fn token(&self) -> i64;
-
-    fn marker() -> Self::Marker;
-
+pub trait SendRequestExt<R: Request>: RetryableWorker<R> {
     /// Send a local request using the keyspace impl and return a type marker
-    fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RingSendError>
+    fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
-        Self: Sized,
+        Self: 'static + Sized,
     {
-        send_local(self.token(), self.into_payload(), worker)?;
-        Ok(DecodeResult::new(Self::marker(), Self::TYPE))
+        send_local(self.request().token(), self.request().payload().clone(), self)?;
+        Ok(DecodeResult::new(R::marker(), R::TYPE))
     }
 
     /// Send a global request using the keyspace impl and return a type marker
-    fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RingSendError>
+    fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
-        Self: Sized,
+        Self: 'static + Sized,
     {
-        send_global(self.token(), self.into_payload(), worker)?;
-        Ok(DecodeResult::new(Self::marker(), Self::TYPE))
+        send_global(self.request().token(), self.request().payload().clone(), self)?;
+        Ok(DecodeResult::new(R::marker(), R::TYPE))
+    }
+
+    fn retry(mut self: Box<Self>) -> Result<(), Box<Self>>
+    where
+        Self: 'static + Sized,
+    {
+        if self.retries() > 0 {
+            *self.retries_mut() -= 1;
+            // currently we assume all cql/worker errors are retryable, but we might change this in future
+            tokio::spawn(async { self.send_global() });
+            Ok(())
+        } else {
+            Err(self)
+        }
     }
 }
+impl<T, R: Request> SendRequestExt<R> for T where T: RetryableWorker<R> {}
 
 /// Unifying trait for requests which defines shared functionality
-#[async_trait::async_trait]
-pub trait GetRequestExt<O: Send>: SendRequestExt {
-    fn worker(handle: tokio::sync::mpsc::UnboundedSender<Result<O, WorkerError>>) -> Box<dyn Worker>;
-
-    async fn get_local(self) -> Result<O, RequestError>
+#[async_trait]
+pub trait GetRequestExt<O: Send, R: Request> {
+    async fn get_local(&mut self) -> Result<O, RequestError>
     where
-        Self: Sized,
-    {
-        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
-        let worker = Self::worker(sender);
-        self.send_local(worker)?;
-        Ok(inbox
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
-    }
+        Self: Sized;
 
-    fn get_local_blocking(self) -> Result<O, RequestError>
+    fn get_local_blocking(&mut self) -> Result<O, RequestError>
     where
-        Self: Sized,
-    {
-        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
-        let worker = Self::worker(sender);
-        self.send_local(worker)?;
-        Ok(inbox
-            .blocking_recv()
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
-    }
+        Self: Sized;
 
-    async fn get_global(self) -> Result<O, RequestError>
+    async fn get_global(&mut self) -> Result<O, RequestError>
     where
-        Self: Sized,
-    {
-        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
-        let worker = Self::worker(sender);
-        self.send_global(worker)?;
-        Ok(inbox
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
-    }
+        Self: Sized;
 
-    fn get_global_blocking(self) -> Result<O, RequestError>
+    fn get_global_blocking(&mut self) -> Result<O, RequestError>
     where
-        Self: Sized,
-    {
-        let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
-        let worker = Self::worker(sender);
-        self.send_global(worker)?;
-        Ok(inbox
-            .blocking_recv()
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
-    }
+        Self: Sized;
 }
 
 /// Defines two helper methods to specify statement / id
@@ -333,7 +317,7 @@ pub struct DecodeResult<T> {
     request_type: RequestType,
 }
 impl<T> DecodeResult<T> {
-    fn new(inner: T, request_type: RequestType) -> Self {
+    pub(crate) fn new(inner: T, request_type: RequestType) -> Self {
         Self { inner, request_type }
     }
 }
@@ -398,18 +382,14 @@ impl<T> Deref for DecodeResult<T> {
 #[doc(hidden)]
 pub mod tests {
 
+    use super::*;
     use crate::{
         cql::query::StatementType,
-        prelude::{
-            select::{
-                AsDynamicSelectRequest,
-                GetDynamicSelectRequest,
-            },
-            BasicWorker,
+        prelude::select::{
+            AsDynamicSelectRequest,
+            GetDynamicSelectRequest,
         },
     };
-
-    use super::*;
 
     #[derive(Default, Clone, Debug)]
     pub struct MyKeyspace {
@@ -494,49 +474,6 @@ pub mod tests {
         }
     }
 
-    struct TestWorker {
-        request: Box<dyn Request + Send>,
-    }
-
-    impl std::fmt::Debug for TestWorker {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("TestWorker").finish()
-        }
-    }
-
-    impl Worker for TestWorker {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-            // Do nothing
-            Ok(())
-        }
-
-        fn handle_error(
-            self: Box<Self>,
-            error: crate::app::worker::WorkerError,
-            reporter: &ReporterHandle,
-        ) -> anyhow::Result<()> {
-            if let WorkerError::Cql(mut cql_error) = error {
-                if let Some(_) = cql_error.take_unprepared_id() {
-                    if let Ok(prepare) = Prepare::new().statement(&self.request.statement()).build() {
-                        let prepare_worker = PrepareWorker {
-                            retries: 3,
-                            payload: prepare.0.clone(),
-                        };
-                        let prepare_request = ReporterEvent::Request {
-                            worker: Box::new(prepare_worker),
-                            payload: prepare.0,
-                        };
-                        reporter.send(prepare_request).ok();
-                        let payload = self.request.payload().clone();
-                        let retry_request = ReporterEvent::Request { worker: self, payload };
-                        reporter.send(retry_request).ok();
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
     #[derive(Debug)]
     struct BatchWorker<S> {
         request: BatchRequest<S>,
@@ -607,7 +544,7 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let res: Result<Option<f32>, RequestError> = keyspace
+        let res: Result<DecodeResult<DecodeRows<f32>>, RequestError> = keyspace
             .select_with::<f32>(
                 "SELECT col1 FROM keyspace.table WHERE key = ?",
                 &[&3],
@@ -616,10 +553,19 @@ pub mod tests {
             .consistency(Consistency::One)
             .build()
             .unwrap()
+            .worker()
+            .with_retries(3)
+            .send_local();
+        assert!(res.is_err());
+        let res = "SELECT col1 FROM keyspace.table WHERE key = ?"
+            .as_select_prepared::<f32>(&[&3])
+            .consistency(Consistency::One)
+            .build()
+            .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let res: Result<Option<f32>, RequestError> = "SELECT col1 FROM keyspace.table WHERE key = ?"
-            .as_select_prepared::<f32>(&[&3])
+        let res = keyspace
+            .select_prepared::<f32>(&3u32)
             .consistency(Consistency::One)
             .build()
             .unwrap()
@@ -631,18 +577,14 @@ pub mod tests {
             .page_size(500)
             .build()
             .unwrap();
-        let worker3 = TestWorker {
-            request: Box::new(req2.clone()),
-        };
-        let _res = req2.clone().send_local(Box::new(worker3));
+        let _res = req2.clone().send_local();
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
-        let worker = BasicWorker::new();
-        let _res = req.send_local(worker.clone());
+        let _res = req.send_local();
 
         "my_keyspace"
             .insert_with(
@@ -655,7 +597,7 @@ pub mod tests {
             .consistency(Consistency::One)
             .build()
             .unwrap()
-            .send_local(worker.clone())
+            .send_local()
             .unwrap();
 
         "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
@@ -664,7 +606,7 @@ pub mod tests {
             .consistency(Consistency::One)
             .build()
             .unwrap()
-            .send_local(worker)
+            .send_local()
             .unwrap();
     }
 
@@ -672,11 +614,8 @@ pub mod tests {
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build().unwrap();
-        let worker = TestWorker {
-            request: Box::new(req.clone()),
-        };
 
-        let _res = req.send_local(Box::new(worker));
+        let _res = req.send_local();
     }
 
     #[allow(dead_code)]
@@ -687,11 +626,8 @@ pub mod tests {
             .consistency(Consistency::One)
             .build()
             .unwrap();
-        let worker = TestWorker {
-            request: Box::new(req.clone()),
-        };
 
-        let _res = req.send_local(Box::new(worker));
+        let _res = req.send_local();
     }
 
     #[test]

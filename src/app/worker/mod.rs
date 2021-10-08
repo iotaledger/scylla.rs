@@ -17,6 +17,7 @@ use anyhow::anyhow;
 pub use basic::{
     BasicRetryWorker,
     BasicWorker,
+    SpawnableRespondWorker,
 };
 use log::*;
 pub use prepare::PrepareWorker;
@@ -60,58 +61,61 @@ pub enum WorkerError {
 }
 
 /// should be implemented on the handle of the worker
-pub trait HandleResponse<W: Worker> {
+pub trait HandleResponse<W> {
     /// Defines the response type
     type Response;
     /// Handle response for worker of type W
     fn handle_response(&self, response: Self::Response) -> anyhow::Result<()>;
 }
 /// should be implemented on the handle of the worker
-pub trait HandleError<W: Worker> {
+pub trait HandleError<W> {
     /// Handle error for worker of type W
     fn handle_error(&self, worker_error: WorkerError) -> anyhow::Result<()>;
 }
 
-pub trait RetryableWorker<R, O>: Worker
-where
-    R: 'static + GetRequestExt<O> + Clone + Send,
-    <R as SendRequestExt>::Marker: 'static,
-    O: Send,
-{
-    fn retries(&mut self) -> &mut usize;
-    fn request(&self) -> Option<&R>;
-
-    fn retry(mut self: Box<Self>) -> Result<(), Box<Self>>
+pub trait RetryableWorker<R>: Worker {
+    fn retries(&self) -> usize;
+    fn retries_mut(&mut self) -> &mut usize;
+    fn request(&self) -> &R;
+    fn with_retries(mut self, retries: usize) -> Self
     where
-        Self: 'static + Sized,
+        Self: Sized,
     {
-        if *self.retries() > 0 && self.request().is_some() {
-            *self.retries() -= 1;
-            // currently we assume all cql/worker errors are retryable, but we might change this in future
-            let req = self.request().cloned().unwrap();
-            tokio::spawn(async { req.send_global(self) });
-            Ok(())
-        } else {
-            Err(self)
-        }
+        *self.retries_mut() = retries;
+        self
+    }
+}
+
+pub trait RespondingWorker<I, H, O>: Sized + Worker
+where
+    H: HandleResponse<Self, Response = O> + HandleError<Self>,
+{
+    fn handle(&self) -> &H;
+    fn inbox(&self) -> &I;
+}
+
+impl<W, O> HandleResponse<W> for UnboundedSender<Result<O, WorkerError>> {
+    type Response = O;
+    fn handle_response(&self, response: Self::Response) -> anyhow::Result<()> {
+        self.send(Ok(response)).map_err(|e| anyhow!(e.to_string()))
+    }
+}
+
+impl<W, O> HandleError<W> for UnboundedSender<Result<O, WorkerError>> {
+    fn handle_error(&self, worker_error: WorkerError) -> anyhow::Result<()> {
+        self.send(Err(worker_error)).map_err(|e| anyhow!(e.to_string()))
     }
 }
 
 /// Handle an unprepared CQL error by sending a prepare
 /// request and resubmitting the original query as an
 /// unprepared statement
-pub fn handle_unprepared_error<W, R, O>(
-    worker: Box<W>,
-    request: R,
-    id: [u8; 16],
-    reporter: &ReporterHandle,
-) -> anyhow::Result<()>
+pub fn handle_unprepared_error<W, R>(worker: Box<W>, id: [u8; 16], reporter: &ReporterHandle) -> anyhow::Result<()>
 where
-    W: 'static + Worker,
-    R: GetRequestExt<O>,
-    O: Send,
+    W: 'static + Worker + RetryableWorker<R>,
+    R: Request,
 {
-    let statement = request.statement();
+    let statement = worker.request().statement();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
     let Prepare(payload) = Prepare::new().statement(&statement).build()?;
     let prepare_worker = Box::new(PrepareWorker::new(id, statement));
@@ -120,7 +124,7 @@ where
         payload,
     };
     reporter.send(prepare_request).ok();
-    let payload = request.into_payload();
+    let payload = worker.request().payload().clone();
     let retry_request = ReporterEvent::Request { worker, payload };
     reporter.send(retry_request).ok();
     Ok(())

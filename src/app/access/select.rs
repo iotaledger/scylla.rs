@@ -11,10 +11,7 @@ use crate::{
         QuerySerialConsistency,
         TokenEncodeChain,
     },
-    prelude::{
-        TokenEncoder,
-        ValueWorker,
-    },
+    prelude::TokenEncoder,
 };
 
 /// Select query trait which creates a `SelectRequest`
@@ -481,7 +478,18 @@ impl<V> Clone for SelectRequest<V> {
     }
 }
 
-impl<V> Request for SelectRequest<V> {
+impl<V: 'static> Request for SelectRequest<V> {
+    type Marker = DecodeRows<V>;
+    const TYPE: RequestType = RequestType::Select;
+
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn marker() -> Self::Marker {
+        DecodeRows::new()
+    }
+
     fn statement(&self) -> &Cow<'static, str> {
         &self.statement
     }
@@ -495,29 +503,50 @@ impl<V> Request for SelectRequest<V> {
     }
 }
 
-impl<V> SendRequestExt for SelectRequest<V> {
-    type Marker = DecodeRows<V>;
-    const TYPE: RequestType = RequestType::Select;
-
-    fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn marker() -> Self::Marker {
-        DecodeRows::<V>::new()
-    }
-}
-
-impl<V: 'static + Send + RowsDecoder> GetRequestExt<Option<V>> for SelectRequest<V> {
-    fn worker(handle: tokio::sync::mpsc::UnboundedSender<Result<Option<V>, WorkerError>>) -> Box<dyn Worker> {
-        ValueWorker::<_, V, Self>::new(handle)
-    }
-}
-
 impl<V> SelectRequest<V> {
     /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
     /// decoder in order to decode the response inside handle_response method.
     pub fn result_decoder(&self) -> DecodeResult<DecodeRows<V>> {
         DecodeResult::select()
+    }
+
+    pub fn send_local(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
+    where
+        Self: 'static + Sized,
+    {
+        send_local(self.token(), self.into_payload(), BasicWorker::new())?;
+        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
+    }
+
+    pub fn send_global(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
+    where
+        Self: 'static + Sized,
+    {
+        send_global(self.token(), self.into_payload(), BasicWorker::new())?;
+        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
+    }
+
+    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+        BasicRetryWorker::new(self)
+    }
+}
+impl<V> SelectRequest<V>
+where
+    V: 'static + Send + RowsDecoder,
+{
+    pub async fn get_local(self) -> Result<Option<V>, RequestError> {
+        self.worker().get_local().await
+    }
+
+    pub fn get_local_blocking(self) -> Result<Option<V>, RequestError> {
+        self.worker().get_local_blocking()
+    }
+
+    pub async fn get_global(self) -> Result<Option<V>, RequestError> {
+        self.worker().get_global().await
+    }
+
+    pub fn get_global_blocking(self) -> Result<Option<V>, RequestError> {
+        self.worker().get_global_blocking()
     }
 }

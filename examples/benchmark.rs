@@ -191,7 +191,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
             .insert(&format!("Key {}", i), &i)
             .consistency(Consistency::One)
             .build()?
-            .send_local(BasicWorker::new())
+            .send_local()
             .map_err(|e| {
                 error!("{}", e);
                 anyhow::anyhow!(e.to_string())
@@ -200,12 +200,13 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
 
     let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
-        let worker = ValueWorker::<_, i32, SelectRequest<MyKeyspace, _, _>>::new::<MyKeyspace>(sender.clone());
         keyspace
-            .select(&format!("Key {}", i))
+            .select::<i32>(&format!("Key {}", i))
             .consistency(Consistency::One)
             .build()?
-            .send_local(worker)
+            .worker()
+            .with_value_handle(sender.clone())
+            .send_local()
             .map_err(|e| {
                 error!("{}", e);
                 anyhow::anyhow!(e.to_string())
@@ -268,24 +269,13 @@ impl ToString for MyKeyspace {
     }
 }
 
-impl RowsDecoder<i32> for MyKeyspace {
-    type Row = i32;
-    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<i32>> {
-        anyhow::ensure!(decoder.is_rows()?, "Decoded response is not rows!");
-        Self::Row::rows_iter(decoder)?
-            .next()
-            .map(|row| Some(row))
-            .ok_or_else(|| anyhow::anyhow!("Row not found!"))
-    }
-}
-
 impl Insert<String, i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
     fn statement(&self) -> Cow<'static, str> {
         format!("INSERT INTO {}.test (key, data) VALUES (?, ?)", self.name()).into()
     }
 
-    fn bind_values<T: Values>(builder: T, key: &String, value: &i32) -> T::Return {
+    fn bind_values<T: Values>(builder: T, key: &String, value: &i32) -> Box<T::Return> {
         builder.value(key).value(value)
     }
 }
@@ -297,7 +287,7 @@ impl Select<String, i32> for MyKeyspace {
         format!("SELECT data FROM {}.test WHERE key = ?", self.name()).into()
     }
 
-    fn bind_values<T: Values>(builder: T, key: &String) -> T::Return {
+    fn bind_values<T: Values>(builder: T, key: &String) -> Box<T::Return> {
         builder.value(key)
     }
 }

@@ -7,7 +7,7 @@ use std::fmt::Debug;
 /// A select worker
 #[derive(Clone)]
 pub struct SelectWorker<H, R> {
-    pub request: Option<R>,
+    pub request: R,
     /// A handle which can be used to return the queried value
     pub handle: H,
     /// The query page size, used when retying due to failure
@@ -39,9 +39,9 @@ where
     H: 'static,
 {
     /// Create a new value selecting worker with a number of retries and a response handle
-    pub fn new(handle: H) -> Box<Self> {
+    pub fn new(request: R, handle: H) -> Box<Self> {
         Box::new(Self {
-            request: None,
+            request,
             handle,
             page_size: None,
             paging_state: None,
@@ -49,11 +49,12 @@ where
         })
     }
 
-    pub fn with_retries(mut self: Box<Self>, retries: usize, request: R) -> Box<Self> {
-        if retries > 0 {
-            self.retries = retries;
-            self.request.replace(request);
-        }
+    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self> {
+        Self::new(request, handle).with_retries(retries)
+    }
+
+    pub fn with_retries(mut self: Box<Self>, retries: usize) -> Box<Self> {
+        self.retries = retries;
         self
     }
     /// Add paging information to this worker
@@ -67,7 +68,7 @@ where
 impl<H, R> Worker for SelectWorker<H, R>
 where
     H: 'static + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone + Debug + Send,
-    R: 'static + Send + Debug + Clone + GetRequestExt<Decoder>,
+    R: 'static + Send + Debug + Clone + Request,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
@@ -79,8 +80,8 @@ where
     fn handle_error(mut self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             let handle = self.handle.clone();
-            if let (Some(id), Some(request)) = (cql_error.take_unprepared_id(), self.request.take()) {
-                handle_unprepared_error(self, request, id, reporter).or_else(|e| {
+            if let Some(id) = cql_error.take_unprepared_id() {
+                handle_unprepared_error(self, id, reporter).or_else(|e| {
                     error!("Error trying to prepare query: {}", e);
                     handle.handle_error(error)
                 })
@@ -99,37 +100,20 @@ where
     }
 }
 
-impl<H, R> RetryableWorker<R, Decoder> for SelectWorker<H, R>
+impl<H, R> RetryableWorker<R> for SelectWorker<H, R>
 where
     H: 'static + HandleResponse<Self, Response = Decoder> + HandleError<Self> + Clone + Debug + Send,
-    R: 'static + Send + Debug + Clone + GetRequestExt<Decoder>,
+    R: 'static + Send + Debug + Clone + Request,
 {
-    fn retries(&mut self) -> &mut usize {
+    fn retries(&self) -> usize {
+        self.retries
+    }
+
+    fn request(&self) -> &R {
+        &self.request
+    }
+
+    fn retries_mut(&mut self) -> &mut usize {
         &mut self.retries
-    }
-
-    fn request(&self) -> Option<&R> {
-        self.request.as_ref()
-    }
-}
-
-impl<R> HandleResponse<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, R>>
-    for UnboundedSender<Result<Decoder, WorkerError>>
-where
-    R: 'static + Send + Debug + Clone + GetRequestExt<Decoder>,
-{
-    type Response = Decoder;
-    fn handle_response(&self, response: Self::Response) -> anyhow::Result<()> {
-        self.send(Ok(response)).map_err(|e| anyhow!(e.to_string()))
-    }
-}
-
-impl<R> HandleError<SelectWorker<UnboundedSender<Result<Decoder, WorkerError>>, R>>
-    for UnboundedSender<Result<Decoder, WorkerError>>
-where
-    R: 'static + Send + Debug + Clone + GetRequestExt<Decoder>,
-{
-    fn handle_error(&self, worker_error: WorkerError) -> anyhow::Result<()> {
-        self.send(Err(worker_error)).map_err(|e| anyhow!(e.to_string()))
     }
 }

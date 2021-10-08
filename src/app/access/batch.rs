@@ -42,6 +42,17 @@ pub struct BatchRequest<S> {
 }
 
 impl<S> Request for BatchRequest<S> {
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Batch;
+
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn marker() -> Self::Marker {
+        DecodeVoid
+    }
+
     fn statement(&self) -> &Cow<'static, str> {
         panic!("BatchRequest::statement() should never be called")
     }
