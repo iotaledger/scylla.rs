@@ -16,6 +16,7 @@ use super::{
         QUERY,
     },
     queryflags::*,
+    DynValues,
     QueryOrPrepared,
     Statements,
     Values,
@@ -179,7 +180,7 @@ impl QueryBuilder<QueryConsistency> {
 impl Values for QueryBuilder<QueryFlags> {
     type Return = QueryBuilder<QueryValues>;
     /// Set the first value in the query frame.
-    fn dyn_value(mut self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
+    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -192,13 +193,13 @@ impl Values for QueryBuilder<QueryFlags> {
         };
         // push value
         value.encode(&mut self.buffer);
-        Box::new(QueryBuilder::<QueryValues> {
+        QueryBuilder::<QueryValues> {
             buffer: self.buffer,
             stage: query_values,
-        })
+        }
     }
     /// Set the value to be unset in the query frame.
-    fn dyn_unset_value(mut self: Box<Self>) -> Box<Self::Return> {
+    fn unset_value(mut self) -> Self::Return {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -211,14 +212,14 @@ impl Values for QueryBuilder<QueryFlags> {
             query_flags: self.stage,
             value_count,
         };
-        Box::new(QueryBuilder::<QueryValues> {
+        QueryBuilder::<QueryValues> {
             buffer: self.buffer,
             stage: query_values,
-        })
+        }
     }
 
     /// Set the first value to be null in the query frame.
-    fn dyn_null_value(mut self: Box<Self>) -> Box<Self::Return> {
+    fn null_value(mut self) -> Self::Return {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -231,12 +232,13 @@ impl Values for QueryBuilder<QueryFlags> {
             query_flags: self.stage,
             value_count,
         };
-        Box::new(QueryBuilder::<QueryValues> {
+        QueryBuilder::<QueryValues> {
             buffer: self.buffer,
             stage: query_values,
-        })
+        }
     }
 }
+
 impl QueryBuilder<QueryFlags> {
     /// Set the page size in the query frame, without any value.
     pub fn page_size(mut self, page_size: i32) -> QueryBuilder<QueryPagingState> {
@@ -318,7 +320,7 @@ impl QueryBuilder<QueryFlags> {
 impl Values for QueryBuilder<QueryValues> {
     type Return = QueryBuilder<QueryValues>;
     /// Set the next value in the query frame.
-    fn dyn_value(mut self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
+    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -326,7 +328,7 @@ impl Values for QueryBuilder<QueryValues> {
         self
     }
     /// Set the value to be unset in the query frame.
-    fn dyn_unset_value(mut self: Box<Self>) -> Box<Self::Return> {
+    fn unset_value(mut self) -> Self::Return {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -335,12 +337,30 @@ impl Values for QueryBuilder<QueryValues> {
     }
 
     /// Set the value to be null in the query frame.
-    fn dyn_null_value(mut self: Box<Self>) -> Box<Self::Return> {
+    fn null_value(mut self) -> Self::Return {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
         self.buffer.extend(&BE_NULL_BYTES_LEN);
         self
+    }
+
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
+    where
+        Self: Sized,
+    {
+        match values.len() {
+            0 => self,
+            1 => self.value(values.first().unwrap()),
+            _ => {
+                let mut iter = values.iter();
+                let mut builder = self.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
     }
 }
 impl QueryBuilder<QueryValues> {

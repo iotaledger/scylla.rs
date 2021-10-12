@@ -40,6 +40,7 @@ use crate::{
         query::StatementType,
         Consistency,
         Decoder,
+        DynValues,
         PreparedStatement,
         Query,
         QueryBuild,
@@ -120,10 +121,10 @@ pub struct StaticRequest;
 pub struct ManualBoundRequest {
     pub(crate) bind_fn: Box<
         dyn Fn(
-            Box<dyn Values<Return = QueryBuilder<QueryValues>>>,
+            Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
             &[&dyn TokenEncoder],
             &[&dyn ColumnEncoder],
-        ) -> Box<QueryBuilder<QueryValues>>,
+        ) -> QueryBuilder<QueryValues>,
     >,
 }
 
@@ -440,6 +441,8 @@ impl<T> Deref for DecodeResult<T> {
 
 #[doc(hidden)]
 pub mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
     use crate::{
         cql::query::StatementType,
@@ -473,7 +476,7 @@ pub mod tests {
         fn statement(&self) -> Cow<'static, str> {
             "SELECT col1 FROM keyspace.table WHERE key = ?".into()
         }
-        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
             builder.value(key)
         }
     }
@@ -484,7 +487,7 @@ pub mod tests {
             format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
             builder.value(key)
         }
     }
@@ -495,7 +498,7 @@ pub mod tests {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> Box<T::Return> {
+        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
             builder.value(key).value(value).value(value)
         }
     }
@@ -505,7 +508,7 @@ pub mod tests {
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
-        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> Box<T::Return> {
+        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
             builder.value(value).value(value).value(key)
         }
     }
@@ -516,7 +519,7 @@ pub mod tests {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
             builder.value(key).value(key)
         }
     }
@@ -527,7 +530,7 @@ pub mod tests {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> Box<T::Return> {
+        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
             builder.value(key)
         }
     }
@@ -640,5 +643,38 @@ pub mod tests {
         let statement = req.get_statement(&id).unwrap();
         assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
         let _res = req.clone().send_local().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert2() {
+        use crate::prelude::*;
+        std::env::set_var("RUST_LOG", "info");
+        env_logger::init();
+        let node: SocketAddr = std::env::var("SCYLLA_NODE").map_or_else(
+            |_| ([127, 0, 0, 1], 9042).into(),
+            |n| {
+                n.parse()
+                    .expect("Invalid SCYLLA_NODE env, use this format '127.0.0.1:19042' ")
+            },
+        );
+        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 2, Default::default()))
+            .await
+            .expect("runtime to run");
+        let cluster_handle = runtime
+            .handle()
+            .cluster_handle()
+            .await
+            .expect("running scylla application");
+        cluster_handle.add_node(node).await.expect("to add node");
+        cluster_handle.build_ring(1).await.expect("to build ring");
+        backstage::spawn_task("adding node task", async move {
+            "INSERT INTO scylla_example.test (key, data) VALUES (?, ?)"
+                .as_insert_query(&[&"Test 1"], &[&1])
+                .consistency(Consistency::One)
+                .build()?
+                .send_local()?;
+            Result::<_, RequestError>::Ok(())
+        });
+        runtime.block_on().await.expect("runtime to gracefully shutdown")
     }
 }

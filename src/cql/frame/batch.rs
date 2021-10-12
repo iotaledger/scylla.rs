@@ -13,6 +13,7 @@ use super::{
         BE_UNSET_BYTES_LEN,
     },
     opcode::BATCH,
+    DynValues,
     Statements,
     Values,
     MD5_BE_LENGTH,
@@ -246,21 +247,32 @@ impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchStatementOrId
 
 impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
     type Return = BatchBuilder<Type, BatchValues>;
+
     /// Set the value in the Batch frame.
-    fn dyn_value(mut self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
+    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return
+    where
+        Self: Sized,
+    {
         value.encode(&mut self.buffer);
         self.stage.value_count += 1;
         self
     }
+
     /// Set the value to be unset in the Batch frame.
-    fn dyn_unset_value(mut self: Box<Self>) -> Box<Self::Return> {
+    fn unset_value(mut self) -> Self::Return
+    where
+        Self: Sized,
+    {
         self.buffer.extend(&BE_UNSET_BYTES_LEN);
         self.stage.value_count += 1;
         self
     }
 
     /// Set the value to be null in the Batch frame.
-    fn dyn_null_value(mut self: Box<Self>) -> Box<Self::Return> {
+    fn null_value(mut self) -> Self::Return
+    where
+        Self: Sized,
+    {
         self.buffer.extend(&BE_NULL_BYTES_LEN);
         self.stage.value_count += 1;
         self

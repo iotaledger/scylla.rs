@@ -271,7 +271,7 @@ impl Insert<String, i32> for MyKeyspace {
         format!("INSERT INTO {}.test (key, data) VALUES (?, ?)", self.name()).into()
     }
 
-    fn bind_values<T: Values>(builder: T, key: &String, value: &i32) -> Box<T::Return> {
+    fn bind_values<T: Values>(builder: T, key: &String, value: &i32) -> T::Return {
         builder.value(key).value(value)
     }
 }
@@ -283,7 +283,7 @@ impl Select<String, i32> for MyKeyspace {
         format!("SELECT data FROM {}.test WHERE key = ?", self.name()).into()
     }
 
-    fn bind_values<T: Values>(builder: T, key: &String) -> Box<T::Return> {
+    fn bind_values<T: Values>(builder: T, key: &String) -> T::Return {
         builder.value(key)
     }
 }

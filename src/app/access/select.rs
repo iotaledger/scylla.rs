@@ -99,7 +99,7 @@ pub trait Select<K, V>: Keyspace {
         md5::compute(self.select_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K) -> Box<T::Return>;
+    fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
 }
 
 /// Defines a helper method to specify the Value type
@@ -251,7 +251,7 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency, Sta
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: *S::bind_values(self.builder.consistency(consistency), &self.key),
+            builder: S::bind_values(self.builder.consistency(consistency), &self.key),
         }
     }
 }
@@ -262,17 +262,7 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryConsi
         consistency: Consistency,
     ) -> SelectBuilder<'a, S, [&'a dyn TokenEncoder], V, QueryValues, DynamicRequest> {
         let builder = self.builder.consistency(consistency);
-        let builder = *match self.key.len() {
-            0 => builder.null_value(),
-            _ => {
-                let mut iter = self.key.iter();
-                let mut builder = builder.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        };
+        let builder = builder.values(self.key);
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,

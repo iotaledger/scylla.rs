@@ -88,7 +88,7 @@ pub trait Delete<K, V>: Keyspace {
     }
 
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K) -> Box<T::Return>;
+    fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
 }
 
 /// Wrapper for the `Delete` trait which provides the `delete` function
@@ -193,7 +193,7 @@ impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryConsistency, Sta
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: *S::bind_values(self.builder.consistency(consistency), &self.key),
+            builder: S::bind_values(self.builder.consistency(consistency), &self.key),
         }
     }
 }
@@ -204,17 +204,7 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&dyn TokenEncoder], V, QueryConsi
         consistency: Consistency,
     ) -> DeleteBuilder<'a, S, [&'a dyn TokenEncoder], V, QueryValues, DynamicRequest> {
         let builder = self.builder.consistency(consistency);
-        let builder = *match self.key.len() {
-            0 => builder.null_value(),
-            _ => {
-                let mut iter = self.key.iter();
-                let mut builder = builder.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        };
+        let builder = builder.values(self.key);
         DeleteBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,

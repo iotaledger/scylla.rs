@@ -91,19 +91,16 @@ pub trait Values {
     /// The return type after applying a value
     type Return: Values<Return = Self::Return>;
     /// Add a single value
-    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Box<Self::Return>
+    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Self::Return
     where
-        Self: Sized,
-    {
-        Box::new(self).dyn_value(&value)
-    }
+        Self: Sized;
     /// Add a slice of values
-    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Box<Self::Return>
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
     where
         Self: Sized,
     {
         match values.len() {
-            0 => self.null_value(),
+            0 => panic!("No values to set!"),
             1 => self.value(values.first().unwrap()),
             _ => {
                 let mut iter = values.iter();
@@ -115,67 +112,68 @@ pub trait Values {
             }
         }
     }
+
+    /// Unset value
+    fn unset_value(self) -> Self::Return
+    where
+        Self: Sized;
+    /// Set Null value, note: for write queries this will create tombstone for V;
+    fn null_value(self) -> Self::Return
+    where
+        Self: Sized;
+}
+
+pub trait DynValues: Values {
     /// Add a single dynamic value
-    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return>;
+    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return;
     /// Add a slice of dynamic values
-    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Box<Self::Return> {
+    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Self::Return {
         match values.len() {
-            0 => self.dyn_null_value(),
+            0 => panic!("No values to set!"),
             1 => self.dyn_value(values.first().unwrap()),
             _ => {
                 let mut iter = values.iter();
                 let mut builder = self.dyn_value(iter.next().unwrap());
                 for v in iter {
-                    builder = builder.dyn_value(v);
+                    builder = builder.value(v);
                 }
                 builder
             }
         }
     }
-    /// Unset value
-    fn unset_value(self) -> Box<Self::Return>
-    where
-        Self: Sized,
-    {
-        Box::new(self).dyn_unset_value()
-    }
-    /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> Box<Self::Return>
-    where
-        Self: Sized,
-    {
-        Box::new(self).dyn_null_value()
+    /// Unset value dynamically
+    fn dyn_unset_value(self: Box<Self>) -> Self::Return;
+    /// Set Null value dynamically, note: for write queries this will create tombstone for V;
+    fn dyn_null_value(self: Box<Self>) -> Self::Return;
+}
+impl<T> DynValues for T
+where
+    T: Values,
+{
+    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return {
+        self.value(value)
     }
 
-    /// Unset value dynamically
-    fn dyn_unset_value(self: Box<Self>) -> Box<Self::Return>;
-    /// Set Null value dynamically, note: for write queries this will create tombstone for V;
-    fn dyn_null_value(self: Box<Self>) -> Box<Self::Return>;
+    fn dyn_unset_value(self: Box<Self>) -> Self::Return {
+        self.unset_value()
+    }
+
+    fn dyn_null_value(self: Box<Self>) -> Self::Return {
+        self.null_value()
+    }
 }
 
-impl<T: Values + ?Sized> Values for Box<T> {
+impl<T: DynValues + ?Sized> Values for Box<T> {
     type Return = T::Return;
 
-    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Box<Self::Return> {
-        T::dyn_value(*self, value)
-    }
-
-    fn dyn_unset_value(self: Box<Self>) -> Box<Self::Return> {
-        T::dyn_unset_value(*self)
-    }
-
-    fn dyn_null_value(self: Box<Self>) -> Box<Self::Return> {
-        T::dyn_null_value(*self)
-    }
-
-    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Box<Self::Return>
+    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Self::Return
     where
         Self: Sized,
     {
         T::dyn_value(self, &value)
     }
 
-    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Box<Self::Return>
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
     where
         Self: Sized,
     {
@@ -193,18 +191,14 @@ impl<T: Values + ?Sized> Values for Box<T> {
         }
     }
 
-    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Box<Self::Return> {
-        T::dyn_values(*self, values)
-    }
-
-    fn unset_value(self) -> Box<Self::Return>
+    fn unset_value(self) -> Self::Return
     where
         Self: Sized,
     {
         T::dyn_unset_value(self)
     }
 
-    fn null_value(self) -> Box<Self::Return>
+    fn null_value(self) -> Self::Return
     where
         Self: Sized,
     {

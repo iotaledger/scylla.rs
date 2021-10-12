@@ -1,6 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::cql::DynValues;
+
 use super::*;
 
 /// Insert query trait which creates an `InsertRequest`
@@ -85,7 +87,7 @@ pub trait Insert<K, V>: Keyspace {
         md5::compute(self.insert_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> Box<T::Return>;
+    fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
 }
 
 /// Wrapper for the `Insert` trait which provides the `insert` function
@@ -257,7 +259,7 @@ impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryConsistency, Sta
             statement: self.statement,
             key: self.key,
             value: self.value,
-            builder: *S::bind_values(self.builder.consistency(consistency), &self.key, &self.value),
+            builder: S::bind_values(self.builder.consistency(consistency), &self.key, &self.value),
         }
     }
 }
@@ -268,10 +270,10 @@ impl<'a, S: Keyspace>
     pub fn bind_values<
         F: 'static
             + Fn(
-                Box<dyn Values<Return = QueryBuilder<QueryValues>>>,
+                Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
                 &[&dyn TokenEncoder],
                 &[&dyn ColumnEncoder],
-            ) -> Box<QueryBuilder<QueryValues>>,
+            ) -> QueryBuilder<QueryValues>,
     >(
         self,
         bind_fn: F,
@@ -294,20 +296,7 @@ impl<'a, S: Keyspace>
         consistency: Consistency,
     ) -> InsertBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryValues, DynamicRequest> {
         let builder = self.builder.consistency(consistency);
-        let builder = *match self.value.len() + self.key.len() {
-            0 => builder.null_value(),
-            _ => {
-                let mut iter = self.key.iter();
-                let mut builder = builder.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                for v in self.value.iter() {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        };
+        let builder = builder.values(self.value).values(self.key);
         InsertBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -332,7 +321,7 @@ impl<'a, S: Keyspace>
             statement: self.statement,
             key: self.key,
             value: self.value,
-            builder: *(self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), &self.key, &self.value),
+            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), &self.key, &self.value),
         }
     }
 }
