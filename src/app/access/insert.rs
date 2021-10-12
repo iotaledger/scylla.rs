@@ -1,8 +1,6 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::cql::DynValues;
-
 use super::*;
 
 /// Insert query trait which creates an `InsertRequest`
@@ -148,10 +146,17 @@ pub trait GetDynamicInsertRequest: Keyspace {
     fn insert_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
         statement_type: StatementType,
-    ) -> InsertBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         match statement_type {
             StatementType::Query => self.insert_query_with(statement, key, variables),
             StatementType::Prepared => self.insert_prepared_with(statement, key, variables),
@@ -161,9 +166,16 @@ pub trait GetDynamicInsertRequest: Keyspace {
     fn insert_query_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> InsertBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         InsertBuilder {
             keyspace: self,
             statement: statement.to_owned().into(),
@@ -177,9 +189,16 @@ pub trait GetDynamicInsertRequest: Keyspace {
     fn insert_prepared_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> InsertBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         InsertBuilder {
             keyspace: self,
             statement: statement.to_owned().into(),
@@ -198,10 +217,17 @@ where
     /// Specifies the returned Value type for an upcoming insert request
     fn as_insert<'a>(
         &'a self,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
         statement_type: StatementType,
-    ) -> InsertBuilder<'a, Self, [&'a dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         match statement_type {
             StatementType::Query => self.as_insert_query(key, variables),
             StatementType::Prepared => self.as_insert_prepared(key, variables),
@@ -210,9 +236,16 @@ where
     /// Specifies the returned Value type for an upcoming insert request using a query statement
     fn as_insert_query<'a>(
         &'a self,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> InsertBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         InsertBuilder {
             _marker: DynamicRequest,
             keyspace: self,
@@ -225,9 +258,16 @@ where
     /// Specifies the returned Value type for an upcoming insert request using a prepared statement id
     fn as_insert_prepared<'a>(
         &'a self,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> InsertBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         InsertBuilder {
             _marker: DynamicRequest,
             keyspace: self,
@@ -265,20 +305,26 @@ impl<'a, S: Insert<K, V>, K, V> InsertBuilder<'a, S, K, V, QueryConsistency, Sta
 }
 
 impl<'a, S: Keyspace>
-    InsertBuilder<'a, S, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest>
+    InsertBuilder<'a, S, [&(dyn TokenEncoder + Sync)], [&(dyn ColumnEncoder + Sync)], QueryConsistency, DynamicRequest>
 {
     pub fn bind_values<
         F: 'static
             + Fn(
                 Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-                &[&dyn TokenEncoder],
-                &[&dyn ColumnEncoder],
+                &[&(dyn TokenEncoder + Sync)],
+                &[&(dyn ColumnEncoder + Sync)],
             ) -> QueryBuilder<QueryValues>,
     >(
         self,
         bind_fn: F,
-    ) -> InsertBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryConsistency, ManualBoundRequest>
-    {
+    ) -> InsertBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        ManualBoundRequest<'a>,
+    > {
         InsertBuilder {
             _marker: ManualBoundRequest {
                 bind_fn: Box::new(bind_fn),
@@ -294,9 +340,19 @@ impl<'a, S: Keyspace>
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> InsertBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency);
-        let builder = builder.values(self.value).values(self.key);
+    ) -> InsertBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryValues,
+        DynamicRequest,
+    > {
+        let builder = self
+            .builder
+            .consistency(consistency)
+            .values(self.key)
+            .values(self.value);
         InsertBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -309,19 +365,33 @@ impl<'a, S: Keyspace>
 }
 
 impl<'a, S: Keyspace>
-    InsertBuilder<'a, S, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, ManualBoundRequest>
+    InsertBuilder<
+        'a,
+        S,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        ManualBoundRequest<'a>,
+    >
 {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> InsertBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryValues, DynamicRequest> {
+    ) -> InsertBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryValues,
+        DynamicRequest,
+    > {
         InsertBuilder {
             _marker: DynamicRequest,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
             value: self.value,
-            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), &self.key, &self.value),
+            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), self.key, self.value),
         }
     }
 }
@@ -350,7 +420,20 @@ impl<'a, S: Insert<K, V>, K: ComputeToken, V> InsertBuilder<'a, S, K, V, QueryVa
     }
 }
 
-impl<'a, S: Keyspace, V: ?Sized> InsertBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
+impl<'a, S: Keyspace, V: ?Sized> InsertBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> InsertBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
+        InsertBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: self.builder.timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let mut token_chain = TokenEncodeChain::default();
@@ -382,7 +465,7 @@ impl<'a, S: Insert<K, V>, K: ComputeToken, V, T> InsertBuilder<'a, S, K, V, Quer
     }
 }
 
-impl<'a, S: Keyspace, V: ?Sized> InsertBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
+impl<'a, S: Keyspace, V: ?Sized> InsertBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let mut token_chain = TokenEncodeChain::default();
@@ -421,6 +504,12 @@ impl Deref for InsertRequest {
 impl DerefMut for InsertRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl InsertRequest {
+    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+        BasicRetryWorker::new(self)
     }
 }
 

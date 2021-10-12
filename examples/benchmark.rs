@@ -1,17 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
-use anyhow::bail;
-use backstage::prefab::websocket::*;
-use futures::{
-    SinkExt,
-    StreamExt,
-    TryStreamExt,
-};
 use log::*;
-use scylla_rs::{
-    app::cluster::Topology,
-    prelude::*,
-};
+use scylla_rs::prelude::*;
 use std::{
     borrow::Cow,
     net::SocketAddr,
@@ -19,10 +9,7 @@ use std::{
     time::SystemTime,
 };
 use tokio::sync::{
-    mpsc::{
-        unbounded_channel,
-        UnboundedSender,
-    },
+    mpsc::unbounded_channel,
     Mutex,
 };
 
@@ -89,101 +76,45 @@ async fn run_benchmark_on_single_node(n: i32, t: Arc<Mutex<u128>>, node: SocketA
 
 async fn init_database(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
-    let (sender, mut inbox) = unbounded_channel::<Result<(), WorkerError>>();
-    let worker = BatchWorker::boxed(sender.clone());
-    let token = 1;
-    let keyspace = "scylla_example".to_string();
-    let keyspace_statement = Query::new()
-        .statement(&format!(
-            "CREATE KEYSPACE IF NOT EXISTS {}
-            WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}
-            AND durable_writes = true;",
-            keyspace
-        ))
-        .consistency(Consistency::One)
-        .build()?;
-    send_local(token, keyspace_statement.0, worker).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
-    if let Some(msg) = inbox.recv().await {
-        match msg {
-            Ok(_) => (),
-            Err(e) => bail!(e),
-        }
-    } else {
-        bail!("Could not verify if keyspace was created!")
-    }
-
-    let worker = BatchWorker::boxed(sender.clone());
-    let drop_statement = Query::new()
-        .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
-        .consistency(Consistency::One)
-        .build()?;
-    send_local(token, drop_statement.0, worker).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
-    if let Some(msg) = inbox.recv().await {
-        match msg {
-            Ok(_) => (),
-            Err(e) => bail!(e),
-        }
-    } else {
-        bail!("Could not verify if table was dropped!")
-    }
-
-    let table_query = format!(
-        "CREATE TABLE IF NOT EXISTS {}.test (
-            key text PRIMARY KEY,
-            data blob,
-        );",
-        keyspace
-    );
-    let worker = BatchWorker::boxed(sender.clone());
-    let statement = Query::new()
-        .statement(table_query.as_str())
-        .consistency(Consistency::One)
-        .build()?;
-    send_local(token, statement.0, worker).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
-    if let Some(msg) = inbox.recv().await {
-        match msg {
-            Ok(_) => (),
-            Err(e) => bail!(e),
-        }
-    } else {
-        bail!("Could not verify if table was created!")
-    }
 
     let keyspace = MyKeyspace::new();
-    let worker = PrepareWorker::boxed(
-        <MyKeyspace as Insert<String, i32>>::id(&keyspace),
-        <MyKeyspace as Insert<String, i32>>::statement(&keyspace),
-    );
-    let Prepare(payload) = Prepare::new()
-        .statement(&<MyKeyspace as Insert<String, i32>>::statement(&keyspace))
-        .build()?;
-    send_local(token, payload, worker).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
+    keyspace
+        .execute_query(
+            "CREATE KEYSPACE IF NOT EXISTS {{keyspace}}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
+            AND durable_writes = true",
+            &[],
+        )
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-    let worker = PrepareWorker::boxed(
-        <MyKeyspace as Select<String, i32>>::id(&keyspace),
-        <MyKeyspace as Select<String, i32>>::statement(&keyspace),
-    );
-    let Prepare(payload) = Prepare::new()
-        .statement(&<MyKeyspace as Select<String, i32>>::statement(&keyspace))
-        .build()?;
-    send_local(token, payload, worker).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
+    keyspace
+        .execute_query("DROP TABLE IF EXISTS {{keyspace}}.test", &[])
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    keyspace
+        .execute_query(
+            "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
+                key text PRIMARY KEY,
+                data blob,
+            )",
+            &[],
+        )
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
+
+    keyspace.prepare_insert::<String, i32>().build()?.get_local().await?;
+    keyspace.prepare_select::<String, i32>().build()?.get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
@@ -221,29 +152,6 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         start.elapsed().unwrap().as_millis()
     );
     Ok(t)
-}
-
-#[derive(Debug)]
-struct BatchWorker {
-    sender: UnboundedSender<Result<(), WorkerError>>,
-}
-
-impl BatchWorker {
-    pub fn boxed(sender: UnboundedSender<Result<(), WorkerError>>) -> Box<Self> {
-        Box::new(Self { sender: sender.into() })
-    }
-}
-
-impl Worker for BatchWorker {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        self.sender.send(Ok(()))?;
-        Ok(())
-    }
-
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
-        self.sender.send(Err(error))?;
-        Ok(())
-    }
 }
 
 #[derive(Default, Clone, Debug)]

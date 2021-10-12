@@ -1,8 +1,6 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::cql::DynValues;
-
 use super::*;
 
 /// Update query trait which creates an `UpdateRequest`
@@ -144,10 +142,17 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
         statement_type: StatementType,
-    ) -> UpdateBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         match statement_type {
             StatementType::Query => self.update_query_with(statement, key, variables),
             StatementType::Prepared => self.update_prepared_with(statement, key, variables),
@@ -157,9 +162,16 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_query_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> UpdateBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         UpdateBuilder {
             keyspace: self,
             statement: statement.to_owned().into(),
@@ -173,9 +185,16 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_prepared_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> UpdateBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         UpdateBuilder {
             keyspace: self,
             statement: statement.to_owned().into(),
@@ -194,10 +213,17 @@ where
     /// Specifies the returned Value type for an upcoming update request
     fn as_update<'a>(
         &'a self,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
         statement_type: StatementType,
-    ) -> UpdateBuilder<'a, Self, [&'a dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         match statement_type {
             StatementType::Query => self.as_update_query(key, variables),
             StatementType::Prepared => self.as_update_prepared(key, variables),
@@ -206,9 +232,16 @@ where
     /// Specifies the returned Value type for an upcoming update request using a query statement
     fn as_update_query<'a>(
         &'a self,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> UpdateBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         UpdateBuilder {
             _marker: DynamicRequest,
             keyspace: self,
@@ -221,9 +254,16 @@ where
     /// Specifies the returned Value type for an upcoming update request using a prepared statement id
     fn as_update_prepared<'a>(
         &'a self,
-        key: &'a [&dyn TokenEncoder],
-        variables: &'a [&dyn ColumnEncoder],
-    ) -> UpdateBuilder<'a, Self, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
         UpdateBuilder {
             _marker: DynamicRequest,
             keyspace: self,
@@ -261,20 +301,33 @@ impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryConsistency, Sta
 }
 
 impl<'a, S: Keyspace>
-    UpdateBuilder<'a, S, [&dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryConsistency, DynamicRequest>
+    UpdateBuilder<
+        'a,
+        S,
+        [&(dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    >
 {
     pub fn bind_values<
         F: 'static
             + Fn(
                 Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-                &[&dyn TokenEncoder],
-                &[&dyn ColumnEncoder],
+                &[&(dyn TokenEncoder + Sync)],
+                &[&(dyn ColumnEncoder + Sync)],
             ) -> QueryBuilder<QueryValues>,
     >(
         self,
         bind_fn: F,
-    ) -> UpdateBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryConsistency, ManualBoundRequest>
-    {
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        ManualBoundRequest<'a>,
+    > {
         UpdateBuilder {
             _marker: ManualBoundRequest {
                 bind_fn: Box::new(bind_fn),
@@ -290,9 +343,19 @@ impl<'a, S: Keyspace>
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> UpdateBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency);
-        let builder = builder.values(self.value).values(self.key);
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryValues,
+        DynamicRequest,
+    > {
+        let builder = self
+            .builder
+            .consistency(consistency)
+            .values(self.value)
+            .values(self.key);
         UpdateBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -305,19 +368,33 @@ impl<'a, S: Keyspace>
 }
 
 impl<'a, S: Keyspace>
-    UpdateBuilder<'a, S, [&dyn TokenEncoder], [&dyn ColumnEncoder], QueryConsistency, ManualBoundRequest>
+    UpdateBuilder<
+        'a,
+        S,
+        [&(dyn TokenEncoder + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        ManualBoundRequest<'a>,
+    >
 {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> UpdateBuilder<'a, S, [&'a dyn TokenEncoder], [&'a dyn ColumnEncoder], QueryValues, DynamicRequest> {
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenEncoder + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryValues,
+        DynamicRequest,
+    > {
         UpdateBuilder {
             _marker: DynamicRequest,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
             value: self.value,
-            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), &self.key, &self.value),
+            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), self.key, self.value),
         }
     }
 }
@@ -346,7 +423,20 @@ impl<'a, S: Update<K, V>, K: ComputeToken, V> UpdateBuilder<'a, S, K, V, QueryVa
     }
 }
 
-impl<'a, S: Keyspace, V> UpdateBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
+impl<'a, S: Keyspace, V: ?Sized> UpdateBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> UpdateBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: self.builder.timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
     /// Build the UpdateRequest
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let mut token_chain = TokenEncodeChain::default();
@@ -378,7 +468,7 @@ impl<'a, S: Update<K, V>, K: ComputeToken, V, T> UpdateBuilder<'a, S, K, V, Quer
     }
 }
 
-impl<'a, S: Keyspace, V> UpdateBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
+impl<'a, S: Keyspace, V: ?Sized> UpdateBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
     /// Build the UpdateRequest
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let mut token_chain = TokenEncodeChain::default();
@@ -417,6 +507,12 @@ impl Deref for UpdateRequest {
 impl DerefMut for UpdateRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl UpdateRequest {
+    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+        BasicRetryWorker::new(self)
     }
 }
 

@@ -185,6 +185,42 @@ impl<'a, S: Keyspace + Clone> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
 }
 
 impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchStatementOrId> {
+    pub fn execute_query(
+        mut self,
+        statement: &str,
+        variables: &[&(dyn ColumnEncoder + Sync)],
+    ) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: Keyspace,
+    {
+        let mut builder =
+            QueryStatement::encode_statement(self.builder, &self.keyspace.replace_keyspace_token(statement));
+        builder = if variables.len() > 0 {
+            builder.values(variables)
+        } else {
+            builder
+        };
+        Self::step(builder, self.map, self.keyspace)
+    }
+
+    pub fn execute_prepared(
+        mut self,
+        statement: &str,
+        variables: &[&(dyn ColumnEncoder + Sync)],
+    ) -> BatchCollector<'a, S, Type, BatchValues>
+    where
+        S: Keyspace,
+    {
+        let statement = self.keyspace.replace_keyspace_token(statement);
+        let mut builder = PreparedStatement::encode_statement(self.builder, &statement);
+        builder = if variables.len() > 0 {
+            builder.values(variables)
+        } else {
+            builder
+        };
+        self.map.insert(md5::compute(&statement).into(), Box::new(statement));
+        Self::step(builder, self.map, self.keyspace)
+    }
     /// Append an insert query using the default query type defined in the `InsertBatch` impl
     /// and the statement defined in the `Insert` impl.
     pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
@@ -529,7 +565,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchFl
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
-            token: rand::random::<i64>(),
+            token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
         })
@@ -544,7 +580,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchTi
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
-            token: rand::random::<i64>(),
+            token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
         })
@@ -555,7 +591,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBu
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
-            token: rand::random::<i64>(),
+            token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
         })
@@ -647,5 +683,9 @@ impl BatchRequest {
     /// Get a statement given an id from the request's map
     pub fn get_statement(&self, id: &[u8; 16]) -> Option<Cow<str>> {
         self.map.get(id).map(|res| res.to_statement())
+    }
+
+    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+        BasicRetryWorker::new(self)
     }
 }

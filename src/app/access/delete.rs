@@ -138,9 +138,9 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     fn delete_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&dyn TokenEncoder],
+        variables: &'a [&(dyn TokenEncoder + Sync)],
         statement_type: StatementType,
-    ) -> DeleteBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+    ) -> DeleteBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.delete_query_with(statement, variables),
             StatementType::Prepared => self.delete_prepared_with(statement, variables),
@@ -150,8 +150,8 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     fn delete_query_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&dyn TokenEncoder],
-    ) -> DeleteBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenEncoder + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         DeleteBuilder {
             keyspace: self,
             statement: statement.to_owned().into(),
@@ -164,8 +164,8 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     fn delete_prepared_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&dyn TokenEncoder],
-    ) -> DeleteBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenEncoder + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         DeleteBuilder {
             keyspace: self,
             statement: statement.to_owned().into(),
@@ -198,13 +198,12 @@ impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryConsistency, Sta
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> DeleteBuilder<'a, S, [&'a dyn TokenEncoder], V, QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency);
-        let builder = builder.values(self.key);
+    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
+        let builder = self.builder.consistency(consistency).values(self.key);
         DeleteBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -238,7 +237,19 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V> DeleteBuilder<'a, S, K, V, QueryVa
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
+        DeleteBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
     /// Build the DeleteRequest
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let mut token_chain = TokenEncodeChain::default();
@@ -270,7 +281,7 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V, T> DeleteBuilder<'a, S, K, V, Quer
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
     /// Build the DeleteRequest
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let mut token_chain = TokenEncodeChain::default();
@@ -309,6 +320,12 @@ impl Deref for DeleteRequest {
 impl DerefMut for DeleteRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl DeleteRequest {
+    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+        BasicRetryWorker::new(self)
     }
 }
 

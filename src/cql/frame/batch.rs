@@ -13,7 +13,6 @@ use super::{
         BE_UNSET_BYTES_LEN,
     },
     opcode::BATCH,
-    DynValues,
     Statements,
     Values,
     MD5_BE_LENGTH,

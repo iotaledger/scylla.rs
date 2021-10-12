@@ -151,9 +151,9 @@ pub trait GetDynamicSelectRequest: Keyspace {
     fn select_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&dyn TokenEncoder],
+        variables: &'a [&(dyn TokenEncoder + Sync)],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.select_query_with(statement, variables),
             StatementType::Prepared => self.select_prepared_with(statement, variables),
@@ -163,8 +163,8 @@ pub trait GetDynamicSelectRequest: Keyspace {
     fn select_query_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&dyn TokenEncoder],
-    ) -> SelectBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenEncoder + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
@@ -177,8 +177,8 @@ pub trait GetDynamicSelectRequest: Keyspace {
     fn select_prepared_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&dyn TokenEncoder],
-    ) -> SelectBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenEncoder + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
@@ -196,9 +196,9 @@ where
     /// Specifies the returned Value type for an upcoming select request
     fn as_select<'a, V>(
         &'a self,
-        variables: &'a [&dyn TokenEncoder],
+        variables: &'a [&(dyn TokenEncoder + Sync)],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.as_select_query(variables),
             StatementType::Prepared => self.as_select_prepared(variables),
@@ -207,8 +207,8 @@ where
     /// Specifies the returned Value type for an upcoming select request using a query statement
     fn as_select_query<'a, V>(
         &'a self,
-        variables: &'a [&dyn TokenEncoder],
-    ) -> SelectBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenEncoder + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
@@ -220,8 +220,8 @@ where
     /// Specifies the returned Value type for an upcoming select request using a prepared statement id
     fn as_select_prepared<'a, V>(
         &'a self,
-        variables: &'a [&dyn TokenEncoder],
-    ) -> SelectBuilder<'a, Self, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenEncoder + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
             keyspace: self,
@@ -256,13 +256,12 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency, Sta
     }
 }
 
-impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> SelectBuilder<'a, S, [&'a dyn TokenEncoder], V, QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency);
-        let builder = builder.values(self.key);
+    ) -> SelectBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
+        let builder = self.builder.consistency(consistency).values(self.key);
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -303,7 +302,10 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
         }
     }
 }
-impl<'a, S: Keyspace, V: RowsDecoder> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryValues, DynamicRequest> {
+
+impl<'a, S: Keyspace, V: RowsDecoder>
+    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest>
+{
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let mut token_chain = TokenEncodeChain::default();
@@ -335,9 +337,11 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
     }
 }
 
-impl<'a, S: Keyspace, V: RowsDecoder> SelectBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild, DynamicRequest> {
+impl<'a, S: Keyspace, V: RowsDecoder>
+    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest>
+{
     /// Build the SelectRequest
-    pub fn build_encoded(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.key.iter() {
             token_chain.dyn_chain(*v);
@@ -390,12 +394,31 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
         }
     }
 }
-impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
+impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V, QueryPagingState, StaticRequest> {
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+impl<'a, S: Keyspace, V: RowsDecoder>
+    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryPagingState, DynamicRequest>
+{
+    /// Build the SelectRequest
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+        let mut token_chain = TokenEncodeChain::default();
+        for v in self.key.iter() {
+            token_chain.dyn_chain(*v);
+        }
+        let query = self.builder.build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: token_chain.finish(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -415,12 +438,33 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
     }
 }
 
-impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder>
+    SelectBuilder<'a, S, K, V, QuerySerialConsistency, StaticRequest>
+{
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+impl<'a, S: Keyspace, V: RowsDecoder>
+    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QuerySerialConsistency, DynamicRequest>
+{
+    /// Build the SelectRequest
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+        let mut token_chain = TokenEncodeChain::default();
+        for v in self.key.iter() {
+            token_chain.dyn_chain(*v);
+        }
+        let query = self.builder.build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: token_chain.finish(),
             payload: query.into(),
             statement: self.statement,
         }

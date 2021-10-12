@@ -16,7 +16,6 @@ use super::{
         QUERY,
     },
     queryflags::*,
-    DynValues,
     QueryOrPrepared,
     Statements,
     Values,
@@ -237,6 +236,24 @@ impl Values for QueryBuilder<QueryFlags> {
             stage: query_values,
         }
     }
+
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
+    where
+        Self: Sized,
+    {
+        match values.len() {
+            0 => self.skip_values(),
+            1 => self.value(values.first().unwrap()),
+            _ => {
+                let mut iter = values.iter();
+                let mut builder = self.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
+    }
 }
 
 impl QueryBuilder<QueryFlags> {
@@ -303,6 +320,16 @@ impl QueryBuilder<QueryFlags> {
         QueryBuilder::<QueryBuild> {
             buffer: self.buffer,
             stage: query_build,
+        }
+    }
+    pub(crate) fn skip_values(mut self) -> QueryBuilder<QueryValues> {
+        self.buffer.push(SKIP_METADATA);
+        QueryBuilder {
+            buffer: self.buffer,
+            stage: QueryValues {
+                query_flags: self.stage,
+                value_count: 0,
+            },
         }
     }
     /// Build a query frame with an assigned compression type, without any value.
@@ -448,9 +475,11 @@ impl QueryBuilder<QueryValues> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // modiy the buffer total value_count
-        let start = self.stage.query_flags.index + 1;
-        let end = start + 2;
-        self.buffer[start..end].copy_from_slice(&self.stage.value_count.to_be_bytes());
+        if self.stage.value_count > 0 {
+            let start = self.stage.query_flags.index + 1;
+            let end = start + 2;
+            self.buffer[start..end].copy_from_slice(&self.stage.value_count.to_be_bytes());
+        }
         // apply compression to query frame
         self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query

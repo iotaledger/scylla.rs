@@ -100,7 +100,7 @@ pub trait Values {
         Self: Sized,
     {
         match values.len() {
-            0 => panic!("No values to set!"),
+            0 => panic!("No values set!"),
             1 => self.value(values.first().unwrap()),
             _ => {
                 let mut iter = values.iter();
@@ -126,25 +126,12 @@ pub trait Values {
 pub trait DynValues: Values {
     /// Add a single dynamic value
     fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return;
-    /// Add a slice of dynamic values
-    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Self::Return {
-        match values.len() {
-            0 => panic!("No values to set!"),
-            1 => self.dyn_value(values.first().unwrap()),
-            _ => {
-                let mut iter = values.iter();
-                let mut builder = self.dyn_value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        }
-    }
     /// Unset value dynamically
     fn dyn_unset_value(self: Box<Self>) -> Self::Return;
     /// Set Null value dynamically, note: for write queries this will create tombstone for V;
     fn dyn_null_value(self: Box<Self>) -> Self::Return;
+
+    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Self::Return;
 }
 impl<T> DynValues for T
 where
@@ -160,6 +147,10 @@ where
 
     fn dyn_null_value(self: Box<Self>) -> Self::Return {
         self.null_value()
+    }
+
+    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Self::Return {
+        self.values(values)
     }
 }
 
@@ -177,18 +168,14 @@ impl<T: DynValues + ?Sized> Values for Box<T> {
     where
         Self: Sized,
     {
-        match values.len() {
-            0 => self.null_value(),
-            1 => self.value(values.first().unwrap()),
-            _ => {
-                let mut iter = values.iter();
-                let mut builder = self.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        }
+        T::dyn_values(
+            self,
+            values
+                .iter()
+                .map(|v| v as &dyn ColumnEncoder)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
     }
 
     fn unset_value(self) -> Self::Return

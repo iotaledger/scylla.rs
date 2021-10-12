@@ -109,6 +109,7 @@ where
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+        error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let Some(id) = cql_error.take_unprepared_id() {
                 handle_unprepared_error(self, id, reporter).or_else(|worker| {

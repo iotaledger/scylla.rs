@@ -23,6 +23,10 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
+pub(crate) mod execute;
+
+pub(crate) mod prepare;
+
 use super::{
     worker::BasicRetryWorker,
     Worker,
@@ -69,6 +73,7 @@ pub use delete::{
     GetDynamicDeleteRequest,
     GetStaticDeleteRequest,
 };
+pub use execute::*;
 pub use insert::{
     AsDynamicInsertRequest,
     GetDynamicInsertRequest,
@@ -77,6 +82,7 @@ pub use insert::{
     InsertRequest,
 };
 pub use keyspace::Keyspace;
+pub use prepare::*;
 pub use select::{
     AsDynamicSelectRequest,
     GetDynamicSelectRequest,
@@ -111,6 +117,7 @@ pub enum RequestType {
     Delete = 2,
     Select = 3,
     Batch = 4,
+    Execute = 5,
 }
 
 pub trait Statement: ToString {}
@@ -118,12 +125,12 @@ impl<T> Statement for T where T: ToString {}
 
 pub struct DynamicRequest;
 pub struct StaticRequest;
-pub struct ManualBoundRequest {
+pub struct ManualBoundRequest<'a> {
     pub(crate) bind_fn: Box<
         dyn Fn(
             Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-            &[&dyn TokenEncoder],
-            &[&dyn ColumnEncoder],
+            &'a [&(dyn TokenEncoder + Sync)],
+            &'a [&(dyn ColumnEncoder + Sync)],
         ) -> QueryBuilder<QueryValues>,
     >,
 }
@@ -582,7 +589,7 @@ pub mod tests {
 
         "my_keyspace"
             .insert_with(
-                "INSERT INTO {keyspace}.table (key, val1, val2) VALUES (?,?,?)",
+                "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
                 &[&3],
                 &[&8.0, &"hello"],
                 StatementType::Query,
@@ -668,8 +675,12 @@ pub mod tests {
         cluster_handle.add_node(node).await.expect("to add node");
         cluster_handle.build_ring(1).await.expect("to build ring");
         backstage::spawn_task("adding node task", async move {
-            "INSERT INTO scylla_example.test (key, data) VALUES (?, ?)"
-                .as_insert_query(&[&"Test 1"], &[&1])
+            "scylla_example"
+                .insert_query_with(
+                    "INSERT INTO {{keyspace}}.test (key, data) VALUES (?, ?)",
+                    &[&"Test 1"],
+                    &[&1],
+                )
                 .consistency(Consistency::One)
                 .build()?
                 .send_local()?;
