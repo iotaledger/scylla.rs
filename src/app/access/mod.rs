@@ -359,7 +359,7 @@ impl Marker for DecodeVoid {
     type Output = ();
 
     fn new() -> Self {
-        DecodeVoid::new()
+        Self
     }
 
     fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
