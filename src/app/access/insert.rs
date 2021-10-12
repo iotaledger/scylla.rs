@@ -2,16 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{
-    cql::{
-        query::StatementType,
-        TokenEncodeChain,
-    },
-    prelude::{
-        ColumnEncoder,
-        TokenEncoder,
-    },
-};
 
 /// Insert query trait which creates an `InsertRequest`
 /// that can be sent to the `Ring`.
@@ -177,7 +167,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
             statement: statement.to_owned().into(),
             key,
             value: variables,
-            builder: QueryStatement::encode_statement(Query::new(), statement),
+            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
     }
@@ -193,7 +183,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
             statement: statement.to_owned().into(),
             key,
             value: variables,
-            builder: PreparedStatement::encode_statement(Query::new(), statement),
+            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
     }
@@ -362,11 +352,12 @@ impl<'a, S: Insert<K, V>, K: ComputeToken, V> InsertBuilder<'a, S, K, V, QueryVa
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(InsertRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
@@ -379,11 +370,12 @@ impl<'a, S: Keyspace, V: ?Sized> InsertBuilder<'a, S, [&dyn TokenEncoder], V, Qu
         }
         let query = self.builder.build()?;
         // create the request
-        Ok(InsertRequest {
+        Ok(CommonRequest {
             token: token_chain.finish(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
@@ -392,11 +384,12 @@ impl<'a, S: Insert<K, V>, K: ComputeToken, V, T> InsertBuilder<'a, S, K, V, Quer
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(InsertRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
@@ -409,84 +402,62 @@ impl<'a, S: Keyspace, V: ?Sized> InsertBuilder<'a, S, [&dyn TokenEncoder], V, Qu
         }
         let query = self.builder.build()?;
         // create the request
-        Ok(InsertRequest {
+        Ok(CommonRequest {
             token: token_chain.finish(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
 /// A request to insert a record which can be sent to the ring
-pub struct InsertRequest {
-    token: i64,
-    inner: Vec<u8>,
-    statement: Cow<'static, str>,
-}
+#[derive(Debug, Clone)]
+pub struct InsertRequest(CommonRequest);
 
-impl std::fmt::Debug for InsertRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InsertRequest")
-            .field("token", &self.token)
-            .field("inner", &self.inner)
-            .field("statement", &self.statement)
-            .finish()
+impl From<CommonRequest> for InsertRequest {
+    fn from(req: CommonRequest) -> Self {
+        InsertRequest(req)
     }
 }
 
-impl Clone for InsertRequest {
-    fn clone(&self) -> Self {
-        Self {
-            token: self.token,
-            inner: self.inner.clone(),
-            statement: self.statement.clone(),
-        }
+impl Deref for InsertRequest {
+    type Target = CommonRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for InsertRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
 impl Request for InsertRequest {
-    type Marker = DecodeVoid;
-    const TYPE: RequestType = RequestType::Insert;
-
     fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn marker() -> Self::Marker {
-        DecodeVoid
+        self.0.token()
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        &self.statement
+        self.0.statement()
     }
 
     fn payload(&self) -> &Vec<u8> {
-        &self.inner
+        self.0.payload()
+    }
+
+    fn payload_mut(&mut self) -> &mut Vec<u8> {
+        self.0.payload_mut()
     }
 
     fn into_payload(self) -> Vec<u8> {
-        self.inner
+        self.0.into_payload()
     }
 }
 
-impl InsertRequest {
-    pub fn send_local(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_local(self.token(), self.into_payload(), BasicWorker::new())?;
-        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
-    }
-
-    pub fn send_global(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_global(self.token(), self.into_payload(), BasicWorker::new())?;
-        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
-    }
-
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
-        BasicRetryWorker::new(self)
-    }
+impl SendRequestExt for InsertRequest {
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Insert;
 }

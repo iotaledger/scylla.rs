@@ -2,13 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{
-    cql::{
-        query::StatementType,
-        TokenEncodeChain,
-    },
-    prelude::TokenEncoder,
-};
 
 /// Delete query trait which creates a `DeleteRequest`
 /// that can be sent to the `Ring`.
@@ -163,7 +156,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
             keyspace: self,
             statement: statement.to_owned().into(),
             key: variables,
-            builder: QueryStatement::encode_statement(Query::new(), statement),
+            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: PhantomData,
         }
     }
@@ -177,7 +170,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
             keyspace: self,
             statement: statement.to_owned().into(),
             key: variables,
-            builder: PreparedStatement::encode_statement(Query::new(), statement),
+            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: PhantomData,
         }
     }
@@ -246,11 +239,12 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V> DeleteBuilder<'a, S, K, V, QueryVa
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(DeleteRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
@@ -263,11 +257,12 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&dyn TokenEncoder], V, QueryValue
         }
         let query = self.builder.build()?;
         // create the request
-        Ok(DeleteRequest {
+        Ok(CommonRequest {
             token: token_chain.finish(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
@@ -276,11 +271,12 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V, T> DeleteBuilder<'a, S, K, V, Quer
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(DeleteRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
@@ -293,84 +289,62 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&dyn TokenEncoder], V, QueryBuild
         }
         let query = self.builder.build()?;
         // create the request
-        Ok(DeleteRequest {
+        Ok(CommonRequest {
             token: token_chain.finish(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-        })
+        }
+        .into())
     }
 }
 
 /// A request to delete a record which can be sent to the ring
-pub struct DeleteRequest {
-    token: i64,
-    inner: Vec<u8>,
-    statement: Cow<'static, str>,
-}
+#[derive(Debug, Clone)]
+pub struct DeleteRequest(CommonRequest);
 
-impl std::fmt::Debug for DeleteRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DeleteRequest")
-            .field("token", &self.token)
-            .field("inner", &self.inner)
-            .field("statement", &self.statement)
-            .finish()
+impl From<CommonRequest> for DeleteRequest {
+    fn from(req: CommonRequest) -> Self {
+        DeleteRequest(req)
     }
 }
 
-impl Clone for DeleteRequest {
-    fn clone(&self) -> Self {
-        Self {
-            token: self.token,
-            inner: self.inner.clone(),
-            statement: self.statement.clone(),
-        }
+impl Deref for DeleteRequest {
+    type Target = CommonRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for DeleteRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
 impl Request for DeleteRequest {
-    type Marker = DecodeVoid;
-    const TYPE: RequestType = RequestType::Delete;
-
     fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn marker() -> Self::Marker {
-        DecodeVoid
+        self.0.token()
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        &self.statement
+        self.0.statement()
     }
 
     fn payload(&self) -> &Vec<u8> {
-        &self.inner
+        self.0.payload()
+    }
+
+    fn payload_mut(&mut self) -> &mut Vec<u8> {
+        self.0.payload_mut()
     }
 
     fn into_payload(self) -> Vec<u8> {
-        self.inner
+        self.0.into_payload()
     }
 }
 
-impl DeleteRequest {
-    pub fn send_local(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_local(self.token(), self.into_payload(), BasicWorker::new())?;
-        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
-    }
-
-    pub fn send_global(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_global(self.token(), self.into_payload(), BasicWorker::new())?;
-        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
-    }
-
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
-        BasicRetryWorker::new(self)
-    }
+impl SendRequestExt for DeleteRequest {
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Delete;
 }

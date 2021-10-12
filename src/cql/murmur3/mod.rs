@@ -313,7 +313,11 @@ fn fmix64_i64(k: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Cursor};
+    use std::io::{
+        BufRead,
+        BufReader,
+        Cursor,
+    };
     #[test]
     fn test_tx_murmur3_token_generation() {
         let tx = "EHUHSJRCMDJSZUQMNLDBSRFC9O9XCI9SMHFWWHNDYOOOWMSOJQHCC9GFUEGECEVVXCSXYTHSRJ9TZ9999";

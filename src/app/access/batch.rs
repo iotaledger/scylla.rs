@@ -2,177 +2,101 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{
-    app::ring::RingSendError,
-    cql::{
-        BatchBuild,
-        BatchBuilder,
-        BatchFlags,
-        BatchStatementOrId,
-        BatchTimestamp,
-        BatchType,
-        BatchTypeCounter,
-        BatchTypeLogged,
-        BatchTypeUnlogged,
-        BatchTypeUnset,
-        BatchValues,
-        Consistency,
-    },
+use crate::cql::{
+    BatchBuild,
+    BatchBuilder,
+    BatchFlags,
+    BatchStatementOrId,
+    BatchTimestamp,
+    BatchType,
+    BatchTypeCounter,
+    BatchTypeLogged,
+    BatchTypeUnlogged,
+    BatchTypeUnset,
+    BatchValues,
+    Consistency,
 };
 use dyn_clone::DynClone;
 use std::{
-    any::Any,
     collections::HashMap,
     marker::PhantomData,
 };
-/// An aggregation trait which defines a statement marker of any type
-pub trait AnyStatement<S>: Any + Statement<S> + Send + DynClone + std::fmt::Debug {}
 
-dyn_clone::clone_trait_object!(<S> AnyStatement<S>);
-
-/// A Batch request, which can be used to send queries to the Ring.
-/// Stores a map of prepared statement IDs that were added to the
-/// batch so that the associated statements can be re-prepared if necessary.
-#[derive(Clone, Debug)]
-pub struct BatchRequest<S> {
-    token: i64,
-    inner: Vec<u8>,
-    map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
-    keyspace: S,
-}
-
-impl<S> Request for BatchRequest<S> {
-    type Marker = DecodeVoid;
-    const TYPE: RequestType = RequestType::Batch;
-
-    fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn marker() -> Self::Marker {
-        DecodeVoid
-    }
-
-    fn statement(&self) -> &Cow<'static, str> {
-        panic!("BatchRequest::statement() should never be called")
-    }
-
-    fn payload(&self) -> &Vec<u8> {
-        &self.inner
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.inner
+struct UpdateStatement<S: Update<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Update<K, V>, K, V> UpdateStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
     }
 }
-
-/// A marker trait which holds dynamic types for a statement
-/// to be retrieved from a keyspace
-pub trait Statement<S> {
-    /// Get the statement defined by this keyspace
-    fn statement(&self, keyspace: &S) -> Cow<'static, str>;
+impl<S: Update<K, V>, K, V> Clone for UpdateStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
 }
-
-/// A marker specifically for Insert statements
-#[derive(Clone, Debug)]
-pub struct InsertStatement<S, K, V> {
-    _data: PhantomData<(S, K, V)>,
+impl<S: Update<K, V> + Debug, K, V> Debug for UpdateStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("UpdateStatement").field(&self.0).finish()
+    }
 }
-
-impl<S: Insert<K, V>, K, V> Statement<S> for InsertStatement<S, K, V> {
-    fn statement(&self, keyspace: &S) -> Cow<'static, str> {
-        keyspace.insert_statement::<K, V>()
+struct InsertStatement<S: Insert<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Insert<K, V>, K, V> InsertStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V>, K, V> Clone for InsertStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("UpdateStatement").field(&self.0).finish()
+    }
+}
+struct DeleteStatement<S: Delete<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Delete<K, V>, K, V> DeleteStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V>, K, V> Clone for DeleteStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V> + Debug, K, V> Debug for DeleteStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("UpdateStatement").field(&self.0).finish()
     }
 }
 
-impl<S, K, V> AnyStatement<S> for InsertStatement<S, K, V>
-where
-    S: 'static + Insert<K, V> + Clone + std::fmt::Debug,
-    K: 'static + Clone + Send + std::fmt::Debug,
-    V: 'static + Clone + Send + std::fmt::Debug,
-{
+pub trait ToStatement: DynClone + Debug + Send + Sync {
+    fn to_statement(&self) -> Cow<str>;
 }
+dyn_clone::clone_trait_object!(ToStatement);
 
-/// A marker specifically for Update statements
-#[derive(Clone, Debug)]
-pub struct UpdateStatement<S, K, V> {
-    _data: PhantomData<(S, K, V)>,
-}
-
-impl<S: Update<K, V>, K, V> Statement<S> for UpdateStatement<S, K, V> {
-    fn statement(&self, keyspace: &S) -> Cow<'static, str> {
-        keyspace.update_statement::<K, V>()
+impl<S: Update<K, V> + Debug, K, V> ToStatement for UpdateStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<str> {
+        self.0.statement()
     }
 }
 
-impl<S, K, V> AnyStatement<S> for UpdateStatement<S, K, V>
-where
-    S: 'static + Update<K, V> + Clone + std::fmt::Debug,
-    K: 'static + Clone + Send + std::fmt::Debug,
-    V: 'static + Clone + Send + std::fmt::Debug,
-{
-}
-
-/// A marker specifically for Delete statements
-#[derive(Clone, Debug)]
-pub struct DeleteStatement<S, K, V> {
-    _data: PhantomData<(S, K, V)>,
-}
-
-impl<S: Delete<K, V>, K, V> Statement<S> for DeleteStatement<S, K, V> {
-    fn statement(&self, keyspace: &S) -> Cow<'static, str> {
-        keyspace.delete_statement::<K, V>()
+impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<str> {
+        self.0.statement()
     }
 }
 
-impl<S, K, V> AnyStatement<S> for DeleteStatement<S, K, V>
-where
-    S: 'static + Delete<K, V> + Clone + std::fmt::Debug,
-    K: 'static + Clone + Send + std::fmt::Debug,
-    V: 'static + Clone + Send + std::fmt::Debug,
-{
+impl<S: Delete<K, V> + Debug, K, V> ToStatement for DeleteStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<str> {
+        self.0.statement()
+    }
 }
 
-impl<S: Keyspace> BatchRequest<S> {
-    /// Compute the murmur3 token from the provided K
-    pub fn compute_token<K>(mut self, key: &K) -> Self
-    where
-        K: ComputeToken,
-    {
-        self.token = K::token(key);
-        self
-    }
-
-    /// Clone the cql map
-    pub fn clone_map(&self) -> HashMap<[u8; 16], Box<dyn AnyStatement<S>>> {
-        self.map.clone()
-    }
-
-    /// Take the cql map, leaving an empty map in the request
-    pub fn take_map(&mut self) -> HashMap<[u8; 16], Box<dyn AnyStatement<S>>> {
-        std::mem::take(&mut self.map)
-    }
-
-    /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid>, RingSendError> {
-        send_local(self.token, self.inner, worker)?;
-        Ok(DecodeResult::batch())
-    }
-
-    /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid>, RingSendError> {
-        send_global(self.token, self.inner, worker)?;
-        Ok(DecodeResult::batch())
-    }
-
-    /// Get a statement given an id from the request's map
-    pub fn get_statement(&self, id: &[u8; 16]) -> Option<Cow<'static, str>> {
-        self.map.get(id).and_then(|res| Some(res.statement(&self.keyspace)))
-    }
-
-    /// Get the request payload
-    pub fn payload(&self) -> &Vec<u8> {
-        &self.inner
+impl ToStatement for String {
+    fn to_statement(&self) -> Cow<str> {
+        self.into()
     }
 }
 
@@ -205,13 +129,13 @@ impl<S: Keyspace> BatchRequest<S> {
 ///     .compute_token(&token_key);
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct BatchCollector<S, Type: Copy + Into<u8>, Stage: Copy> {
+pub struct BatchCollector<'a, S, Type: Copy + Into<u8>, Stage: Copy> {
     builder: BatchBuilder<Type, Stage>,
-    map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
-    keyspace: S,
+    map: HashMap<[u8; 16], Box<dyn ToStatement>>,
+    keyspace: &'a S,
 }
 
-impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
+impl<'a, S: Keyspace + Clone> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
     /// Construct a new batch collector with a keyspace definition
     /// which should implement access and batch traits that will be used
     /// to build this batch. The keyspace will be cloned here and held by
@@ -220,7 +144,7 @@ impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: crate::cql::Batch::new(),
             map: HashMap::new(),
-            keyspace: keyspace.clone(),
+            keyspace,
         }
     }
 
@@ -232,35 +156,38 @@ impl<S: Keyspace + Clone> BatchCollector<S, BatchTypeUnset, BatchType> {
         BatchCollector {
             builder: crate::cql::Batch::with_capacity(capacity),
             map: HashMap::new(),
-            keyspace: keyspace.clone(),
+            keyspace,
         }
     }
 
     /// Specify the batch type using an enum
-    pub fn batch_type<Type: Copy + Into<u8>>(self, batch_type: Type) -> BatchCollector<S, Type, BatchStatementOrId> {
+    pub fn batch_type<Type: Copy + Into<u8>>(
+        self,
+        batch_type: Type,
+    ) -> BatchCollector<'a, S, Type, BatchStatementOrId> {
         Self::step(self.builder.batch_type(batch_type), self.map, self.keyspace)
     }
 
     /// Specify the batch type as Logged
-    pub fn logged(self) -> BatchCollector<S, BatchTypeLogged, BatchStatementOrId> {
+    pub fn logged(self) -> BatchCollector<'a, S, BatchTypeLogged, BatchStatementOrId> {
         Self::step(self.builder.logged(), self.map, self.keyspace)
     }
 
     /// Specify the batch type as Unlogged
-    pub fn unlogged(self) -> BatchCollector<S, BatchTypeUnlogged, BatchStatementOrId> {
+    pub fn unlogged(self) -> BatchCollector<'a, S, BatchTypeUnlogged, BatchStatementOrId> {
         Self::step(self.builder.unlogged(), self.map, self.keyspace)
     }
 
     /// Specify the batch type as Counter
-    pub fn counter(self) -> BatchCollector<S, BatchTypeCounter, BatchStatementOrId> {
+    pub fn counter(self) -> BatchCollector<'a, S, BatchTypeCounter, BatchStatementOrId> {
         Self::step(self.builder.counter(), self.map, self.keyspace)
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementOrId> {
+impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchStatementOrId> {
     /// Append an insert query using the default query type defined in the `InsertBatch` impl
     /// and the statement defined in the `Insert` impl.
-    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Insert<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -269,12 +196,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
             let id = self.keyspace.insert_id();
-            self.map.insert(
-                id,
-                Box::new(InsertStatement {
-                    _data: PhantomData::<(S, K, V)>,
-                }),
-            );
+            self.map.insert(id, Box::new(InsertStatement::new(self.keyspace)));
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
@@ -286,7 +208,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Insert<K, V>,
     {
@@ -299,7 +221,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Insert<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -307,12 +229,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     {
         // Add PreparedId to map
         let id = self.keyspace.insert_id();
-        self.map.insert(
-            id,
-            Box::new(InsertStatement {
-                _data: PhantomData::<(S, K, V)>,
-            }),
-        );
+        self.map.insert(id, Box::new(InsertStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
@@ -324,7 +241,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
     /// and the statement defined in the `Update` impl.
-    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Update<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -333,12 +250,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
             let id = self.keyspace.update_id();
-            self.map.insert(
-                id,
-                Box::new(UpdateStatement {
-                    _data: PhantomData::<(S, K, V)>,
-                }),
-            );
+            self.map.insert(id, Box::new(UpdateStatement::new(self.keyspace)));
         };
 
         // this will advnace the builder as defined in the Update<K, V>
@@ -350,7 +262,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Update<K, V>,
     {
@@ -363,7 +275,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Update<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -371,12 +283,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     {
         // Add PreparedId to map
         let id = self.keyspace.update_id();
-        self.map.insert(
-            id,
-            Box::new(UpdateStatement {
-                _data: PhantomData::<(S, K, V)>,
-            }),
-        );
+        self.map.insert(id, Box::new(UpdateStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
@@ -388,7 +295,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
     /// and the statement defined in the `Delete` impl.
-    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Delete<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -397,12 +304,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
             let id = self.keyspace.delete_id();
-            self.map.insert(
-                id,
-                Box::new(DeleteStatement {
-                    _data: PhantomData::<(S, K, V)>,
-                }),
-            );
+            self.map.insert(id, Box::new(DeleteStatement::new(self.keyspace)));
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
@@ -414,7 +316,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Delete<K, V>,
     {
@@ -427,7 +329,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Delete<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -435,12 +337,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     {
         // Add PreparedId to map
         let id = self.keyspace.delete_id();
-        self.map.insert(
-            id,
-            Box::new(DeleteStatement {
-                _data: PhantomData::<(S, K, V)>,
-            }),
-        );
+        self.map.insert(id, Box::new(DeleteStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
@@ -451,10 +348,10 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchStatementO
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
+impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchValues> {
     /// Append an insert query using the default query type defined in the `InsertBatch` impl
     /// and the statement defined in the `Insert` impl.
-    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Insert<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -463,12 +360,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
             let id = self.keyspace.insert_id();
-            self.map.insert(
-                id,
-                Box::new(InsertStatement {
-                    _data: PhantomData::<(S, K, V)>,
-                }),
-            );
+            self.map.insert(id, Box::new(InsertStatement::new(self.keyspace)));
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
@@ -480,7 +372,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Insert<K, V>,
     {
@@ -493,7 +385,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn insert_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Insert<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -501,12 +393,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     {
         // Add PreparedId to map
         let id = self.keyspace.insert_id();
-        self.map.insert(
-            id,
-            Box::new(InsertStatement {
-                _data: PhantomData::<(S, K, V)>,
-            }),
-        );
+        self.map.insert(id, Box::new(InsertStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
@@ -518,7 +405,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
     /// and the statement defined in the `Update` impl.
-    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Update<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -527,12 +414,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
             let id = self.keyspace.update_id();
-            self.map.insert(
-                id,
-                Box::new(UpdateStatement {
-                    _data: PhantomData::<(S, K, V)>,
-                }),
-            );
+            self.map.insert(id, Box::new(UpdateStatement::new(self.keyspace)));
         };
 
         // this will advnace the builder as defined in the Update<K, V>
@@ -544,7 +426,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Update<K, V>,
     {
@@ -557,7 +439,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<S, Type, BatchValues>
+    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Update<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -565,12 +447,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     {
         // Add PreparedId to map
         let id = self.keyspace.update_id();
-        self.map.insert(
-            id,
-            Box::new(UpdateStatement {
-                _data: PhantomData::<(S, K, V)>,
-            }),
-        );
+        self.map.insert(id, Box::new(UpdateStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
@@ -582,7 +459,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
     /// and the statement defined in the `Delete` impl.
-    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Delete<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -591,12 +468,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
             let id = self.keyspace.delete_id();
-            self.map.insert(
-                id,
-                Box::new(DeleteStatement {
-                    _data: PhantomData::<(S, K, V)>,
-                }),
-            );
+            self.map.insert(id, Box::new(DeleteStatement::new(self.keyspace)));
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
@@ -608,7 +480,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Delete<K, V>,
     {
@@ -621,7 +493,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<S, Type, BatchValues>
+    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: 'static + Delete<K, V> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
@@ -629,12 +501,7 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     {
         // Add PreparedId to map
         let id = self.keyspace.delete_id();
-        self.map.insert(
-            id,
-            Box::new(DeleteStatement {
-                _data: PhantomData::<(S, K, V)>,
-            }),
-        );
+        self.map.insert(id, Box::new(DeleteStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
@@ -645,65 +512,62 @@ impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchValues> {
     }
 
     /// Set the consistency for this batch
-    pub fn consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchFlags> {
+    pub fn consistency(self, consistency: Consistency) -> BatchCollector<'a, S, Type, BatchFlags> {
         Self::step(self.builder.consistency(consistency), self.map, self.keyspace)
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchFlags> {
+impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchFlags> {
     /// Set the serial consistency for the batch
-    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<S, Type, BatchTimestamp> {
+    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<'a, S, Type, BatchTimestamp> {
         Self::step(self.builder.serial_consistency(consistency), self.map, self.keyspace)
     }
     /// Set the timestamp for the batch
-    pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
+    pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
-            inner: self.builder.build()?.0.into(),
-            keyspace: self.keyspace,
+            payload: self.builder.build()?.0.into(),
         })
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchTimestamp> {
+impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchTimestamp> {
     /// Set the timestamp for the batch
-    pub fn timestamp(self, timestamp: i64) -> BatchCollector<S, Type, BatchBuild> {
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
+    pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
-            inner: self.builder.build()?.0.into(),
-            keyspace: self.keyspace,
+            payload: self.builder.build()?.0.into(),
         })
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>> BatchCollector<S, Type, BatchBuild> {
+impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBuild> {
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
+    pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
             token: rand::random::<i64>(),
             map: self.map,
-            inner: self.builder.build()?.0.into(),
-            keyspace: self.keyspace,
+            payload: self.builder.build()?.0.into(),
         })
     }
 }
 
-impl<S: Keyspace, Type: Copy + Into<u8>, Stage: Copy> BatchCollector<S, Type, Stage> {
+impl<'a, S: Keyspace, Type: Copy + Into<u8>, Stage: Copy> BatchCollector<'a, S, Type, Stage> {
     fn step<NextType: Copy + Into<u8>, NextStage: Copy>(
         builder: BatchBuilder<NextType, NextStage>,
-        map: HashMap<[u8; 16], Box<dyn AnyStatement<S>>>,
-        keyspace: S,
-    ) -> BatchCollector<S, NextType, NextStage> {
+        map: HashMap<[u8; 16], Box<dyn ToStatement>>,
+        keyspace: &'a S,
+    ) -> BatchCollector<'a, S, NextType, NextStage> {
         BatchCollector { builder, map, keyspace }
     }
 }
@@ -722,3 +586,66 @@ pub trait Batchable {
 }
 
 impl<S: Keyspace + Clone> Batchable for S {}
+
+/// A Batch request, which can be used to send queries to the Ring.
+/// Stores a map of prepared statement IDs that were added to the
+/// batch so that the associated statements can be re-prepared if necessary.
+#[derive(Clone, Debug)]
+pub struct BatchRequest {
+    token: i64,
+    payload: Vec<u8>,
+    map: HashMap<[u8; 16], Box<dyn ToStatement>>,
+}
+
+impl Request for BatchRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn statement(&self) -> &Cow<'static, str> {
+        panic!("Must use `get_statement` on batch requests!")
+    }
+
+    fn payload(&self) -> &Vec<u8> {
+        &self.payload
+    }
+
+    fn payload_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.payload
+    }
+
+    fn into_payload(self) -> Vec<u8> {
+        self.payload
+    }
+}
+
+impl SendRequestExt for BatchRequest {
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Batch;
+}
+
+impl BatchRequest {
+    /// Compute the murmur3 token from the provided K
+    pub fn compute_token<K>(mut self, key: &K) -> Self
+    where
+        K: ComputeToken,
+    {
+        self.token = K::token(key);
+        self
+    }
+
+    /// Clone the cql map
+    pub fn clone_map(&self) -> HashMap<[u8; 16], Box<dyn ToStatement>> {
+        self.map.clone()
+    }
+
+    /// Take the cql map, leaving an empty map in the request
+    pub fn take_map(&mut self) -> HashMap<[u8; 16], Box<dyn ToStatement>> {
+        std::mem::take(&mut self.map)
+    }
+
+    /// Get a statement given an id from the request's map
+    pub fn get_statement(&self, id: &[u8; 16]) -> Option<Cow<str>> {
+        self.map.get(id).map(|res| res.to_statement())
+    }
+}

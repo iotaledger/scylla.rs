@@ -198,19 +198,15 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
             })?;
     }
 
-    let (sender, mut inbox) = unbounded_channel();
+    let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
     for i in 0..n {
         keyspace
             .select::<i32>(&format!("Key {}", i))
             .consistency(Consistency::One)
             .build()?
             .worker()
-            .with_value_handle(sender.clone())
-            .send_local()
-            .map_err(|e| {
-                error!("{}", e);
-                anyhow::anyhow!(e.to_string())
-            })?;
+            .with_handle(sender.clone())
+            .send_local()?;
     }
     drop(sender);
     while let Some(res) = inbox.recv().await {

@@ -203,7 +203,7 @@ pub trait Frame {
     fn metadata(&self) -> anyhow::Result<Metadata>;
 }
 /// The frame decoder structure.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Decoder {
     buffer: Vec<u8>,
     header_flags: HeaderFlags,
@@ -230,7 +230,7 @@ impl Decoder {
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 /// The header flags structure in the CQL frame.
 pub struct HeaderFlags {
     compression: bool,

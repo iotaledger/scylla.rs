@@ -81,11 +81,11 @@ impl<H, V, R> ValueWorker<H, V, R> {
         self
     }
 }
-impl<H, V: Send, R> ValueWorker<H, V, R>
+impl<H, V, R> ValueWorker<H, V, R>
 where
     V: 'static + Send + RowsDecoder,
-    R: 'static + Send + Debug + Clone + Request,
-    H: 'static + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Debug + Clone + Send,
+    R: 'static + Send + Debug + Clone + Request + Sync,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Clone + Send + Sync,
 {
     pub(crate) fn with_inbox<I>(self: Box<Self>, inbox: I) -> Box<SpawnableRespondWorker<R, I, Self>> {
         SpawnableRespondWorker::new(inbox, *self)
@@ -95,8 +95,8 @@ where
 impl<H, V, R> Worker for ValueWorker<H, V, R>
 where
     V: 'static + Send + RowsDecoder,
-    H: 'static + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Debug + Clone + Send,
-    R: 'static + Send + Debug + Clone + Request,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+    R: 'static + Send + Debug + Request + Sync,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
@@ -108,24 +108,23 @@ where
         }
     }
 
-    fn handle_error(mut self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
-            let handle = self.handle.clone();
             if let Some(id) = cql_error.take_unprepared_id() {
-                handle_unprepared_error(self, id, reporter).or_else(|e| {
-                    error!("Error trying to prepare query: {}", e);
-                    handle.handle_error(error)
+                handle_unprepared_error(self, id, reporter).or_else(|worker| {
+                    error!("Error trying to reprepare query: {}", worker.request().statement());
+                    worker.handle.handle_error(error)
                 })
             } else {
                 match self.retry() {
                     Ok(_) => Ok(()),
-                    Err(worker) => H::handle_error(&worker.handle, error),
+                    Err(worker) => worker.handle.handle_error(error),
                 }
             }
         } else {
             match self.retry() {
                 Ok(_) => Ok(()),
-                Err(worker) => H::handle_error(&worker.handle, error),
+                Err(worker) => worker.handle.handle_error(error),
             }
         }
     }
@@ -133,9 +132,9 @@ where
 
 impl<H, V, R> RetryableWorker<R> for ValueWorker<H, V, R>
 where
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
     V: 'static + Send + RowsDecoder,
-    H: 'static + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Debug + Clone + Send,
-    R: 'static + Send + Debug + Clone + Request,
+    R: 'static + Send + Debug + Request + Sync,
 {
     fn retries(&self) -> usize {
         self.retries
@@ -147,5 +146,16 @@ where
 
     fn retries_mut(&mut self) -> &mut usize {
         &mut self.retries
+    }
+}
+
+impl<R, H, V> RespondingWorker<R, H, Option<V>> for ValueWorker<H, V, R>
+where
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+    R: 'static + Send + Debug + Request + Sync,
+    V: 'static + Send + RowsDecoder,
+{
+    fn handle(&self) -> &H {
+        &self.handle
     }
 }

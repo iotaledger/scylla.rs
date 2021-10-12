@@ -1,7 +1,3 @@
-use tokio::sync::mpsc::UnboundedReceiver;
-
-use crate::prelude::RowsDecoder;
-
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
@@ -9,6 +5,7 @@ use std::{
     fmt::Debug,
     marker::PhantomData,
 };
+use tokio::sync::mpsc::UnboundedReceiver;
 
 #[derive(Debug, Clone)]
 pub struct BasicWorker;
@@ -71,37 +68,26 @@ impl<R> BasicRetryWorker<R> {
         self.retries = retries;
         self
     }
+}
 
-    pub fn with_handle<H: 'static>(self: Box<Self>, handle: H) -> Box<SelectWorker<H, R>> {
+impl<R, H> IntoRespondingWorker<R, H, Decoder> for BasicRetryWorker<R>
+where
+    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    R: 'static + Send + Debug + Request + Sync + SendRequestExt,
+{
+    type Output = SelectWorker<H, R>;
+    fn with_handle(self: Box<Self>, handle: H) -> Box<SelectWorker<H, R>> {
         SelectWorker::<H, R>::from(*self, handle)
     }
 }
-impl<V> BasicRetryWorker<SelectRequest<V>>
+impl<H, V> IntoRespondingWorker<SelectRequest<V>, H, Option<V>> for BasicRetryWorker<SelectRequest<V>>
 where
-    V: 'static + Send + RowsDecoder,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+    V: 'static + Send + RowsDecoder + Debug,
 {
-    pub fn with_value_handle<H>(self: Box<Self>, handle: H) -> Box<ValueWorker<H, V, SelectRequest<V>>> {
+    type Output = ValueWorker<H, V, SelectRequest<V>>;
+    fn with_handle(self: Box<Self>, handle: H) -> Box<ValueWorker<H, V, SelectRequest<V>>> {
         ValueWorker::<H, V, SelectRequest<V>>::from(*self, handle)
-    }
-
-    pub async fn get_local(self: Box<Self>) -> Result<Option<V>, RequestError> {
-        let (handle, inbox) = tokio::sync::mpsc::unbounded_channel::<Result<Option<V>, WorkerError>>();
-        self.with_value_handle(handle).with_inbox(inbox).get_local().await
-    }
-
-    pub fn get_local_blocking(self: Box<Self>) -> Result<Option<V>, RequestError> {
-        let (handle, inbox) = tokio::sync::mpsc::unbounded_channel::<Result<Option<V>, WorkerError>>();
-        self.with_value_handle(handle).with_inbox(inbox).get_local_blocking()
-    }
-
-    pub async fn get_global(self: Box<Self>) -> Result<Option<V>, RequestError> {
-        let (handle, inbox) = tokio::sync::mpsc::unbounded_channel::<Result<Option<V>, WorkerError>>();
-        self.with_value_handle(handle).with_inbox(inbox).get_global().await
-    }
-
-    pub fn get_global_blocking(self: Box<Self>) -> Result<Option<V>, RequestError> {
-        let (handle, inbox) = tokio::sync::mpsc::unbounded_channel::<Result<Option<V>, WorkerError>>();
-        self.with_value_handle(handle).with_inbox(inbox).get_global_blocking()
     }
 }
 
@@ -113,7 +99,7 @@ impl<R> From<R> for BasicRetryWorker<R> {
 
 impl<R> Worker for BasicRetryWorker<R>
 where
-    R: 'static + Debug + Send + Clone + Request,
+    R: 'static + Debug + Send + Request + Sync,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         Decoder::try_from(giveload)?;
@@ -123,8 +109,10 @@ where
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let Some(id) = cql_error.take_unprepared_id() {
-                handle_unprepared_error(self, id, reporter)
-                    .map_err(|e| anyhow::anyhow!("Error trying to prepare query: {}", e))
+                handle_unprepared_error(self, id, reporter).map_err(|worker| {
+                    error!("Error trying to reprepare query: {}", worker.request().statement());
+                    anyhow::anyhow!("Error trying to reprepare query!")
+                })
             } else {
                 self.retry().map_err(|_| anyhow::anyhow!("Cannot retry!"))
             }
@@ -136,7 +124,7 @@ where
 
 impl<R> RetryableWorker<R> for BasicRetryWorker<R>
 where
-    R: 'static + Debug + Send + Clone + Request,
+    R: 'static + Debug + Send + Request + Sync,
 {
     fn retries(&self) -> usize {
         self.retries
@@ -159,7 +147,7 @@ pub struct SpawnableRespondWorker<R, I, W> {
 
 impl<R, I, W> SpawnableRespondWorker<R, I, W>
 where
-    R: Request + Clone + Debug + Send,
+    R: Request + Debug + Send,
     W: RetryableWorker<R> + Clone,
 {
     pub fn new(inbox: I, worker: W) -> Box<Self> {
@@ -170,75 +158,76 @@ where
         })
     }
 
-    pub fn send_local(&self) -> Result<DecodeResult<R::Marker>, RequestError>
+    fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
+        R: SendRequestExt,
     {
-        let worker = Box::new(self.worker.clone());
-        send_local(worker.request().token(), worker.request().payload().clone(), worker)?;
-        Ok(DecodeResult::new(R::marker(), R::TYPE))
+        Box::new(self.worker.clone()).send_local();
+        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
-
-    pub fn send_global(&self) -> Result<DecodeResult<R::Marker>, RequestError>
+    fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
+        R: SendRequestExt,
     {
-        let worker = Box::new(self.worker.clone());
-        send_global(worker.request().token(), worker.request().payload().clone(), worker)?;
-        Ok(DecodeResult::new(R::marker(), R::TYPE))
+        Box::new(self.worker.clone()).send_global();
+        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
 }
 
-#[async_trait::async_trait]
-impl<R, W, O> GetRequestExt<O, R> for SpawnableRespondWorker<R, UnboundedReceiver<Result<O, WorkerError>>, W>
+impl<R, W> SpawnableRespondWorker<R, UnboundedReceiver<Result<Decoder, WorkerError>>, W>
 where
-    R: 'static + Request + Clone + Debug + Send + Sync,
-    W: 'static + RetryableWorker<R> + Clone + Send + Sync,
-    O: 'static + Send,
+    R: 'static + SendRequestExt + Clone + Debug + Send + Sync,
+    W: 'static + RetryableWorker<R> + Clone,
 {
-    async fn get_local(&mut self) -> Result<O, RequestError>
+    pub async fn get_local(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
     {
-        self.send_local()?;
-        Ok(self
-            .inbox
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+        let marker = Box::new(self.worker.clone()).send_local()?;
+        Ok(marker.try_decode(
+            self.inbox
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??,
+        )?)
     }
 
-    fn get_local_blocking(&mut self) -> Result<O, RequestError>
+    pub fn get_local_blocking(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
     {
-        self.send_local()?;
-        Ok(self
-            .inbox
-            .blocking_recv()
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+        let marker = Box::new(self.worker.clone()).send_local()?;
+        Ok(marker.try_decode(
+            self.inbox
+                .blocking_recv()
+                .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??,
+        )?)
     }
 
-    async fn get_global(&mut self) -> Result<O, RequestError>
+    pub async fn get_global(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
     {
-        self.send_global()?;
-        Ok(self
-            .inbox
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+        let marker = Box::new(self.worker.clone()).send_global()?;
+        Ok(marker.try_decode(
+            self.inbox
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??,
+        )?)
     }
 
-    fn get_global_blocking(&mut self) -> Result<O, RequestError>
+    pub fn get_global_blocking(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
     {
-        self.send_global()?;
-        Ok(self
-            .inbox
-            .blocking_recv()
-            .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??)
+        let marker = Box::new(self.worker.clone()).send_global()?;
+        Ok(marker.try_decode(
+            self.inbox
+                .blocking_recv()
+                .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??,
+        )?)
     }
 }

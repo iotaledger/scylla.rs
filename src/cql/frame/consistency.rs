@@ -6,7 +6,10 @@
 use anyhow::anyhow;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use std::convert::{TryFrom, TryInto};
+use std::convert::{
+    TryFrom,
+    TryInto,
+};
 #[derive(Debug, FromPrimitive)]
 #[repr(u16)]
 /// The consistency level enum.

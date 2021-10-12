@@ -3,7 +3,11 @@
 
 //! This module implements the needed structure and traits used for successful autentication.
 
-use super::decoder::{bytes, Decoder, Frame};
+use super::decoder::{
+    bytes,
+    Decoder,
+    Frame,
+};
 use std::convert::TryFrom;
 
 /// The structure for successful autentication.

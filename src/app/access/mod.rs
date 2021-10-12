@@ -24,10 +24,7 @@ pub(crate) mod select;
 pub(crate) mod update;
 
 use super::{
-    worker::{
-        BasicRetryWorker,
-        BasicWorker,
-    },
+    worker::BasicRetryWorker,
     Worker,
     WorkerError,
 };
@@ -37,23 +34,24 @@ use crate::{
             Ring,
             RingSendError,
         },
-        stage::reporter::{
-            ReporterEvent,
-            ReporterHandle,
-        },
+        stage::reporter::ReporterEvent,
     },
     cql::{
+        query::StatementType,
         Consistency,
-        Prepare,
+        Decoder,
         PreparedStatement,
         Query,
         QueryBuild,
         QueryBuilder,
         QueryConsistency,
         QueryOrPrepared,
+        QueryPagingState,
+        QuerySerialConsistency,
         QueryStatement,
         QueryValues,
         RowsDecoder,
+        TokenEncodeChain,
         Values,
         VoidDecoder,
     },
@@ -63,7 +61,6 @@ use crate::{
         TokenEncoder,
     },
 };
-use async_trait::async_trait;
 pub use batch::*;
 pub use delete::{
     Delete,
@@ -89,8 +86,12 @@ pub use select::{
 use std::{
     borrow::Cow,
     convert::TryInto,
+    fmt::Debug,
     marker::PhantomData,
-    ops::Deref,
+    ops::{
+        Deref,
+        DerefMut,
+    },
 };
 use thiserror::Error;
 pub use update::{
@@ -143,74 +144,96 @@ pub trait ComputeToken {
 }
 
 pub trait Request {
-    type Marker: 'static + Send;
-    const TYPE: RequestType;
-
     fn token(&self) -> i64;
 
-    fn marker() -> Self::Marker;
     /// Get the statement that was used to create this request
     fn statement(&self) -> &Cow<'static, str>;
 
     /// Get the request payload
     fn payload(&self) -> &Vec<u8>;
 
-    fn into_payload(self) -> Vec<u8>;
+    fn payload_mut(&mut self) -> &mut Vec<u8>;
+
+    fn into_payload(self) -> Vec<u8>
+    where
+        Self: Sized;
 }
 
-pub trait SendRequestExt<R: Request>: RetryableWorker<R> {
-    /// Send a local request using the keyspace impl and return a type marker
-    fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_local(self.request().token(), self.request().payload().clone(), self)?;
-        Ok(DecodeResult::new(R::marker(), R::TYPE))
+#[async_trait::async_trait]
+pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
+    type Marker: 'static + Marker;
+    const TYPE: RequestType;
+
+    fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_local(self.token(), self.payload().clone(), BasicRetryWorker::new(self))?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
-    /// Send a global request using the keyspace impl and return a type marker
-    fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_global(self.request().token(), self.request().payload().clone(), self)?;
-        Ok(DecodeResult::new(R::marker(), R::TYPE))
+    fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_global(self.token(), self.payload().clone(), BasicRetryWorker::new(self))?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
-    fn retry(mut self: Box<Self>) -> Result<(), Box<Self>>
+    async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        Self: 'static + Sized,
+        Self::Marker: Send + Sync,
     {
-        if self.retries() > 0 {
-            *self.retries_mut() -= 1;
-            // currently we assume all cql/worker errors are retryable, but we might change this in future
-            tokio::spawn(async { self.send_global() });
-            Ok(())
-        } else {
-            Err(self)
+        BasicRetryWorker::new(self).get_local().await
+    }
+
+    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError> {
+        BasicRetryWorker::new(self).get_local_blocking()
+    }
+
+    async fn get_global(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+    {
+        BasicRetryWorker::new(self).get_global().await
+    }
+
+    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError> {
+        BasicRetryWorker::new(self).get_global_blocking()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CommonRequest {
+    pub(crate) token: i64,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) statement: Cow<'static, str>,
+}
+
+impl CommonRequest {
+    pub fn new(statement: &str, payload: Vec<u8>) -> Self {
+        Self {
+            token: 0,
+            payload,
+            statement: statement.to_string().into(),
         }
     }
 }
-impl<T, R: Request> SendRequestExt<R> for T where T: RetryableWorker<R> {}
 
-/// Unifying trait for requests which defines shared functionality
-#[async_trait]
-pub trait GetRequestExt<O: Send, R: Request> {
-    async fn get_local(&mut self) -> Result<O, RequestError>
-    where
-        Self: Sized;
+impl Request for CommonRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
 
-    fn get_local_blocking(&mut self) -> Result<O, RequestError>
-    where
-        Self: Sized;
+    fn statement(&self) -> &Cow<'static, str> {
+        &self.statement()
+    }
 
-    async fn get_global(&mut self) -> Result<O, RequestError>
-    where
-        Self: Sized;
+    fn payload(&self) -> &Vec<u8> {
+        &self.payload
+    }
 
-    fn get_global_blocking(&mut self) -> Result<O, RequestError>
-    where
-        Self: Sized;
+    fn payload_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.payload
+    }
+
+    fn into_payload(self) -> Vec<u8> {
+        self.payload
+    }
 }
 
 /// Defines two helper methods to specify statement / id
@@ -307,6 +330,42 @@ impl DecodeVoid {
     }
 }
 
+pub trait Marker {
+    type Output: Send;
+
+    fn new() -> Self;
+
+    fn try_decode(&self, d: Decoder) -> anyhow::Result<Self::Output> {
+        Self::internal_try_decode(d)
+    }
+
+    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output>;
+}
+
+impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
+    type Output = Option<T>;
+
+    fn new() -> Self {
+        DecodeRows::new()
+    }
+
+    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
+        T::try_decode_rows(d)
+    }
+}
+
+impl Marker for DecodeVoid {
+    type Output = ();
+
+    fn new() -> Self {
+        DecodeVoid::new()
+    }
+
+    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
+        VoidDecoder::try_decode_void(d)
+    }
+}
+
 /// A synchronous marker type returned when sending
 /// a query to the `Ring`. Provides the request's type
 /// as well as an appropriate decoder which can be used
@@ -381,7 +440,6 @@ impl<T> Deref for DecodeResult<T> {
 
 #[doc(hidden)]
 pub mod tests {
-
     use super::*;
     use crate::{
         cql::query::StatementType,
@@ -474,73 +532,6 @@ pub mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct BatchWorker<S> {
-        request: BatchRequest<S>,
-    }
-
-    impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-            // Do nothing
-            Ok(())
-        }
-
-        fn handle_error(
-            self: Box<Self>,
-            error: crate::app::worker::WorkerError,
-            reporter: &crate::app::stage::reporter::ReporterHandle,
-        ) -> anyhow::Result<()> {
-            if let WorkerError::Cql(mut cql_error) = error {
-                if let Some(id) = cql_error.take_unprepared_id() {
-                    if let Some(statement) = self.request.get_statement(&id) {
-                        if let Ok(prepare) = Prepare::new().statement(&statement).build() {
-                            let prepare_worker = PrepareWorker {
-                                retries: 3,
-                                payload: prepare.0.clone(),
-                            };
-                            let prepare_request = ReporterEvent::Request {
-                                worker: Box::new(prepare_worker),
-                                payload: prepare.0,
-                            };
-                            reporter.send(prepare_request).ok();
-                            let payload = self.request.payload().clone();
-                            let retry_request = ReporterEvent::Request { worker: self, payload };
-                            reporter.send(retry_request).ok();
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct PrepareWorker {
-        pub retries: usize,
-        pub payload: Vec<u8>,
-    }
-
-    impl Worker for PrepareWorker {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-            // Do nothing
-            Ok(())
-        }
-
-        fn handle_error(self: Box<Self>, _error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
-            if self.retries > 0 {
-                let prepare_worker = PrepareWorker {
-                    retries: self.retries - 1,
-                    payload: self.payload.clone(),
-                };
-                let _request = ReporterEvent::Request {
-                    worker: Box::new(prepare_worker),
-                    payload: self.payload.clone(),
-                };
-            }
-            Ok(())
-        }
-    }
-
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
@@ -597,7 +588,7 @@ pub mod tests {
             .consistency(Consistency::One)
             .build()
             .unwrap()
-            .send_local()
+            .get_local_blocking()
             .unwrap();
 
         "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
@@ -648,7 +639,6 @@ pub mod tests {
         let id = keyspace.insert_id::<u32, f32>();
         let statement = req.get_statement(&id).unwrap();
         assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
-        let worker = BatchWorker { request: req.clone() };
-        let _res = req.clone().send_local(Box::new(worker));
+        let _res = req.clone().send_local().unwrap();
     }
 }

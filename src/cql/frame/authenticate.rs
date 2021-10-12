@@ -3,7 +3,11 @@
 
 //! This module implements the structure used in autentication process.
 
-use super::decoder::{string, Decoder, Frame};
+use super::decoder::{
+    string,
+    Decoder,
+    Frame,
+};
 use std::convert::TryFrom;
 
 /// The `Authenticate` sturcutre with the autenticator name.

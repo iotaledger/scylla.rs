@@ -1,18 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fmt::Debug;
-
 use super::*;
-use crate::{
-    cql::{
-        query::StatementType,
-        QueryPagingState,
-        QuerySerialConsistency,
-        TokenEncodeChain,
-    },
-    prelude::TokenEncoder,
-};
 
 /// Select query trait which creates a `SelectRequest`
 /// that can be sent to the `Ring`.
@@ -181,7 +170,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
             keyspace: self,
             statement: statement.to_owned().into(),
             key: variables,
-            builder: QueryStatement::encode_statement(Query::new(), statement),
+            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
     /// Specifies the returned Value type for an upcoming select request using a prepared statement id
@@ -195,7 +184,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
             keyspace: self,
             statement: statement.to_owned().into(),
             key: variables,
-            builder: PreparedStatement::encode_statement(Query::new(), statement),
+            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
 }
@@ -333,12 +322,12 @@ impl<'a, S: Keyspace, V: RowsDecoder> SelectBuilder<'a, S, [&dyn TokenEncoder], 
         }
         let query = self.builder.build()?;
         // create the request
-        Ok(SelectRequest {
+        Ok(CommonRequest {
             token: token_chain.finish(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-            _marker: PhantomData,
-        })
+        }
+        .into())
     }
 }
 
@@ -347,12 +336,12 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
-        Ok(SelectRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-            _marker: PhantomData,
-        })
+        }
+        .into())
     }
 }
 
@@ -365,12 +354,12 @@ impl<'a, S: Keyspace, V: RowsDecoder> SelectBuilder<'a, S, [&dyn TokenEncoder], 
         }
         let query = self.builder.build()?;
         // create the request
-        Ok(SelectRequest {
+        Ok(CommonRequest {
             token: token_chain.finish(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-            _marker: PhantomData,
-        })
+        }
+        .into())
     }
 }
 
@@ -379,12 +368,12 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
-        Ok(SelectRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-            _marker: PhantomData,
-        })
+        }
+        .into())
     }
 }
 
@@ -415,12 +404,12 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder, T> SelectBuilder<'a, S, K
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
-        Ok(SelectRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-            _marker: PhantomData,
-        })
+        }
+        .into())
     }
 }
 impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
@@ -440,66 +429,78 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder, T> SelectBuilder<'a, S, K
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
-        Ok(SelectRequest {
+        Ok(CommonRequest {
             token: self.key.token(),
-            inner: query.into(),
+            payload: query.into(),
             statement: self.statement,
-            _marker: PhantomData,
-        })
+        }
+        .into())
     }
 }
 
 /// A request to select a record which can be sent to the ring
 pub struct SelectRequest<V> {
-    token: i64,
-    inner: Vec<u8>,
-    statement: Cow<'static, str>,
+    inner: CommonRequest,
     _marker: PhantomData<fn(V) -> V>,
+}
+
+impl<V> From<CommonRequest> for SelectRequest<V> {
+    fn from(inner: CommonRequest) -> Self {
+        SelectRequest {
+            inner,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<V> Deref for SelectRequest<V> {
+    type Target = CommonRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<V> DerefMut for SelectRequest<V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
 }
 
 impl<V> Debug for SelectRequest<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SelectRequest")
-            .field("token", &self.token)
-            .field("inner", &self.inner)
-            .field("statement", &self.statement)
-            .finish()
+        f.debug_struct("SelectRequest").field("inner", &self.inner).finish()
     }
 }
 
 impl<V> Clone for SelectRequest<V> {
     fn clone(&self) -> Self {
         Self {
-            token: self.token,
             inner: self.inner.clone(),
-            statement: self.statement.clone(),
             _marker: PhantomData,
         }
     }
 }
 
 impl<V: 'static> Request for SelectRequest<V> {
-    type Marker = DecodeRows<V>;
-    const TYPE: RequestType = RequestType::Select;
-
     fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn marker() -> Self::Marker {
-        DecodeRows::new()
+        self.inner.token()
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        &self.statement
+        self.inner.statement()
     }
 
     fn payload(&self) -> &Vec<u8> {
-        &self.inner
+        self.inner.payload()
+    }
+
+    fn payload_mut(&mut self) -> &mut Vec<u8> {
+        self.inner.payload_mut()
     }
 
     fn into_payload(self) -> Vec<u8> {
-        self.inner
+        self.inner.into_payload()
     }
 }
 
@@ -510,43 +511,15 @@ impl<V> SelectRequest<V> {
         DecodeResult::select()
     }
 
-    pub fn send_local(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_local(self.token(), self.into_payload(), BasicWorker::new())?;
-        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
-    }
-
-    pub fn send_global(self) -> Result<DecodeResult<<Self as Request>::Marker>, RequestError>
-    where
-        Self: 'static + Sized,
-    {
-        send_global(self.token(), self.into_payload(), BasicWorker::new())?;
-        Ok(DecodeResult::new(<Self as Request>::marker(), <Self as Request>::TYPE))
-    }
-
     pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
         BasicRetryWorker::new(self)
     }
 }
-impl<V> SelectRequest<V>
+
+impl<V> SendRequestExt for SelectRequest<V>
 where
-    V: 'static + Send + RowsDecoder,
+    V: 'static + Send + RowsDecoder + Debug,
 {
-    pub async fn get_local(self) -> Result<Option<V>, RequestError> {
-        self.worker().get_local().await
-    }
-
-    pub fn get_local_blocking(self) -> Result<Option<V>, RequestError> {
-        self.worker().get_local_blocking()
-    }
-
-    pub async fn get_global(self) -> Result<Option<V>, RequestError> {
-        self.worker().get_global().await
-    }
-
-    pub fn get_global_blocking(self) -> Result<Option<V>, RequestError> {
-        self.worker().get_global_blocking()
-    }
+    type Marker = DecodeRows<V>;
+    const TYPE: RequestType = RequestType::Select;
 }

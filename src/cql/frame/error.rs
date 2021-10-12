@@ -5,12 +5,22 @@
 
 use super::{
     consistency::Consistency,
-    decoder::{self, Decoder, Frame},
+    decoder::{
+        self,
+        Decoder,
+        Frame,
+    },
 };
-use anyhow::{bail, ensure};
+use anyhow::{
+    bail,
+    ensure,
+};
 // use num_derive::FromPrimitive;
 // use num_traits::FromPrimitive;
-use std::convert::{TryFrom, TryInto};
+use std::convert::{
+    TryFrom,
+    TryInto,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
