@@ -277,6 +277,24 @@ impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
         self.stage.value_count += 1;
         self
     }
+
+    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
+    where
+        Self: Sized,
+    {
+        match values.len() {
+            0 => self,
+            1 => self.value(values.first().unwrap()),
+            _ => {
+                let mut iter = values.iter();
+                let mut builder = self.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
+    }
 }
 
 impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchValues> {
