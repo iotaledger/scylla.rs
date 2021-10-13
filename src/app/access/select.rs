@@ -6,83 +6,42 @@ use super::*;
 /// Select query trait which creates a `SelectRequest`
 /// that can be sent to the `Ring`.
 ///
-/// ## Examples
+/// ## Example
 /// ```
-/// use scylla_rs::{
-///     app::{
-///         access::{
-///             ComputeToken,
-///             GetSelectRequest,
-///             Keyspace,
-///             Select,
-///         },
-///         worker::{
-///             ValueWorker,
-///             WorkerError,
-///         },
-///     },
-///     cql::{
-///         Batch,
-///         Consistency,
-///         PreparedStatement,
-///         RowsDecoder,
-///         Values,
-///     },
-/// };
-/// use std::borrow::Cow;
-/// # use scylla_rs::cql::Decoder;
-/// # #[derive(Default, Clone, Debug)]
-/// # struct MyKeyspace {
-/// #     pub name: Cow<'static, str>,
-/// # }
-/// #
+/// use crate::app::access::*;
+/// #[derive(Clone, Debug)]
+/// struct MyKeyspace {
+///     pub name: Cow<'static, str>,
+/// }
 /// # impl MyKeyspace {
-/// #     pub fn new() -> Self {
+/// #     pub fn new(name: &str) -> Self {
 /// #         Self {
-/// #             name: "my_keyspace".into(),
+/// #             name: name.into(),
 /// #         }
 /// #     }
 /// # }
-///
-/// # impl Keyspace for MyKeyspace {
-/// #     fn name(&self) -> &Cow<'static, str> {
-/// #         &self.name
-/// #     }
-/// # }
-/// # impl ComputeToken<i32> for MyKeyspace {
-/// #     fn token(_key: &i32) -> i64 {
-/// #         rand::random()
-/// #     }
-/// # }
+/// impl Keyspace for MyKeyspace {
+///     fn name(&self) -> &Cow<'static, str> {
+///         &self.name
+///     }
+/// }
 /// # type MyKeyType = i32;
 /// # type MyValueType = f32;
-/// # impl RowsDecoder<MyKeyType, MyValueType> for MyKeyspace {
-/// #     type Row = f32;
-/// #     fn try_decode(decoder: Decoder) -> anyhow::Result<Option<f32>> {
-/// #         todo!()
-/// #     }
-/// # }
 /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
-///         format!("SELECT * FROM {}.table where key = ?", self.name()).into()
+///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
 ///     }
-///
 ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-///         builder.value(key)
+///         builder.bind(key)
 ///     }
 /// }
-///
-/// # let keyspace = MyKeyspace::new();
 /// # let my_key = 1;
-/// let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Result<Option<MyValueType>, WorkerError>>();
-/// # use std::marker::PhantomData;
-/// let worker = ValueWorker::boxed(sender, keyspace.clone(), my_key, 3, PhantomData::<MyValueType>);
-///
-/// let request = keyspace // A Scylla keyspace
-///     .select::<MyValueType>(&my_key) // Get the Select Request by specifying the value type
+/// let request = Mykeyspace::new("my_keyspace")
+///     .select::<MyValueType>(&my_key)
 ///     .consistency(Consistency::One)
 ///     .build()?;
+/// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub trait Select<K, V>: Keyspace {
@@ -102,43 +61,166 @@ pub trait Select<K, V>: Keyspace {
     fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
 }
 
-/// Defines a helper method to specify the Value type
-/// expected by the `Select` trait.
+/// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
+
 pub trait GetStaticSelectRequest<K>: Keyspace {
-    /// Specifies the returned Value type for an upcoming select request
+    /// Create a static select request from a keyspace with a `Select<K, V>` definition. Will use the default `type
+    /// QueryOrPrepared` from the trait definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: Cow<'static, str>,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> &Cow<'static, str> {
+    ///         &self.name
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # type MyValueType = f32;
+    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///     }
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+    ///         builder.bind(key)
+    ///     }
+    /// }
+    /// # let my_key = 1;
+    /// let res: Option<MyValueType> = Mykeyspace::new("my_keyspace")
+    ///     .select::<MyValueType>(&my_key)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Select<K, V>,
     {
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
             statement: self.statement(),
             key,
             builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a query statement
+
+    /// Create a static select query request from a keyspace with a `Select<K, V>` definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: Cow<'static, str>,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> &Cow<'static, str> {
+    ///         &self.name
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # type MyValueType = f32;
+    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///     }
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+    ///         builder.bind(key)
+    ///     }
+    /// }
+    /// # let my_key = 1;
+    /// let res: Option<MyValueType> = Mykeyspace::new("my_keyspace")
+    ///     .select_query::<MyValueType>(&my_key)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Select<K, V>,
     {
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
             statement: self.statement(),
             key,
             builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
+
+    /// Create a static select prepared request from a keyspace with a `Select<K, V>` definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: Cow<'static, str>,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> &Cow<'static, str> {
+    ///         &self.name
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # type MyValueType = f32;
+    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///     }
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+    ///         builder.bind(key)
+    ///     }
+    /// }
+    /// # let my_key = 1;
+    /// let res: Option<MyValueType> = Mykeyspace::new("my_keyspace")
+    ///     .select_prepared::<MyValueType>(&my_key)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Select<K, V>,
     {
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
             statement: self.statement(),
             key,
             builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
@@ -146,98 +228,196 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     }
 }
 
+/// Specifies helper functions for creating dynamic select requests from anything that can be interpreted as a keyspace
+
 pub trait GetDynamicSelectRequest: Keyspace {
-    /// Specifies the returned Value type for an upcoming select request
+    /// Create a dynamic select request from a statement and variables. Can be specified as either
+    /// a query or prepared statement. The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// let res: Option<f32> = "my_keyspace"
+    ///     .select_with::<f32>(
+    ///         "SELECT val FROM {{keyspace}}.table where key = ?",
+    ///         &[&3],
+    ///         StatementType::Query,
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn select_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
+        key: &'a [&(dyn TokenChainer + Sync)],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
-            StatementType::Query => self.select_query_with(statement, variables),
-            StatementType::Prepared => self.select_prepared_with(statement, variables),
+            StatementType::Query => self.select_query_with(statement, key),
+            StatementType::Prepared => self.select_prepared_with(statement, key),
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a query statement
+
+    /// Create a dynamic select query request from a statement and variables. The token `{{keyspace}}` will be replaced
+    /// with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// let res: Option<f32> = "my_keyspace"
+    ///     .select_query_with::<f32>(
+    ///         "SELECT val FROM {{keyspace}}.table where key = ?",
+    ///         &[&3],
+    ///         StatementType::Query,
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn select_query_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenChainer + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
             statement: statement.to_owned().into(),
-            key: variables,
+            key,
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
+
+    /// Create a dynamic select prepared request from a statement and variables. The token `{{keyspace}}` will be
+    /// replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// let res: Option<f32> = "my_keyspace"
+    ///     .select_prepared_with::<f32>(
+    ///         "SELECT val FROM {{keyspace}}.table where key = ?",
+    ///         &[&3],
+    ///         StatementType::Query,
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn select_prepared_with<'a, V>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn TokenChainer + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
             statement: statement.to_owned().into(),
-            key: variables,
+            key,
             builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
 }
 
-pub trait AsDynamicSelectRequest: Statement
+/// Specifies helper functions for creating dynamic select requests from anything that can be interpreted as a statement
+
+pub trait AsDynamicSelectRequest: ToStatement
 where
     Self: Sized,
 {
-    /// Specifies the returned Value type for an upcoming select request
+    /// Create a dynamic select request from a statement and variables. Can be specified as either
+    /// a query or prepared statement.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
+    ///     .as_select::<f32>(&[&3], StatementType::Query)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn as_select<'a, V>(
-        &'a self,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
-            StatementType::Query => self.as_select_query(variables),
-            StatementType::Prepared => self.as_select_prepared(variables),
+            StatementType::Query => self.as_select_query(key),
+            StatementType::Prepared => self.as_select_prepared(key),
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a query statement
+
+    /// Create a dynamic select query request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
+    ///     .as_select_query::<f32>(&[&3])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn as_select_query<'a, V>(
-        &'a self,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+        let statement = self.to_statement();
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
-            statement: self.to_string().to_owned().into(),
-            key: variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
+            keyspace: PhantomData,
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
+            key,
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
+
+    /// Create a dynamic select prepared request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
+    ///     .as_select_prepared::<f32>(&[&3])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn as_select_prepared<'a, V>(
-        &'a self,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+        let statement = self.to_statement();
         SelectBuilder {
             _marker: PhantomData,
-            keyspace: self,
-            statement: self.to_string().to_owned().into(),
-            key: variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
+            keyspace: PhantomData,
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
+            key,
         }
     }
 }
 
 impl<S: Keyspace, K> GetStaticSelectRequest<K> for S {}
 impl<S: Keyspace> GetDynamicSelectRequest for S {}
-impl<S: Statement> AsDynamicSelectRequest for S {}
+impl<S: ToStatement> AsDynamicSelectRequest for S {}
 
 pub struct SelectBuilder<'a, S, K: ?Sized, V, Stage, T> {
-    keyspace: &'a S,
+    keyspace: PhantomData<fn(S) -> S>,
     statement: Cow<'static, str>,
     key: &'a K,
     builder: QueryBuilder<Stage>,
@@ -256,12 +436,12 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency, Sta
     }
 }
 
-impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> SelectBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency).values(self.key);
+    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
+        let builder = self.builder.consistency(consistency).bind(self.key);
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -304,18 +484,14 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
 }
 
 impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest>
+    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest>
 {
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: token_chain.finish(),
+            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -338,18 +514,14 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
 }
 
 impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest>
+    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest>
 {
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: token_chain.finish(),
+            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -407,18 +579,14 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
     }
 }
 impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryPagingState, DynamicRequest>
+    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryPagingState, DynamicRequest>
 {
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: token_chain.finish(),
+            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -453,18 +621,14 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder>
     }
 }
 impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QuerySerialConsistency, DynamicRequest>
+    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QuerySerialConsistency, DynamicRequest>
 {
     /// Build the SelectRequest
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: token_chain.finish(),
+            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -545,6 +709,7 @@ impl<V> SelectRequest<V> {
         DecodeResult::select()
     }
 
+    /// Get a basic worker for this request
     pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
         BasicRetryWorker::new(self)
     }

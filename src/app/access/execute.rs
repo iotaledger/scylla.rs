@@ -3,8 +3,29 @@
 
 use super::*;
 
+/// Specifies helper functions for creating dynamic requests
 pub trait GetDynamicExecuteRequest: Keyspace {
-    /// Specifies the returned Value type for an upcoming execute request
+    /// Create a dynamic request from a statement and variables. Can be specified as either
+    /// a query or prepared statement. The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "my_keyspace"
+    ///     .execute(
+    ///         "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
+    ///             key text PRIMARY KEY,
+    ///             data blob,
+    ///         )",
+    ///         &[],
+    ///         StatementType::Query,
+    ///     )
+    ///     .consistency(Consistency::All)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn execute<'a>(
         &self,
         statement: &str,
@@ -16,7 +37,27 @@ pub trait GetDynamicExecuteRequest: Keyspace {
             StatementType::Prepared => self.execute_prepared(statement, variables),
         }
     }
-    /// Specifies the returned Value type for an upcoming execute request using a query statement
+
+    /// Create a dynamic query request from a statement and variables.
+    /// The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "my_keyspace"
+    ///     .execute_query(
+    ///         "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
+    ///             key text PRIMARY KEY,
+    ///             data blob,
+    ///         )",
+    ///         &[],
+    ///     )
+    ///     .consistency(Consistency::All)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn execute_query<'a>(
         &self,
         statement: &str,
@@ -28,7 +69,27 @@ pub trait GetDynamicExecuteRequest: Keyspace {
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
-    /// Specifies the returned Value type for an upcoming execute request using a prepared statement id
+
+    /// Create a dynamic prepared request from a statement and variables.
+    /// The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "my_keyspace"
+    ///     .execute_prepared(
+    ///         "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
+    ///             key text PRIMARY KEY,
+    ///             data blob,
+    ///         )",
+    ///         &[],
+    ///     )
+    ///     .consistency(Consistency::All)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn execute_prepared<'a>(
         &self,
         statement: &str,
@@ -42,11 +103,27 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     }
 }
 
-pub trait AsDynamicExecuteRequest: Statement
+/// Specifies helper functions for creating dynamic requests from anything that can be interpreted as a statement
+pub trait AsDynamicExecuteRequest: ToStatement
 where
     Self: Sized,
 {
-    /// Specifies the returned Value type for an upcoming execute request
+    /// Create a dynamic request from a statement and variables. Can be specified as either
+    /// a query or prepared statement.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "CREATE KEYSPACE IF NOT EXISTS my_keyspace
+    /// WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
+    /// AND durable_writes = true"
+    ///     .as_execute(&[], StatementType::Query)
+    ///     .consistency(Consistency::All)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn as_execute<'a>(
         &self,
         variables: &'a [&'a (dyn ColumnEncoder + Sync)],
@@ -57,32 +134,65 @@ where
             StatementType::Prepared => self.as_execute_prepared(variables),
         }
     }
-    /// Specifies the returned Value type for an upcoming execute request using a query statement
+
+    /// Create a dynamic query request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "CREATE KEYSPACE IF NOT EXISTS my_keyspace
+    /// WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
+    /// AND durable_writes = true"
+    ///     .as_execute_query(&[])
+    ///     .consistency(Consistency::All)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn as_execute_query<'a>(
         &self,
         variables: &'a [&'a (dyn ColumnEncoder + Sync)],
     ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+        let statement = self.to_statement();
         ExecuteBuilder {
-            statement: self.to_string().to_owned().into(),
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
         }
     }
-    /// Specifies the returned Value type for an upcoming execute request using a prepared statement id
+
+    /// Create a dynamic query request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "CREATE KEYSPACE IF NOT EXISTS my_keyspace
+    /// WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
+    /// AND durable_writes = true"
+    ///     .as_execute_prepared(&[])
+    ///     .consistency(Consistency::All)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn as_execute_prepared<'a>(
         &self,
         variables: &'a [&'a (dyn ColumnEncoder + Sync)],
     ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+        let statement = self.to_statement();
         ExecuteBuilder {
-            statement: self.to_string().to_owned().into(),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
         }
     }
 }
 
 impl<S: Keyspace> GetDynamicExecuteRequest for S {}
-impl<S: Statement> AsDynamicExecuteRequest for S {}
+impl<S: ToStatement> AsDynamicExecuteRequest for S {}
+
 pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
     pub(crate) statement: Cow<'static, str>,
     pub(crate) variables: &'a V,
@@ -94,7 +204,7 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> 
         self,
         consistency: Consistency,
     ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryValues> {
-        let builder = self.builder.consistency(consistency).values(self.variables);
+        let builder = self.builder.consistency(consistency).bind(self.variables);
         ExecuteBuilder {
             statement: self.statement,
             variables: self.variables,
@@ -163,6 +273,7 @@ impl DerefMut for ExecuteRequest {
 }
 
 impl ExecuteRequest {
+    /// Get a basic worker for this request
     pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
         BasicRetryWorker::new(self)
     }

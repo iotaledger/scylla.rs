@@ -237,22 +237,11 @@ impl Values for QueryBuilder<QueryFlags> {
         }
     }
 
-    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
+    fn skip_value(self) -> Self::Return
     where
         Self: Sized,
     {
-        match values.len() {
-            0 => self.skip_values(),
-            1 => self.value(values.first().unwrap()),
-            _ => {
-                let mut iter = values.iter();
-                let mut builder = self.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        }
+        self.skip_values()
     }
 }
 
@@ -372,22 +361,11 @@ impl Values for QueryBuilder<QueryValues> {
         self
     }
 
-    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
+    fn skip_value(self) -> Self::Return
     where
         Self: Sized,
     {
-        match values.len() {
-            0 => self,
-            1 => self.value(values.first().unwrap()),
-            _ => {
-                let mut iter = values.iter();
-                let mut builder = self.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        }
+        self
     }
 }
 impl QueryBuilder<QueryValues> {

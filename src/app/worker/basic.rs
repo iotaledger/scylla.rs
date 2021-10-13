@@ -39,7 +39,7 @@ where
     R: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BasicWorker")
+        f.debug_struct("BasicRetryWorker")
             .field("request", &self.request)
             .field("retries", &self.retries)
             .finish()

@@ -42,6 +42,7 @@ use crate::{
     },
     cql::{
         query::StatementType,
+        Bindable,
         Consistency,
         Decoder,
         DynValues,
@@ -56,7 +57,7 @@ use crate::{
         QueryStatement,
         QueryValues,
         RowsDecoder,
-        TokenEncodeChain,
+        TokenChainer,
         Values,
         VoidDecoder,
     },
@@ -68,12 +69,18 @@ use crate::{
 };
 pub use batch::*;
 pub use delete::{
+    AsDynamicDeleteRequest,
     Delete,
     DeleteRequest,
     GetDynamicDeleteRequest,
     GetStaticDeleteRequest,
 };
-pub use execute::*;
+use dyn_clone::DynClone;
+pub use execute::{
+    AsDynamicExecuteRequest,
+    ExecuteRequest,
+    GetDynamicExecuteRequest,
+};
 pub use insert::{
     AsDynamicInsertRequest,
     GetDynamicInsertRequest,
@@ -81,7 +88,10 @@ pub use insert::{
     Insert,
     InsertRequest,
 };
-pub use keyspace::Keyspace;
+pub use keyspace::{
+    AsBytes,
+    Keyspace,
+};
 pub use prepare::*;
 pub use select::{
     AsDynamicSelectRequest,
@@ -90,8 +100,8 @@ pub use select::{
     Select,
     SelectRequest,
 };
+pub use std::borrow::Cow;
 use std::{
-    borrow::Cow,
     convert::TryInto,
     fmt::Debug,
     marker::PhantomData,
@@ -120,8 +130,115 @@ pub enum RequestType {
     Execute = 5,
 }
 
-pub trait Statement: ToString {}
-impl<T> Statement for T where T: ToString {}
+/// Represents anything that can be used to generate a statement.
+/// For instance, a select query string or a keyspace with a `Select<K, V>` impl.
+pub trait ToStatement: DynClone + Debug + Send + Sync {
+    /// Get the statement from this type
+    fn to_statement(&self) -> Cow<'static, str>;
+}
+dyn_clone::clone_trait_object!(ToStatement);
+
+struct UpdateStatement<S: Update<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Update<K, V>, K, V> UpdateStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Update<K, V>, K, V> Clone for UpdateStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Update<K, V> + Debug, K, V> Debug for UpdateStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("UpdateStatement").field(&self.0).finish()
+    }
+}
+struct InsertStatement<S: Insert<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Insert<K, V>, K, V> InsertStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V>, K, V> Clone for InsertStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("InsertStatement").field(&self.0).finish()
+    }
+}
+struct DeleteStatement<S: Delete<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Delete<K, V>, K, V> DeleteStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V>, K, V> Clone for DeleteStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V> + Debug, K, V> Debug for DeleteStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DeleteStatement").field(&self.0).finish()
+    }
+}
+
+struct SelectStatement<S: Select<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Select<K, V>, K, V> SelectStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Select<K, V>, K, V> Clone for SelectStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Select<K, V> + Debug, K, V> Debug for SelectStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SelectStatement").field(&self.0).finish()
+    }
+}
+
+impl<S: Update<K, V> + Debug, K, V> ToStatement for UpdateStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl<S: Delete<K, V> + Debug, K, V> ToStatement for DeleteStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl<S: Select<K, V> + Debug, K, V> ToStatement for SelectStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl ToStatement for String {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.clone().into()
+    }
+}
+
+impl ToStatement for &str {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.to_string().into()
+    }
+}
 
 pub struct DynamicRequest;
 pub struct StaticRequest;
@@ -129,7 +246,7 @@ pub struct ManualBoundRequest<'a> {
     pub(crate) bind_fn: Box<
         dyn Fn(
             Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-            &'a [&(dyn TokenEncoder + Sync)],
+            &'a [&(dyn TokenChainer + Sync)],
             &'a [&(dyn ColumnEncoder + Sync)],
         ) -> QueryBuilder<QueryValues>,
     >,
@@ -318,7 +435,7 @@ impl<V> DecodeRows<V> {
     }
 }
 
-impl<'a, V: RowsDecoder> DecodeRows<V> {
+impl<V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
         V::try_decode_rows(bytes.try_into()?)
@@ -448,8 +565,6 @@ impl<T> Deref for DecodeResult<T> {
 
 #[doc(hidden)]
 pub mod tests {
-    use std::net::SocketAddr;
-
     use super::*;
     use crate::{
         cql::query::StatementType,
@@ -594,7 +709,7 @@ pub mod tests {
                 &[&8.0, &"hello"],
                 StatementType::Query,
             )
-            .bind_values(|builder, keys, values| builder.values(keys).values(values))
+            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
             .consistency(Consistency::One)
             .build()
             .unwrap()
@@ -603,7 +718,7 @@ pub mod tests {
 
         "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
             .as_insert_query(&[&3], &[&8.0, &"hello"])
-            .bind_values(|builder, keys, values| builder.values(keys).values(values))
+            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
             .consistency(Consistency::One)
             .build()
             .unwrap()
@@ -655,6 +770,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_insert2() {
         use crate::prelude::*;
+        use std::net::SocketAddr;
         std::env::set_var("RUST_LOG", "info");
         env_logger::init();
         let node: SocketAddr = std::env::var("SCYLLA_NODE").map_or_else(

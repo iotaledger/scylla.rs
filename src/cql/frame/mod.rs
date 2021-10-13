@@ -42,6 +42,7 @@ pub use decoder::{
 pub use encoder::{
     ColumnEncodeChain,
     ColumnEncoder,
+    TokenChainer,
     TokenEncodeChain,
     TokenEncoder,
 };
@@ -95,22 +96,11 @@ pub trait Values {
     where
         Self: Sized;
     /// Add a slice of values
-    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
+    fn bind<V: Bindable + ?Sized>(self, values: &V) -> Self::Return
     where
         Self: Sized,
     {
-        match values.len() {
-            0 => panic!("No values set!"),
-            1 => self.value(values.first().unwrap()),
-            _ => {
-                let mut iter = values.iter();
-                let mut builder = self.value(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.value(v);
-                }
-                builder
-            }
-        }
+        values.bind(self)
     }
 
     /// Unset value
@@ -119,6 +109,10 @@ pub trait Values {
         Self: Sized;
     /// Set Null value, note: for write queries this will create tombstone for V;
     fn null_value(self) -> Self::Return
+    where
+        Self: Sized;
+
+    fn skip_value(self) -> Self::Return
     where
         Self: Sized;
 }
@@ -131,7 +125,7 @@ pub trait DynValues: Values {
     /// Set Null value dynamically, note: for write queries this will create tombstone for V;
     fn dyn_null_value(self: Box<Self>) -> Self::Return;
 
-    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Self::Return;
+    fn dyn_skip_value(self: Box<Self>) -> Self::Return;
 }
 impl<T> DynValues for T
 where
@@ -149,8 +143,8 @@ where
         self.null_value()
     }
 
-    fn dyn_values(self: Box<Self>, values: &[&dyn ColumnEncoder]) -> Self::Return {
-        self.values(values)
+    fn dyn_skip_value(self: Box<Self>) -> Self::Return {
+        self.skip_value()
     }
 }
 
@@ -162,20 +156,6 @@ impl<T: DynValues + ?Sized> Values for Box<T> {
         Self: Sized,
     {
         T::dyn_value(self, &value)
-    }
-
-    fn values<V: ColumnEncoder + ?Sized>(self, values: &[&V]) -> Self::Return
-    where
-        Self: Sized,
-    {
-        T::dyn_values(
-            self,
-            values
-                .iter()
-                .map(|v| v as &dyn ColumnEncoder)
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
     }
 
     fn unset_value(self) -> Self::Return
@@ -190,5 +170,39 @@ impl<T: DynValues + ?Sized> Values for Box<T> {
         Self: Sized,
     {
         T::dyn_null_value(self)
+    }
+
+    fn skip_value(self) -> Self::Return
+    where
+        Self: Sized,
+    {
+        T::dyn_skip_value(self)
+    }
+}
+
+pub trait Bindable {
+    fn bind<V: Values>(&self, binder: V) -> V::Return;
+}
+
+impl<T: ColumnEncoder> Bindable for T {
+    fn bind<V: Values>(&self, binder: V) -> V::Return {
+        binder.value(self)
+    }
+}
+
+impl<T: Bindable + ColumnEncoder> Bindable for [T] {
+    fn bind<V: Values>(&self, binder: V) -> V::Return {
+        match self.len() {
+            0 => binder.skip_value(),
+            1 => binder.value(self.first().unwrap()),
+            _ => {
+                let mut iter = self.iter();
+                let mut builder = binder.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
     }
 }

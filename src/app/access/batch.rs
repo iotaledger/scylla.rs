@@ -16,89 +16,7 @@ use crate::cql::{
     BatchValues,
     Consistency,
 };
-use dyn_clone::DynClone;
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-};
-
-struct UpdateStatement<S: Update<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Update<K, V>, K, V> UpdateStatement<S, K, V> {
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Update<K, V>, K, V> Clone for UpdateStatement<S, K, V> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Update<K, V> + Debug, K, V> Debug for UpdateStatement<S, K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("UpdateStatement").field(&self.0).finish()
-    }
-}
-struct InsertStatement<S: Insert<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Insert<K, V>, K, V> InsertStatement<S, K, V> {
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Insert<K, V>, K, V> Clone for InsertStatement<S, K, V> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("UpdateStatement").field(&self.0).finish()
-    }
-}
-struct DeleteStatement<S: Delete<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Delete<K, V>, K, V> DeleteStatement<S, K, V> {
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Delete<K, V>, K, V> Clone for DeleteStatement<S, K, V> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Delete<K, V> + Debug, K, V> Debug for DeleteStatement<S, K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("UpdateStatement").field(&self.0).finish()
-    }
-}
-
-pub trait ToStatement: DynClone + Debug + Send + Sync {
-    fn to_statement(&self) -> Cow<str>;
-}
-dyn_clone::clone_trait_object!(ToStatement);
-
-impl<S: Update<K, V> + Debug, K, V> ToStatement for UpdateStatement<S, K, V> {
-    fn to_statement(&self) -> Cow<str> {
-        self.0.statement()
-    }
-}
-
-impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
-    fn to_statement(&self) -> Cow<str> {
-        self.0.statement()
-    }
-}
-
-impl<S: Delete<K, V> + Debug, K, V> ToStatement for DeleteStatement<S, K, V> {
-    fn to_statement(&self) -> Cow<str> {
-        self.0.statement()
-    }
-}
-
-impl ToStatement for String {
-    fn to_statement(&self) -> Cow<str> {
-        self.into()
-    }
-}
+use std::collections::HashMap;
 
 /// A batch collector, used to collect statements and build a `BatchRequest`.
 /// Access queries are defined by access traits ([`Insert`], [`Delete`], [`Update`])
@@ -185,36 +103,39 @@ impl<'a, S: Keyspace + Clone> BatchCollector<'a, S, BatchTypeUnset, BatchType> {
 }
 
 impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchStatementOrId> {
-    pub fn execute_query(
-        mut self,
-        statement: &str,
+    /// Add a dynamic query to the batch
+    pub fn execute_query<T: ToStatement>(
+        self,
+        statement: &T,
         variables: &[&(dyn ColumnEncoder + Sync)],
     ) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Keyspace,
     {
+        let statement = statement.to_statement();
         let mut builder =
-            QueryStatement::encode_statement(self.builder, &self.keyspace.replace_keyspace_token(statement));
+            QueryStatement::encode_statement(self.builder, &self.keyspace.replace_keyspace_token(&statement));
         builder = if variables.len() > 0 {
-            builder.values(variables)
+            builder.bind(variables)
         } else {
             builder
         };
         Self::step(builder, self.map, self.keyspace)
     }
 
-    pub fn execute_prepared(
+    /// Add a dynamic prepared statement to the batch
+    pub fn execute_prepared<T: ToStatement>(
         mut self,
-        statement: &str,
+        statement: &T,
         variables: &[&(dyn ColumnEncoder + Sync)],
     ) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Keyspace,
     {
-        let statement = self.keyspace.replace_keyspace_token(statement);
+        let statement = self.keyspace.replace_keyspace_token(&statement.to_statement());
         let mut builder = PreparedStatement::encode_statement(self.builder, &statement);
         builder = if variables.len() > 0 {
-            builder.values(variables)
+            builder.bind(variables)
         } else {
             builder
         };
@@ -685,6 +606,7 @@ impl BatchRequest {
         self.map.get(id).map(|res| res.to_statement())
     }
 
+    /// Get a basic worker for this request
     pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
         BasicRetryWorker::new(self)
     }

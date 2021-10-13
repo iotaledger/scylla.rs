@@ -6,50 +6,25 @@ use super::*;
 /// Delete query trait which creates a `DeleteRequest`
 /// that can be sent to the `Ring`.
 ///
-/// ## Examples
+/// ## Example
 /// ```
-/// use scylla_rs::{
-///     app::{
-///         access::{
-///             ComputeToken,
-///             Delete,
-///             GetDeleteRequest,
-///             Keyspace,
-///         },
-///         worker::DeleteWorker,
-///     },
-///     cql::{
-///         Batch,
-///         Consistency,
-///         PreparedStatement,
-///         Values,
-///         VoidDecoder,
-///     },
-/// };
-/// use std::borrow::Cow;
-/// # #[derive(Default, Clone, Debug)]
-/// # struct MyKeyspace {
-/// #     pub name: Cow<'static, str>,
-/// # }
-/// #
+/// use crate::app::access::*;
+/// #[derive(Clone, Debug)]
+/// struct MyKeyspace {
+///     pub name: Cow<'static, str>,
+/// }
 /// # impl MyKeyspace {
-/// #     pub fn new() -> Self {
+/// #     pub fn new(name: &str) -> Self {
 /// #         Self {
-/// #             name: "my_keyspace".into(),
+/// #             name: name.into(),
 /// #         }
 /// #     }
 /// # }
-///
-/// # impl Keyspace for MyKeyspace {
-/// #     fn name(&self) -> &Cow<'static, str> {
-/// #         &self.name
-/// #     }
-/// # }
-/// # impl ComputeToken<i32> for MyKeyspace {
-/// #     fn token(_key: &i32) -> i64 {
-/// #         rand::random()
-/// #     }
-/// # }
+/// impl Keyspace for MyKeyspace {
+///     fn name(&self) -> &Cow<'static, str> {
+///         &self.name
+///     }
+/// }
 /// # type MyKeyType = i32;
 /// # type MyValueType = f32;
 /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
@@ -57,20 +32,16 @@ use super::*;
 ///     fn statement(&self) -> Cow<'static, str> {
 ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
 ///     }
-///
 ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-///         builder.value(key).value(key)
+///         builder.bind(key)
 ///     }
 /// }
-///
-/// # let keyspace = MyKeyspace::new();
 /// # let my_key = 1;
-/// let worker = DeleteWorker::boxed(keyspace.clone(), my_key, 3);
-///
-/// let request = keyspace // A Scylla keyspace
-///     .delete::<MyValueType>(&my_key) // Get the Delete Request by specifying the Value type
+/// let request = Mykeyspace::new("my_keyspace")
+///     .delete::<MyValueType>(&my_key)
 ///     .consistency(Consistency::One)
 ///     .build()?;
+/// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub trait Delete<K, V>: Keyspace {
@@ -91,41 +62,164 @@ pub trait Delete<K, V>: Keyspace {
     fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
 }
 
-/// Wrapper for the `Delete` trait which provides the `delete` function
+/// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
 pub trait GetStaticDeleteRequest<K>: Keyspace {
-    /// Calls the appropriate `Delete` implementation for this Key/Value pair
+    /// Create a static delete request from a keyspace with a `Delete<K, V>` definition. Will use the default `type
+    /// QueryOrPrepared` from the trait definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: Cow<'static, str>,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> &Cow<'static, str> {
+    ///         &self.name
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # type MyValueType = f32;
+    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///     }
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+    ///         builder.bind(key)
+    ///     }
+    /// }
+    /// # let my_key = 1;
+    /// Mykeyspace::new("my_keyspace")
+    ///     .delete::<MyValueType>(&my_key)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Delete<K, V>,
     {
         DeleteBuilder {
-            keyspace: self,
+            keyspace: PhantomData,
             statement: self.statement(),
             key,
             builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
             _marker: PhantomData,
         }
     }
-    /// Calls the `Delete` implementation for this Key/Value pair using a query statement
+
+    /// Create a static delete query request from a keyspace with a `Delete<K, V>` definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: Cow<'static, str>,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> &Cow<'static, str> {
+    ///         &self.name
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # type MyValueType = f32;
+    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///     }
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+    ///         builder.bind(key)
+    ///     }
+    /// }
+    /// # let my_key = 1;
+    /// Mykeyspace::new("my_keyspace")
+    ///     .delete_query::<MyValueType>(&my_key)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Delete<K, V>,
     {
         DeleteBuilder {
-            keyspace: self,
+            keyspace: PhantomData,
             statement: self.statement(),
             key,
             builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
             _marker: PhantomData,
         }
     }
-    /// Calls the `Delete` implementation for this Key/Value pair using a prepared statement id
+
+    /// Create a static delete prepared request from a keyspace with a `Delete<K, V>` definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: Cow<'static, str>,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> &Cow<'static, str> {
+    ///         &self.name
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # type MyValueType = f32;
+    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///     }
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
+    ///         builder.bind(key)
+    ///     }
+    /// }
+    /// # let my_key = 1;
+    /// Mykeyspace::new("my_keyspace")
+    ///     .delete_prepared::<MyValueType>(&my_key)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Delete<K, V>,
     {
         DeleteBuilder {
-            keyspace: self,
+            keyspace: PhantomData,
             statement: self.statement(),
             key,
             builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
@@ -133,41 +227,88 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
         }
     }
 }
+
+/// Specifies helper functions for creating dynamic delete requests from anything that can be interpreted as a keyspace
 pub trait GetDynamicDeleteRequest: Keyspace {
-    /// Specifies the returned Value type for an upcoming select request
-    fn delete_with<'a, V>(
+    /// Create a dynamic delete request from a statement and variables. Can be specified as either
+    /// a query or prepared statement. The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "my_keyspace"
+    ///     .delete_with(
+    ///         "DELETE FROM {{keyspace}}.table WHERE key = ?",
+    ///         &[&3],
+    ///         StatementType::Query,
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn delete_with<'a>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
+        variables: &'a [&(dyn TokenChainer + Sync)],
         statement_type: StatementType,
-    ) -> DeleteBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> DeleteBuilder<'a, Self, [&(dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.delete_query_with(statement, variables),
             StatementType::Prepared => self.delete_prepared_with(statement, variables),
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a query statement
-    fn delete_query_with<'a, V>(
+
+    /// Create a dynamic query delete request from a statement and variables.
+    /// The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "my_keyspace"
+    ///     .delete_query_with("DELETE FROM {{keyspace}}.table WHERE key = ?", &[&3])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn delete_query_with<'a>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
-    ) -> DeleteBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenChainer + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&(dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
         DeleteBuilder {
-            keyspace: self,
+            keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key: variables,
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: PhantomData,
         }
     }
-    /// Specifies the returned Value type for an upcoming select request using a prepared statement id
-    fn delete_prepared_with<'a, V>(
+
+    /// Create a dynamic prepared delete request from a statement and variables.
+    /// The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "my_keyspace"
+    ///     .delete_prepared_with("DELETE FROM {{keyspace}}.table WHERE key = ?", &[&3])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn delete_prepared_with<'a>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenEncoder + Sync)],
-    ) -> DeleteBuilder<'a, Self, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn TokenChainer + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&(dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
         DeleteBuilder {
-            keyspace: self,
+            keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key: variables,
             builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
@@ -176,10 +317,97 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     }
 }
 
+/// Specifies helper functions for creating dynamic delete requests from anything that can be interpreted as a statement
+pub trait AsDynamicDeleteRequest: ToStatement
+where
+    Self: Sized,
+{
+    /// Create a dynamic delete request from a statement and variables. Can be specified as either
+    /// a query or prepared statement.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "DELETE FROM my_keyspace.table WHERE key = ?"
+    ///     .as_delete(&[&3], StatementType::Prepared)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn as_delete<'a>(
+        &self,
+        key: &'a [&'a (dyn TokenChainer + Sync)],
+        statement_type: StatementType,
+    ) -> DeleteBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        match statement_type {
+            StatementType::Query => self.as_delete_query(key),
+            StatementType::Prepared => self.as_delete_prepared(key),
+        }
+    }
+
+    /// Create a dynamic query delete request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "DELETE FROM my_keyspace.table WHERE key = ?"
+    ///     .as_delete_query(&[&3])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn as_delete_query<'a>(
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        let statement = self.to_statement();
+        DeleteBuilder {
+            _marker: PhantomData,
+            keyspace: PhantomData,
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
+            key,
+        }
+    }
+
+    /// Create a dynamic prepared delete request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use crate::app::access::*;
+    /// "DELETE FROM my_keyspace.table WHERE key = ?"
+    ///     .as_delete_prepared(&[&3])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local()
+    ///     .await?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn as_delete_prepared<'a>(
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        let statement = self.to_statement();
+        DeleteBuilder {
+            _marker: PhantomData,
+            keyspace: PhantomData,
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
+            key,
+        }
+    }
+}
+
 impl<S: Keyspace, K> GetStaticDeleteRequest<K> for S {}
 impl<S: Keyspace> GetDynamicDeleteRequest for S {}
+impl<T: ToStatement> AsDynamicDeleteRequest for T {}
+
 pub struct DeleteBuilder<'a, S, K: ?Sized, V, Stage, T> {
-    pub(crate) keyspace: &'a S,
+    pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: Cow<'static, str>,
     pub(crate) key: &'a K,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -198,12 +426,12 @@ impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryConsistency, Sta
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency).values(self.key);
+    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
+        let builder = self.builder.consistency(consistency).bind(self.key);
         DeleteBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -237,11 +465,11 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V> DeleteBuilder<'a, S, K, V, QueryVa
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryValues, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
     pub fn timestamp(
         self,
         timestamp: i64,
-    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
+    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
         DeleteBuilder {
             keyspace: self.keyspace,
             statement: self.statement,
@@ -252,14 +480,10 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, Q
     }
     /// Build the DeleteRequest
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: token_chain.finish(),
+            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -281,17 +505,13 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V, T> DeleteBuilder<'a, S, K, V, Quer
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenEncoder + Sync)], V, QueryBuild, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
     /// Build the DeleteRequest
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
-        let mut token_chain = TokenEncodeChain::default();
-        for v in self.key.iter() {
-            token_chain.dyn_chain(*v);
-        }
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: token_chain.finish(),
+            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -324,6 +544,7 @@ impl DerefMut for DeleteRequest {
 }
 
 impl DeleteRequest {
+    /// Get a basic worker for this request
     pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
         BasicRetryWorker::new(self)
     }
