@@ -8,21 +8,21 @@ use super::*;
 ///
 /// ## Example
 /// ```
-/// use crate::app::access::*;
+/// use scylla_rs::app::access::*;
 /// #[derive(Clone, Debug)]
 /// struct MyKeyspace {
-///     pub name: Cow<'static, str>,
+///     pub name: String,
 /// }
 /// # impl MyKeyspace {
 /// #     pub fn new(name: &str) -> Self {
 /// #         Self {
-/// #             name: name.into(),
+/// #             name: name.to_string().into(),
 /// #         }
 /// #     }
 /// # }
 /// impl Keyspace for MyKeyspace {
-///     fn name(&self) -> &Cow<'static, str> {
-///         &self.name
+///     fn name(&self) -> String {
+///         self.name.clone()
 ///     }
 /// }
 /// # type MyKeyType = i32;
@@ -37,7 +37,7 @@ use super::*;
 ///     }
 /// }
 /// # let my_key = 1;
-/// let request = Mykeyspace::new("my_keyspace")
+/// let request = MyKeyspace::new("my_keyspace")
 ///     .select::<MyValueType>(&my_key)
 ///     .consistency(Consistency::One)
 ///     .build()?;
@@ -69,21 +69,21 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -98,12 +98,11 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///     }
     /// }
     /// # let my_key = 1;
-    /// let res: Option<MyValueType> = Mykeyspace::new("my_keyspace")
+    /// let res: Option<MyValueType> = MyKeyspace::new("my_keyspace")
     ///     .select::<MyValueType>(&my_key)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -123,21 +122,21 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -152,12 +151,11 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///     }
     /// }
     /// # let my_key = 1;
-    /// let res: Option<MyValueType> = Mykeyspace::new("my_keyspace")
+    /// let res: Option<MyValueType> = MyKeyspace::new("my_keyspace")
     ///     .select_query::<MyValueType>(&my_key)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -177,21 +175,21 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -206,12 +204,11 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///     }
     /// }
     /// # let my_key = 1;
-    /// let res: Option<MyValueType> = Mykeyspace::new("my_keyspace")
+    /// let res: Option<MyValueType> = MyKeyspace::new("my_keyspace")
     ///     .select_prepared::<MyValueType>(&my_key)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -236,7 +233,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_with::<f32>(
     ///         "SELECT val FROM {{keyspace}}.table where key = ?",
@@ -245,8 +242,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn select_with<'a, V>(
@@ -266,17 +262,12 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
-    ///     .select_query_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ?",
-    ///         &[&3],
-    ///         StatementType::Query,
-    ///     )
+    ///     .select_query_with::<f32>("SELECT val FROM {{keyspace}}.table where key = ?", &[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn select_query_with<'a, V>(
@@ -298,17 +289,12 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
-    ///     .select_prepared_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ?",
-    ///         &[&3],
-    ///         StatementType::Query,
-    ///     )
+    ///     .select_prepared_with::<f32>("SELECT val FROM {{keyspace}}.table where key = ?", &[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn select_prepared_with<'a, V>(
@@ -337,13 +323,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
     ///     .as_select::<f32>(&[&3], StatementType::Query)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_select<'a, V>(
@@ -361,13 +346,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
     ///     .as_select_query::<f32>(&[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_select_query<'a, V>(
@@ -388,13 +372,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
     ///     .as_select_prepared::<f32>(&[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_select_prepared<'a, V>(
@@ -689,16 +672,8 @@ impl<V: 'static> Request for SelectRequest<V> {
         self.inner.statement()
     }
 
-    fn payload(&self) -> &Vec<u8> {
+    fn payload(&self) -> Vec<u8> {
         self.inner.payload()
-    }
-
-    fn payload_mut(&mut self) -> &mut Vec<u8> {
-        self.inner.payload_mut()
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.inner.into_payload()
     }
 }
 
@@ -708,11 +683,6 @@ impl<V> SelectRequest<V> {
     pub fn result_decoder(&self) -> DecodeResult<DecodeRows<V>> {
         DecodeResult::select()
     }
-
-    /// Get a basic worker for this request
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
-        BasicRetryWorker::new(self)
-    }
 }
 
 impl<V> SendRequestExt for SelectRequest<V>
@@ -720,5 +690,10 @@ where
     V: 'static + Send + RowsDecoder + Debug,
 {
     type Marker = DecodeRows<V>;
+    type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Select;
+
+    fn worker(self) -> Box<Self::Worker> {
+        BasicRetryWorker::new(self)
+    }
 }

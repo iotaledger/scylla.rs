@@ -37,6 +37,7 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
     }
     // TODO replication_refactor, strategy, options,etc.
 
+    /// Helper function to replace the {{keyspace}} token in dynamic statements
     fn replace_keyspace_token(&self, statement: &str) -> String {
         statement.replace("{{keyspace}}", &self.name())
     }
@@ -60,7 +61,9 @@ where
     }
 }
 
+/// Anything that can be represented as bytes
 pub trait AsBytes {
+    /// Get this value's byte representation
     fn as_bytes(&self) -> Vec<u8>;
 }
 

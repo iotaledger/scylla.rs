@@ -112,11 +112,13 @@ pub trait Values {
     where
         Self: Sized;
 
+    /// Skip binding a value
     fn skip_value(self) -> Self::Return
     where
         Self: Sized;
 }
 
+/// Defines dynamic versions of `Values` functions
 pub trait DynValues: Values {
     /// Add a single dynamic value
     fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return;
@@ -124,7 +126,7 @@ pub trait DynValues: Values {
     fn dyn_unset_value(self: Box<Self>) -> Self::Return;
     /// Set Null value dynamically, note: for write queries this will create tombstone for V;
     fn dyn_null_value(self: Box<Self>) -> Self::Return;
-
+    /// Skip binding a value dynamically
     fn dyn_skip_value(self: Box<Self>) -> Self::Return;
 }
 impl<T> DynValues for T
@@ -180,7 +182,9 @@ impl<T: DynValues + ?Sized> Values for Box<T> {
     }
 }
 
+/// Defines a query bindable value
 pub trait Bindable {
+    /// Bind the value using the provided binder
     fn bind<V: Values>(&self, binder: V) -> V::Return;
 }
 

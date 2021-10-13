@@ -7,6 +7,7 @@ use std::fmt::Debug;
 /// A select worker
 #[derive(Clone, Debug)]
 pub struct SelectWorker<H, R> {
+    /// The worker's request
     pub request: R,
     /// A handle which can be used to return the queried value
     pub handle: H,
@@ -33,14 +34,14 @@ where
         })
     }
 
-    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self> {
+    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self>
+    where
+        H: HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+        R: 'static + Request + Debug + Send + Sync,
+    {
         Self::new(request, handle).with_retries(retries)
     }
 
-    pub fn with_retries(mut self: Box<Self>, retries: usize) -> Box<Self> {
-        self.retries = retries;
-        self
-    }
     /// Add paging information to this worker
     pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self: Box<Self>, page_size: i32, paging_state: P) -> Box<Self> {
         self.page_size = Some(page_size);

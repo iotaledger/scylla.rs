@@ -6,11 +6,13 @@ pub use crate::app::stage::reporter::{
     ReporterHandle,
 };
 use crate::{
-    app::access::*,
+    app::{
+        access::*,
+        ring::RingSendError,
+    },
     cql::{
         CqlError,
         Decoder,
-        Prepare,
         RowsDecoder,
     },
 };
@@ -72,18 +74,24 @@ pub trait HandleError {
     fn handle_error(self, worker_error: WorkerError) -> anyhow::Result<()>;
 }
 
+/// Defines a worker which contains enough information to retry on a failure
 #[async_trait::async_trait]
 pub trait RetryableWorker<R>: Worker {
+    /// Get the number of retries remaining
     fn retries(&self) -> usize;
+    /// Mutably access the number of retries remaining
     fn retries_mut(&mut self) -> &mut usize;
+    /// Get the request
     fn request(&self) -> &R;
-    fn with_retries(mut self, retries: usize) -> Self
+    /// Update the retry count
+    fn with_retries(mut self: Box<Self>, retries: usize) -> Box<Self>
     where
         Self: Sized,
     {
         *self.retries_mut() = retries;
         self
     }
+    /// Retry the worker
     fn retry(mut self: Box<Self>) -> Result<(), Box<Self>>
     where
         Self: 'static + Sized,
@@ -92,29 +100,48 @@ pub trait RetryableWorker<R>: Worker {
         if self.retries() > 0 {
             *self.retries_mut() -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
-            send_global(self.request().token(), self.request().payload().clone(), self);
+            send_global(self.request().token(), self.request().payload(), self).ok();
             Ok(())
         } else {
             Err(self)
         }
     }
+
+    /// Send the worker to a specific reporter, without waiting for a response
+    fn send_to_reporter(self: Box<Self>, reporter: &ReporterHandle) -> Result<DecodeResult<R::Marker>, RequestError>
+    where
+        Self: 'static + Sized,
+        R: SendRequestExt,
+    {
+        let request = ReporterEvent::Request {
+            payload: self.request().payload(),
+            worker: self,
+        };
+        reporter.send(request).map_err(|e| RingSendError::SendError(e))?;
+        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+    }
+
+    /// Send the worker to the local datacenter, without waiting for a response
     fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
         R: SendRequestExt,
     {
-        send_local(self.request().token(), self.request().payload().clone(), self)?;
+        send_local(self.request().token(), self.request().payload(), self)?;
         Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
+
+    /// Send the worker to a global datacenter, without waiting for a response
     fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
         R: SendRequestExt,
     {
-        send_global(self.request().token(), self.request().payload().clone(), self)?;
+        send_global(self.request().token(), self.request().payload(), self)?;
         Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
 
+    /// Send the worker to the local datacenter and await a response asynchronously
     async fn get_local(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
@@ -130,6 +157,7 @@ pub trait RetryableWorker<R>: Worker {
         )?)
     }
 
+    /// Send the worker to the local datacenter and await a response synchronously
     fn get_local_blocking(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
@@ -142,6 +170,7 @@ pub trait RetryableWorker<R>: Worker {
         )?)
     }
 
+    /// Send the worker to a global datacenter and await a response asynchronously
     async fn get_global(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
@@ -157,6 +186,7 @@ pub trait RetryableWorker<R>: Worker {
         )?)
     }
 
+    /// Send the worker to a global datacenter and await a response synchronously
     fn get_global_blocking(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
@@ -170,20 +200,25 @@ pub trait RetryableWorker<R>: Worker {
     }
 }
 
+/// Defines a worker which can be given a handle to be capable of responding to the sender
 pub trait IntoRespondingWorker<R, H, O>
 where
     H: HandleResponse<O> + HandleError,
     R: SendRequestExt,
 {
+    /// The type of worker which will be created
     type Output: RespondingWorker<R, H, O> + RetryableWorker<R>;
+    /// Give the worker a handle
     fn with_handle(self: Box<Self>, handle: H) -> Box<Self::Output>;
 }
 
+/// A worker which can respond to a sender
 #[async_trait::async_trait]
 pub trait RespondingWorker<R, H, O>: Worker
 where
     H: HandleResponse<O> + HandleError,
 {
+    /// Get the handle this worker will use to respond
     fn handle(&self) -> &H;
 }
 
@@ -222,17 +257,8 @@ where
 {
     let statement = worker.request().statement();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    let Prepare(payload) = match Prepare::new().statement(&statement).build() {
-        Ok(p) => p,
-        Err(_) => return Err(worker),
-    };
-    let prepare_worker = Box::new(PrepareWorker::new(id, statement));
-    let prepare_request = ReporterEvent::Request {
-        worker: prepare_worker,
-        payload,
-    };
-    reporter.send(prepare_request).ok();
-    let payload = worker.request().payload().clone();
+    PrepareWorker::new(id, statement).send_to_reporter(reporter).ok();
+    let payload = worker.request().payload();
     let retry_request = ReporterEvent::Request { worker, payload };
     reporter.send(retry_request).ok();
     Ok(())

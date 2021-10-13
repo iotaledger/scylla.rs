@@ -8,21 +8,21 @@ use super::*;
 ///
 /// ## Example
 /// ```
-/// use crate::app::access::*;
+/// use scylla_rs::app::access::*;
 /// #[derive(Clone, Debug)]
 /// struct MyKeyspace {
-///     pub name: Cow<'static, str>,
+///     pub name: String,
 /// }
 /// # impl MyKeyspace {
 /// #     pub fn new(name: &str) -> Self {
 /// #         Self {
-/// #             name: name.into(),
+/// #             name: name.to_string().into(),
 /// #         }
 /// #     }
 /// # }
 /// impl Keyspace for MyKeyspace {
-///     fn name(&self) -> &Cow<'static, str> {
-///         &self.name
+///     fn name(&self) -> String {
+///         self.name.clone()
 ///     }
 /// }
 /// # type MyKeyType = i32;
@@ -47,9 +47,8 @@ use super::*;
 ///     }
 /// }
 ///
-/// # let keyspace = MyKeyspace::new();
 /// # let (my_key, my_val) = (1, MyValueType::default());
-/// let request = Mykeyspace::new("my_keyspace")
+/// let request = MyKeyspace::new("my_keyspace")
 ///     .insert_prepared(&my_key, &my_val)
 ///     .consistency(Consistency::One)
 ///     .build()?;
@@ -78,21 +77,21 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -108,18 +107,15 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     }
     ///
     ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.value(key).value(value.value1).value(value.value2)
+    ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
-    ///
-    /// # let keyspace = MyKeyspace::new();
     /// # let (my_key, my_val) = (1, MyValueType::default());
-    /// let request = Mykeyspace::new("my_keyspace")
+    /// MyKeyspace::new("my_keyspace")
     ///     .insert(&my_key, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -140,21 +136,21 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -170,18 +166,15 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     }
     ///
     ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.value(key).value(value.value1).value(value.value2)
+    ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
-    ///
-    /// # let keyspace = MyKeyspace::new();
     /// # let (my_key, my_val) = (1, MyValueType::default());
-    /// let request = Mykeyspace::new("my_keyspace")
+    /// MyKeyspace::new("my_keyspace")
     ///     .insert_query(&my_key, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn insert_query<'a>(
@@ -206,21 +199,21 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -236,18 +229,15 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     }
     ///
     ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.value(key).value(value.value1).value(value.value2)
+    ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
-    ///
-    /// # let keyspace = MyKeyspace::new();
     /// # let (my_key, my_val) = (1, MyValueType::default());
-    /// let request = Mykeyspace::new("my_keyspace")
+    /// MyKeyspace::new("my_keyspace")
     ///     .insert_prepared(&my_key, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn insert_prepared<'a>(
@@ -277,7 +267,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_with(
     ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
@@ -287,8 +277,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn insert_with<'a>(
@@ -316,7 +305,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_query_with(
     ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
@@ -325,8 +314,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn insert_query_with<'a>(
@@ -357,7 +345,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_prepared_with(
     ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
@@ -366,8 +354,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn insert_prepared_with<'a>(
@@ -405,13 +392,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
     ///     .as_insert(&[&3], &[&4.0, &5.0], StatementType::Prepared)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_insert<'a>(
@@ -437,13 +423,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
     ///     .as_insert_query(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_insert_query<'a>(
@@ -473,13 +458,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
     ///     .as_insert_prepared(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_insert_prepared<'a>(
@@ -722,13 +706,6 @@ impl DerefMut for InsertRequest {
     }
 }
 
-impl InsertRequest {
-    /// Get a basic worker for this request
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
-        BasicRetryWorker::new(self)
-    }
-}
-
 impl Request for InsertRequest {
     fn token(&self) -> i64 {
         self.0.token()
@@ -738,20 +715,17 @@ impl Request for InsertRequest {
         self.0.statement()
     }
 
-    fn payload(&self) -> &Vec<u8> {
+    fn payload(&self) -> Vec<u8> {
         self.0.payload()
-    }
-
-    fn payload_mut(&mut self) -> &mut Vec<u8> {
-        self.0.payload_mut()
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.0.into_payload()
     }
 }
 
 impl SendRequestExt for InsertRequest {
     type Marker = DecodeVoid;
+    type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Insert;
+
+    fn worker(self) -> Box<Self::Worker> {
+        BasicRetryWorker::new(self)
+    }
 }

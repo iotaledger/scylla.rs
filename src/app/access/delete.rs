@@ -8,21 +8,21 @@ use super::*;
 ///
 /// ## Example
 /// ```
-/// use crate::app::access::*;
+/// use scylla_rs::app::access::*;
 /// #[derive(Clone, Debug)]
 /// struct MyKeyspace {
-///     pub name: Cow<'static, str>,
+///     pub name: String,
 /// }
 /// # impl MyKeyspace {
 /// #     pub fn new(name: &str) -> Self {
 /// #         Self {
-/// #             name: name.into(),
+/// #             name: name.to_string().into(),
 /// #         }
 /// #     }
 /// # }
 /// impl Keyspace for MyKeyspace {
-///     fn name(&self) -> &Cow<'static, str> {
-///         &self.name
+///     fn name(&self) -> String {
+///         self.name.clone()
 ///     }
 /// }
 /// # type MyKeyType = i32;
@@ -37,7 +37,7 @@ use super::*;
 ///     }
 /// }
 /// # let my_key = 1;
-/// let request = Mykeyspace::new("my_keyspace")
+/// let request = MyKeyspace::new("my_keyspace")
 ///     .delete::<MyValueType>(&my_key)
 ///     .consistency(Consistency::One)
 ///     .build()?;
@@ -69,21 +69,21 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -98,12 +98,11 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
     ///     }
     /// }
     /// # let my_key = 1;
-    /// Mykeyspace::new("my_keyspace")
+    /// MyKeyspace::new("my_keyspace")
     ///     .delete::<MyValueType>(&my_key)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn delete<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -123,21 +122,21 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -152,12 +151,11 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
     ///     }
     /// }
     /// # let my_key = 1;
-    /// Mykeyspace::new("my_keyspace")
+    /// MyKeyspace::new("my_keyspace")
     ///     .delete_query::<MyValueType>(&my_key)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn delete_query<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -177,21 +175,21 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: Cow<'static, str>,
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
     /// #         Self {
-    /// #             name: name.into(),
+    /// #             name: name.to_string().into(),
     /// #         }
     /// #     }
     /// # }
     /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> &Cow<'static, str> {
-    ///         &self.name
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
     ///     }
     /// }
     /// # type MyKeyType = i32;
@@ -206,12 +204,11 @@ pub trait GetStaticDeleteRequest<K>: Keyspace {
     ///     }
     /// }
     /// # let my_key = 1;
-    /// Mykeyspace::new("my_keyspace")
+    /// MyKeyspace::new("my_keyspace")
     ///     .delete_prepared::<MyValueType>(&my_key)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn delete_prepared<'a, V>(&'a self, key: &'a K) -> DeleteBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
@@ -235,7 +232,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_with(
     ///         "DELETE FROM {{keyspace}}.table WHERE key = ?",
@@ -244,8 +241,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn delete_with<'a>(
@@ -265,13 +261,12 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_query_with("DELETE FROM {{keyspace}}.table WHERE key = ?", &[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn delete_query_with<'a>(
@@ -293,13 +288,12 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_prepared_with("DELETE FROM {{keyspace}}.table WHERE key = ?", &[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn delete_prepared_with<'a>(
@@ -327,13 +321,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "DELETE FROM my_keyspace.table WHERE key = ?"
     ///     .as_delete(&[&3], StatementType::Prepared)
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_delete<'a>(
@@ -351,13 +344,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "DELETE FROM my_keyspace.table WHERE key = ?"
     ///     .as_delete_query(&[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_delete_query<'a>(
@@ -378,13 +370,12 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "DELETE FROM my_keyspace.table WHERE key = ?"
     ///     .as_delete_prepared(&[&3])
     ///     .consistency(Consistency::One)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_delete_prepared<'a>(
@@ -404,7 +395,7 @@ where
 
 impl<S: Keyspace, K> GetStaticDeleteRequest<K> for S {}
 impl<S: Keyspace> GetDynamicDeleteRequest for S {}
-impl<T: ToStatement> AsDynamicDeleteRequest for T {}
+impl<S: ToStatement> AsDynamicDeleteRequest for S {}
 
 pub struct DeleteBuilder<'a, S, K: ?Sized, V, Stage, T> {
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
@@ -543,13 +534,6 @@ impl DerefMut for DeleteRequest {
     }
 }
 
-impl DeleteRequest {
-    /// Get a basic worker for this request
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
-        BasicRetryWorker::new(self)
-    }
-}
-
 impl Request for DeleteRequest {
     fn token(&self) -> i64 {
         self.0.token()
@@ -559,20 +543,17 @@ impl Request for DeleteRequest {
         self.0.statement()
     }
 
-    fn payload(&self) -> &Vec<u8> {
+    fn payload(&self) -> Vec<u8> {
         self.0.payload()
-    }
-
-    fn payload_mut(&mut self) -> &mut Vec<u8> {
-        self.0.payload_mut()
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.0.into_payload()
     }
 }
 
 impl SendRequestExt for DeleteRequest {
     type Marker = DecodeVoid;
+    type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Delete;
+
+    fn worker(self) -> Box<Self::Worker> {
+        BasicRetryWorker::new(self)
+    }
 }

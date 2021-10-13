@@ -113,8 +113,8 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    keyspace.prepare_insert::<String, i32>().build()?.get_local().await?;
-    keyspace.prepare_select::<String, i32>().build()?.get_local().await?;
+    keyspace.prepare_insert::<String, i32>().get_local().await?;
+    keyspace.prepare_select::<String, i32>().get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
@@ -156,7 +156,7 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
 
 #[derive(Default, Clone, Debug)]
 pub struct MyKeyspace {
-    pub name: Cow<'static, str>,
+    pub name: String
 }
 
 impl MyKeyspace {

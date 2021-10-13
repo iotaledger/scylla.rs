@@ -32,6 +32,14 @@ use super::{
     Worker,
     WorkerError,
 };
+pub use crate::cql::{
+    query::StatementType,
+    Bindable,
+    Consistency,
+    PreparedStatement,
+    QueryStatement,
+    Values,
+};
 use crate::{
     app::{
         ring::{
@@ -41,12 +49,8 @@ use crate::{
         stage::reporter::ReporterEvent,
     },
     cql::{
-        query::StatementType,
-        Bindable,
-        Consistency,
         Decoder,
         DynValues,
-        PreparedStatement,
         Query,
         QueryBuild,
         QueryBuilder,
@@ -54,15 +58,15 @@ use crate::{
         QueryOrPrepared,
         QueryPagingState,
         QuerySerialConsistency,
-        QueryStatement,
         QueryValues,
         RowsDecoder,
         TokenChainer,
-        Values,
         VoidDecoder,
     },
     prelude::{
         ColumnEncoder,
+        IntoRespondingWorker,
+        ReporterHandle,
         RetryableWorker,
         TokenEncoder,
     },
@@ -92,7 +96,12 @@ pub use keyspace::{
     AsBytes,
     Keyspace,
 };
-pub use prepare::*;
+pub use prepare::{
+    AsDynamicPrepareRequest,
+    GetDynamicPrepareRequest,
+    GetStaticPrepareRequest,
+    PrepareRequest,
+};
 pub use select::{
     AsDynamicSelectRequest,
     GetDynamicSelectRequest,
@@ -119,6 +128,8 @@ pub use update::{
     UpdateRequest,
 };
 
+/// The possible request types
+#[allow(missing_docs)]
 #[repr(u8)]
 #[derive(Copy, Clone)]
 pub enum RequestType {
@@ -189,6 +200,7 @@ impl<S: Delete<K, V> + Debug, K, V> Debug for DeleteStatement<S, K, V> {
 
 struct SelectStatement<S: Select<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
 impl<S: Select<K, V>, K, V> SelectStatement<S, K, V> {
+    #[allow(unused)]
     fn new(keyspace: &S) -> Self {
         Self(keyspace.clone(), PhantomData)
     }
@@ -240,8 +252,11 @@ impl ToStatement for &str {
     }
 }
 
+/// Marker for dynamic requests
 pub struct DynamicRequest;
+/// Marker for static requests
 pub struct StaticRequest;
+/// Marker for requests that need to use a manually defined bind fn
 pub struct ManualBoundRequest<'a> {
     pub(crate) bind_fn: Box<
         dyn Fn(
@@ -252,6 +267,8 @@ pub struct ManualBoundRequest<'a> {
     >,
 }
 
+/// Errors which can be returned from a sent request
+#[allow(missing_docs)]
 #[derive(Error, Debug)]
 pub enum RequestError {
     #[error("Error sending to the Ring: {0}")]
@@ -268,60 +285,85 @@ pub trait ComputeToken {
     fn token(&self) -> i64;
 }
 
+/// A request which has a token, statement, and payload
 pub trait Request {
+    /// Get the token for this request
     fn token(&self) -> i64;
 
     /// Get the statement that was used to create this request
     fn statement(&self) -> &Cow<'static, str>;
 
     /// Get the request payload
-    fn payload(&self) -> &Vec<u8>;
-
-    fn payload_mut(&mut self) -> &mut Vec<u8>;
-
-    fn into_payload(self) -> Vec<u8>
-    where
-        Self: Sized;
+    fn payload(&self) -> Vec<u8>;
 }
 
+/// Extension trait which provides helper functions for sending requests and retrieving their responses
 #[async_trait::async_trait]
 pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
+    /// The marker type which will be returned when sending a request
     type Marker: 'static + Marker;
+    /// The default worker type
+    type Worker: RetryableWorker<Self>;
+    /// The request type
     const TYPE: RequestType;
 
+    /// Create a worker containing this request
+    fn worker(self) -> Box<Self::Worker>;
+
+    /// Send this request to a specific reporter, without waiting for a response
+    fn send_to_reporter(self, reporter: &ReporterHandle) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        self.worker().send_to_reporter(reporter)?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
+    /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(self.token(), self.payload().clone(), BasicRetryWorker::new(self))?;
+        send_local(self.token(), self.payload(), self.worker())?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
+    /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(self.token(), self.payload().clone(), BasicRetryWorker::new(self))?;
+        send_global(self.token(), self.payload(), self.worker())?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
+    /// Send this request to the local datacenter and await the response asynchronously
     async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
     {
-        BasicRetryWorker::new(self).get_local().await
+        self.worker().get_local().await
     }
 
-    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError> {
-        BasicRetryWorker::new(self).get_local_blocking()
+    /// Send this request to the local datacenter and await the response synchronously
+    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        self.worker().get_local_blocking()
     }
 
+    /// Send this request to a global datacenter and await the response asynchronously
     async fn get_global(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
     {
-        BasicRetryWorker::new(self).get_global().await
+        self.worker().get_global().await
     }
 
-    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError> {
-        BasicRetryWorker::new(self).get_global_blocking()
+    /// Send this request to a global datacenter and await the response synchronously
+    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        self.worker().get_global_blocking()
     }
 }
 
+/// A common request type which contains only the bare minimum information needed
 #[derive(Debug, Clone)]
 pub struct CommonRequest {
     pub(crate) token: i64,
@@ -330,6 +372,7 @@ pub struct CommonRequest {
 }
 
 impl CommonRequest {
+    #[allow(missing_docs)]
     pub fn new(statement: &str, payload: Vec<u8>) -> Self {
         Self {
             token: 0,
@@ -345,23 +388,16 @@ impl Request for CommonRequest {
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        &self.statement()
+        &self.statement
     }
 
-    fn payload(&self) -> &Vec<u8> {
-        &self.payload
-    }
-
-    fn payload_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.payload
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.payload
+    fn payload(&self) -> Vec<u8> {
+        self.payload.clone()
     }
 }
 
 /// Defines two helper methods to specify statement / id
+#[allow(missing_docs)]
 pub trait GetStatementIdExt {
     fn select_statement<K, V>(&self) -> Cow<'static, str>
     where
@@ -455,15 +491,20 @@ impl DecodeVoid {
     }
 }
 
+/// A marker returned by a request to allow for later decoding of the response
 pub trait Marker {
+    /// The marker's output
     type Output: Send;
 
+    #[allow(missing_docs)]
     fn new() -> Self;
 
+    /// Try to decode the response payload using this marker
     fn try_decode(&self, d: Decoder) -> anyhow::Result<Self::Output> {
         Self::internal_try_decode(d)
     }
 
+    #[allow(missing_docs)]
     fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output>;
 }
 
@@ -514,33 +555,6 @@ impl<V> DecodeResult<DecodeRows<V>> {
     }
 }
 
-impl DecodeResult<DecodeVoid> {
-    fn insert() -> Self {
-        Self {
-            inner: DecodeVoid,
-            request_type: RequestType::Insert,
-        }
-    }
-    fn update() -> Self {
-        Self {
-            inner: DecodeVoid,
-            request_type: RequestType::Update,
-        }
-    }
-    fn delete() -> Self {
-        Self {
-            inner: DecodeVoid,
-            request_type: RequestType::Delete,
-        }
-    }
-    fn batch() -> Self {
-        Self {
-            inner: DecodeVoid,
-            request_type: RequestType::Batch,
-        }
-    }
-}
-
 /// Send a local request to the Ring
 pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
@@ -576,7 +590,7 @@ pub mod tests {
 
     #[derive(Default, Clone, Debug)]
     pub struct MyKeyspace {
-        pub name: Cow<'static, str>,
+        pub name: String,
     }
 
     impl MyKeyspace {

@@ -9,6 +9,7 @@ use std::{
 };
 /// A value selecting worker
 pub struct ValueWorker<H, V, R> {
+    /// The worker's request
     pub request: R,
     /// A handle which can be used to return the queried value
     pub handle: H,
@@ -55,6 +56,7 @@ where
 }
 
 impl<H, V, R> ValueWorker<H, V, R> {
+    /// Create a new value worker from a request and a handle
     pub fn new(request: R, handle: H) -> Box<Self> {
         Box::new(Self {
             request,
@@ -66,14 +68,15 @@ impl<H, V, R> ValueWorker<H, V, R> {
         })
     }
 
-    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self> {
+    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self>
+    where
+        H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+        R: 'static + Request + Debug + Send + Sync,
+        V: 'static + RowsDecoder + Send,
+    {
         Self::new(request, handle).with_retries(retries)
     }
 
-    pub fn with_retries(mut self: Box<Self>, retries: usize) -> Box<Self> {
-        self.retries = retries;
-        self
-    }
     /// Add paging information to this worker
     pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self: Box<Self>, page_size: i32, paging_state: P) -> Box<Self> {
         self.page_size = Some(page_size);
@@ -87,7 +90,8 @@ where
     R: 'static + Send + Debug + Clone + Request + Sync,
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Clone + Send + Sync,
 {
-    pub(crate) fn with_inbox<I>(self: Box<Self>, inbox: I) -> Box<SpawnableRespondWorker<R, I, Self>> {
+    /// Give the worker an inbox and create a spawning worker
+    pub fn with_inbox<I>(self: Box<Self>, inbox: I) -> Box<SpawnableRespondWorker<R, I, Self>> {
         SpawnableRespondWorker::new(inbox, *self)
     }
 }

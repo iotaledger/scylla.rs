@@ -10,7 +10,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .execute(
     ///         "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
@@ -22,8 +22,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::All)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn execute<'a>(
@@ -43,7 +42,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .execute_query(
     ///         "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
@@ -54,8 +53,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::All)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn execute_query<'a>(
@@ -75,7 +73,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .execute_prepared(
     ///         "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
@@ -86,8 +84,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///     )
     ///     .consistency(Consistency::All)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn execute_prepared<'a>(
@@ -113,15 +110,14 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "CREATE KEYSPACE IF NOT EXISTS my_keyspace
     /// WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
     /// AND durable_writes = true"
     ///     .as_execute(&[], StatementType::Query)
     ///     .consistency(Consistency::All)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_execute<'a>(
@@ -139,15 +135,14 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "CREATE KEYSPACE IF NOT EXISTS my_keyspace
     /// WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
     /// AND durable_writes = true"
     ///     .as_execute_query(&[])
     ///     .consistency(Consistency::All)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_execute_query<'a>(
@@ -166,15 +161,14 @@ where
     ///
     /// ## Example
     /// ```no_run
-    /// use crate::app::access::*;
+    /// use scylla_rs::app::access::*;
     /// "CREATE KEYSPACE IF NOT EXISTS my_keyspace
     /// WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
     /// AND durable_writes = true"
     ///     .as_execute_prepared(&[])
     ///     .consistency(Consistency::All)
     ///     .build()?
-    ///     .get_local()
-    ///     .await?;
+    ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_execute_prepared<'a>(
@@ -272,13 +266,6 @@ impl DerefMut for ExecuteRequest {
     }
 }
 
-impl ExecuteRequest {
-    /// Get a basic worker for this request
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
-        BasicRetryWorker::new(self)
-    }
-}
-
 impl Request for ExecuteRequest {
     fn token(&self) -> i64 {
         self.0.token()
@@ -288,20 +275,17 @@ impl Request for ExecuteRequest {
         self.0.statement()
     }
 
-    fn payload(&self) -> &Vec<u8> {
+    fn payload(&self) -> Vec<u8> {
         self.0.payload()
-    }
-
-    fn payload_mut(&mut self) -> &mut Vec<u8> {
-        self.0.payload_mut()
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.0.into_payload()
     }
 }
 
 impl SendRequestExt for ExecuteRequest {
     type Marker = DecodeVoid;
+    type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Execute;
+
+    fn worker(self) -> Box<Self::Worker> {
+        BasicRetryWorker::new(self)
+    }
 }

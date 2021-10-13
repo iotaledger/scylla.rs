@@ -7,10 +7,12 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
+/// A basic worker which cannot respond or retry
 #[derive(Debug, Clone)]
 pub struct BasicWorker;
 
 impl BasicWorker {
+    #[allow(missing_docs)]
     pub fn new() -> Box<Self> {
         Box::new(Self)
     }
@@ -27,8 +29,9 @@ impl Worker for BasicWorker {
     }
 }
 
-/// An insert request worker
+/// A basic worker which can retry on failure
 pub struct BasicRetryWorker<R> {
+    /// The worker's request
     pub request: R,
     /// The number of times this worker will retry on failure
     pub retries: usize,
@@ -62,11 +65,6 @@ impl<R> BasicRetryWorker<R> {
     /// Create a new insert worker with a number of retries
     pub fn new(request: R) -> Box<Self> {
         Box::new(request.into())
-    }
-
-    pub fn with_retries(mut self: Box<Self>, retries: usize) -> Box<Self> {
-        self.retries = retries;
-        self
     }
 }
 
@@ -140,9 +138,10 @@ where
     }
 }
 
+/// A worker which can spawn cloneable workers and await their responses
 pub struct SpawnableRespondWorker<R, I, W> {
-    pub inbox: I,
-    pub worker: W,
+    pub(crate) inbox: I,
+    pub(crate) worker: W,
     _req: PhantomData<fn(R) -> R>,
 }
 
@@ -151,6 +150,7 @@ where
     R: Request + Debug + Send,
     W: RetryableWorker<R> + Clone,
 {
+    /// Create a new spawning worker with an inbox and a worker to spawn
     pub fn new(inbox: I, worker: W) -> Box<Self> {
         Box::new(Self {
             inbox,
@@ -159,20 +159,33 @@ where
         })
     }
 
-    fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
+    /// Send a spawned worker to a specific reporter, without waiting for a response
+    pub fn send_to_reporter(self: Box<Self>, reporter: &ReporterHandle) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
         R: SendRequestExt,
     {
-        Box::new(self.worker.clone()).send_local();
+        Box::new(self.worker.clone()).send_to_reporter(reporter)?;
         Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
-    fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
+
+    /// Send a spawned worker to the local datacenter, without waiting for a response
+    pub fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
         R: SendRequestExt,
     {
-        Box::new(self.worker.clone()).send_global();
+        Box::new(self.worker.clone()).send_local()?;
+        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+    }
+
+    /// Send a spawned worker to a global datacenter, without waiting for a response
+    pub fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
+    where
+        Self: 'static + Sized,
+        R: SendRequestExt,
+    {
+        Box::new(self.worker.clone()).send_global()?;
         Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
 }
@@ -182,6 +195,7 @@ where
     R: 'static + SendRequestExt + Clone + Debug + Send + Sync,
     W: 'static + RetryableWorker<R> + Clone,
 {
+    /// Send a spawned worker to the local datacenter and await a response asynchronously
     pub async fn get_local(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
@@ -195,6 +209,7 @@ where
         )?)
     }
 
+    /// Send a spawned worker to the local datacenter and await a response synchronously
     pub fn get_local_blocking(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
@@ -207,6 +222,7 @@ where
         )?)
     }
 
+    /// Send a spawned worker to a global datacenter and await a response asynchronously
     pub async fn get_global(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,
@@ -220,6 +236,7 @@ where
         )?)
     }
 
+    /// Send a spawned worker to a global datacenter and await a response synchronously
     pub fn get_global_blocking(&mut self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         Self: Sized,

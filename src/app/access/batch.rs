@@ -563,22 +563,19 @@ impl Request for BatchRequest {
         panic!("Must use `get_statement` on batch requests!")
     }
 
-    fn payload(&self) -> &Vec<u8> {
-        &self.payload
-    }
-
-    fn payload_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.payload
-    }
-
-    fn into_payload(self) -> Vec<u8> {
-        self.payload
+    fn payload(&self) -> Vec<u8> {
+        self.payload.clone()
     }
 }
 
 impl SendRequestExt for BatchRequest {
     type Marker = DecodeVoid;
+    type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Batch;
+
+    fn worker(self) -> Box<Self::Worker> {
+        BasicRetryWorker::new(self)
+    }
 }
 
 impl BatchRequest {
