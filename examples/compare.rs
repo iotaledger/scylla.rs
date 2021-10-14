@@ -8,6 +8,7 @@ use scylla::{
 use scylla_rs::prelude::*;
 use std::{
     borrow::Cow,
+    convert::TryInto,
     net::SocketAddr,
     sync::Arc,
     time::SystemTime,
@@ -29,7 +30,7 @@ async fn main() {
         },
     );
 
-    let timings = vec![10i32, 100, 1000, 10000]
+    let timings = vec![10i32, 100, 1000, 10000, 100000]
         .into_iter()
         .map(|n| (n, Arc::new(Mutex::new(0u128)), Arc::new(Mutex::new(0u128))))
         .collect::<Vec<_>>();
@@ -74,11 +75,8 @@ async fn main() {
     info!("{:8}{:8}{:10}{:8}", "queries", "scylla", "scylla-rs", "disparity");
     for (n, t1, t2) in timings.iter() {
         let (t1, t2) = (*t1.lock().await as i128, *t2.lock().await as i128);
-        let mut diff = 100. * (t1 - t2) as f32 / f32::min(t1 as f32, t2 as f32);
-        if t1 < t2 {
-            diff = -diff;
-        }
-        info!("{:<8}{:<8}{:<10}{:<8}", n, t1, t2, format!("{:+.1}%", diff));
+        let diff = 100. * (t1 - t2) as f32 / f32::min(t1 as f32, t2 as f32);
+        info!("{:<8}{:<8}{:<10}{:<8}", n * 2, t1, t2, format!("{:+.1}%", diff));
     }
 }
 
@@ -125,32 +123,58 @@ async fn run_benchmark_scylla_rs(n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<
     keyspace.prepare_select::<String, i32>().get_local().await?;
 
     let start = SystemTime::now();
-    for i in 0..n {
-        keyspace
-            .insert(&format!("Key {}", i), &i)
-            .build()?
-            .send_local()
-            .map_err(|e| {
-                error!("{}", e);
-                anyhow::anyhow!(e.to_string())
-            })?;
-    }
-
-    let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
+    let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
         let handle = sender.clone();
         let keyspace = keyspace.clone();
         tokio::task::spawn(async move {
-            handle.send(keyspace.select::<i32>(&format!("Key {}", i)).build()?.get_local().await)?;
+            handle.send(keyspace.insert(&format!("Key {}", i), &i).build()?.get_local().await)?;
             Result::<_, anyhow::Error>::Ok(())
         });
     }
     drop(sender);
+    let mut count = 0;
     while let Some(res) = inbox.recv().await {
+        count += 1;
+        if let Err(e) = res {
+            error!("Insert error: {}", e);
+        }
+    }
+    if count != n {
+        anyhow::bail!("Did not receive all insert confirmations!");
+    }
+
+    let (sender, mut inbox) = unbounded_channel::<(_, Result<Option<_>, _>)>();
+    for i in 0..n {
+        let handle = sender.clone();
+        let keyspace = keyspace.clone();
+        tokio::task::spawn(async move {
+            handle.send((
+                i,
+                keyspace.select::<i32>(&format!("Key {}", i)).build()?.get_local().await,
+            ))?;
+            Result::<_, anyhow::Error>::Ok(())
+        });
+    }
+    drop(sender);
+    let mut count = 0;
+    while let Some((i, res)) = inbox.recv().await {
+        count += 1;
         match res {
-            Ok(_) => (),
+            Ok(o) => {
+                if let Some(v) = o {
+                    if v != i {
+                        anyhow::bail!("Got wrong value for key {}: {}", i, v);
+                    }
+                } else {
+                    error!("No rows found for i = {}!", i)
+                }
+            }
             Err(e) => error!("Select error: {}", e),
         }
+    }
+    if count != n {
+        anyhow::bail!("Did not receive all values!");
     }
     let time = start.elapsed().unwrap().as_millis();
     info!(
@@ -205,9 +229,29 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32, t: Arc<Mutex<u128>
     let prepared_select = session.prepare(query).await?;
 
     let start = SystemTime::now();
+
+    let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
-        session.execute(&prepared_insert, (&format!("Key {}", i), &i)).await?;
+        let handle = sender.clone();
+        let session = session.clone();
+        let prepared_insert = prepared_insert.clone();
+        tokio::task::spawn(async move {
+            handle.send(session.execute(&prepared_insert, (&format!("Key {}", i), &i)).await)?;
+            Result::<_, anyhow::Error>::Ok(())
+        });
     }
+    drop(sender);
+    let mut count = 0;
+    while let Some(res) = inbox.recv().await {
+        count += 1;
+        if let Err(e) = res {
+            error!("Insert error: {}", e);
+        }
+    }
+    if count != n {
+        anyhow::bail!("Did not receive all insert confirmations!");
+    }
+
     let (sender, mut inbox) = tokio::sync::mpsc::unbounded_channel();
     for i in 0..n {
         let handle = sender.clone();
@@ -218,10 +262,22 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32, t: Arc<Mutex<u128>
         });
     }
     drop(sender);
+    let mut count = 0;
     while let Some((i, res)) = inbox.recv().await {
+        count += 1;
         match res {
             Ok(r) => {
-                if r.rows.is_none() {
+                if let Some(v) = r.rows.and_then(|r| r.into_iter().next()) {
+                    let v = i32::from_be_bytes(
+                        v.into_typed::<(Vec<u8>,)>()?
+                            .0
+                            .try_into()
+                            .map_err(|_| anyhow::anyhow!("Could not decode blob!"))?,
+                    );
+                    if v != i {
+                        anyhow::bail!("Got wrong value for key {}: {}", i, v);
+                    }
+                } else {
                     error!("No rows found for i = {}!", i)
                 }
             }
@@ -229,6 +285,9 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32, t: Arc<Mutex<u128>
                 error!("{}", e);
             }
         }
+    }
+    if count != n {
+        anyhow::bail!("Did not receive all values!");
     }
 
     let time = start.elapsed().unwrap().as_millis();

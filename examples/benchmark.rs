@@ -58,7 +58,7 @@ async fn main() {
     info!("Timings:");
     info!("{:8}{:8}{:8}", "N", "R", "Time");
     for (n, r, t) in timings.iter() {
-        info!("{:<8}{:<8}{:<8}", n, r, *t.lock().await);
+        info!("{:<8}{:<8}{:<8}", n * 2, r, *t.lock().await);
     }
 }
 
