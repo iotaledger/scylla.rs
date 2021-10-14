@@ -36,14 +36,8 @@ async fn main() {
         .collect::<Vec<_>>();
 
     for (n, _, t) in timings.iter().cloned() {
-        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 8, Default::default()))
-            .await
-            .expect("runtime to run");
-        let cluster_handle = runtime
-            .handle()
-            .cluster_handle()
-            .await
-            .expect("running scylla application");
+        let runtime = Runtime::new(None, Scylla::default()).await.expect("runtime to run");
+        let cluster_handle = runtime.cluster_handle().await.expect("running scylla application");
         cluster_handle.add_node(node).await.expect("to add node");
         cluster_handle.build_ring(1).await.expect("to build ring");
         let handle = runtime.handle().clone();
@@ -57,13 +51,7 @@ async fn main() {
         runtime.block_on().await.expect("runtime to gracefully shutdown")
     }
 
-    let session = Arc::new(
-        SessionBuilder::new()
-            .known_node_addr(([127, 0, 0, 1], 9042).into())
-            .build()
-            .await
-            .unwrap(),
-    );
+    let session = Arc::new(SessionBuilder::new().known_node_addr(node).build().await.unwrap());
 
     for (n, t, _) in timings.iter().cloned() {
         match run_benchmark_scylla(&session, n, t).await {
