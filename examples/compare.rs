@@ -72,11 +72,30 @@ async fn main() {
         }
     }
     info!("Timings:");
-    info!("{:8}{:8}{:10}{:8}", "queries", "scylla", "scylla-rs", "disparity");
+    info!("{:8} | {:^25} | {:^25} |", "", "scylla", "scylla-rs");
+    info!("{:8} | {:-<25} | {:-<25} |", "", "", "");
+    info!(
+        "{:8} | {:12} {:12} | {:12} {:12} | {:>10}",
+        "queries", "total (ms)", "average (ns)", "total (ms)", "average (ns)", "disparity"
+    );
+    info!(
+        "{:-<8} | {:-<12} {:-<12} | {:-<12} {:-<12} | {:-<8}",
+        "", "", "", "", "", ""
+    );
     for (n, t1, t2) in timings.iter() {
+        let n = n * 2;
         let (t1, t2) = (*t1.lock().await as i128, *t2.lock().await as i128);
         let diff = 100. * (t1 - t2) as f32 / f32::min(t1 as f32, t2 as f32);
-        info!("{:<8}{:<8}{:<10}{:<8}", n * 2, t1, t2, format!("{:+.1}%", diff));
+        let (avg1, avg2) = (t1 / n as i128, t2 / n as i128);
+        info!(
+            "{:<8} | {:<12} {:<12.4} | {:<12} {:<12.4} | {:>10}",
+            n,
+            t1 / 1000000,
+            avg1,
+            t2 / 1000000,
+            avg2,
+            format!("{:+.1}%", diff)
+        );
     }
 }
 
@@ -176,11 +195,8 @@ async fn run_benchmark_scylla_rs(n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<
     if count != n {
         anyhow::bail!("Did not receive all values!");
     }
-    let time = start.elapsed().unwrap().as_millis();
-    info!(
-        "Finished benchmark. Total time: {} ms",
-        start.elapsed().unwrap().as_millis()
-    );
+    let time = start.elapsed().unwrap().as_nanos();
+    info!("Finished benchmark. Total time: {} ms", time / 1000000);
     *t.lock().await = time;
     Ok(())
 }
@@ -290,11 +306,8 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32, t: Arc<Mutex<u128>
         anyhow::bail!("Did not receive all values!");
     }
 
-    let time = start.elapsed().unwrap().as_millis();
-    info!(
-        "Finished benchmark. Total time: {} ms",
-        start.elapsed().unwrap().as_millis()
-    );
+    let time = start.elapsed().unwrap().as_nanos();
+    info!("Finished benchmark. Total time: {} ms", time / 1000000);
     *t.lock().await = time;
     Ok(())
 }
