@@ -504,7 +504,7 @@ pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
     pub(crate) _marker: T,
 }
 
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
+impl<'a, S: Update<K, V>, K: TokenEncoder, V> UpdateBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
     pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, QueryValues, StaticRequest> {
         UpdateBuilder {
             _marker: self._marker,
@@ -514,6 +514,29 @@ impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryConsistency, Sta
             value: self.value,
             builder: S::bind_values(self.builder.consistency(consistency), &self.key, &self.value),
         }
+    }
+
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value)
+                .timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let query = S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value).build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
     }
 }
 
@@ -578,6 +601,48 @@ impl<'a, S: Keyspace>
             builder,
         }
     }
+
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryBuild,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: self
+                .builder
+                .consistency(Consistency::Quorum)
+                .bind(self.value)
+                .bind(self.key)
+                .timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let query = self
+            .builder
+            .consistency(Consistency::Quorum)
+            .bind(self.value)
+            .bind(self.key)
+            .build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
 }
 
 impl<'a, S: Keyspace>
@@ -610,37 +675,52 @@ impl<'a, S: Keyspace>
             builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), self.key, self.value),
         }
     }
-}
 
-impl<'a, S: Update<K, V>, K: ComputeToken, V> UpdateBuilder<'a, S, K, V, QueryValues, StaticRequest> {
-    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
-        UpdateBuilder {
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            value: self.value,
-            builder: self.builder.timestamp(timestamp),
-            _marker: self._marker,
-        }
-    }
-    /// Build the UpdateRequest
-    pub fn build(self) -> anyhow::Result<UpdateRequest> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
-
-impl<'a, S: Keyspace, V: ?Sized> UpdateBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
     pub fn timestamp(
         self,
         timestamp: i64,
-    ) -> UpdateBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryBuild,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: (self._marker.bind_fn)(
+                Box::new(self.builder.consistency(Consistency::Quorum)),
+                self.key,
+                self.value,
+            )
+            .timestamp(timestamp),
+            _marker: DynamicRequest,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let query = (self._marker.bind_fn)(
+            Box::new(self.builder.consistency(Consistency::Quorum)),
+            self.key,
+            self.value,
+        )
+        .build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+
+impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryValues, T> {
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
         UpdateBuilder {
             keyspace: self.keyspace,
             statement: self.statement,
@@ -650,21 +730,7 @@ impl<'a, S: Keyspace, V: ?Sized> UpdateBuilder<'a, S, [&(dyn TokenChainer + Sync
             _marker: self._marker,
         }
     }
-    /// Build the UpdateRequest
-    pub fn build(self) -> anyhow::Result<UpdateRequest> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.get_token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
 
-impl<'a, S: Update<K, V>, K: ComputeToken, V, T> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
-    /// Build the UpdateRequest
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request
@@ -677,13 +743,12 @@ impl<'a, S: Update<K, V>, K: ComputeToken, V, T> UpdateBuilder<'a, S, K, V, Quer
     }
 }
 
-impl<'a, S: Keyspace, V: ?Sized> UpdateBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
-    /// Build the UpdateRequest
+impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.get_token(),
+            token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
         }

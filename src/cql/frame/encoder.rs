@@ -325,7 +325,7 @@ impl TokenEncodeChain {
 /// Defines types which can be used as a key, and can build a token for queries
 pub trait TokenChainer: TokenEncoder + ColumnEncoder {
     /// Start an encode chain
-    fn chain_token<E: ColumnEncoder>(&self, other: &E) -> TokenEncodeChain
+    fn chain<E: ColumnEncoder>(&self, other: &E) -> TokenEncodeChain
     where
         Self: Sized,
     {
@@ -335,7 +335,7 @@ pub trait TokenChainer: TokenEncoder + ColumnEncoder {
     }
 
     /// Start an encode chain
-    fn dyn_chain_token(&self, other: &dyn ColumnEncoder) -> TokenEncodeChain {
+    fn dyn_chain(&self, other: &dyn ColumnEncoder) -> TokenEncodeChain {
         let mut buffer: Vec<u8> = self.encode_new()[2..].into();
         buffer.push(0);
         let mut chain = TokenEncodeChain { buffer };
@@ -349,17 +349,17 @@ impl<T: TokenEncoder + ColumnEncoder> TokenChainer for T {}
 /// Encoding functionality for tokens
 pub trait TokenEncoder {
     /// Encode a single token
-    fn get_token(&self) -> i64;
+    fn token(&self) -> i64;
 }
 
 impl<T: ColumnEncoder> TokenEncoder for T {
-    fn get_token(&self) -> i64 {
+    fn token(&self) -> i64 {
         crate::cql::murmur3_cassandra_x64_128(&self.encode_new()[4..], 0).0
     }
 }
 
 impl<T: ColumnEncoder> TokenEncoder for [T] {
-    fn get_token(&self) -> i64 {
+    fn token(&self) -> i64 {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.iter() {
             token_chain.append(v);

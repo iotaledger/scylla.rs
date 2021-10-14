@@ -407,7 +407,7 @@ pub struct SelectBuilder<'a, S, K: ?Sized, V, Stage, T> {
     _marker: PhantomData<fn(V, T) -> (V, T)>,
 }
 
-impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
+impl<'a, S: Select<K, V>, K: TokenEncoder, V> SelectBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
     pub fn consistency(self, consistency: Consistency) -> SelectBuilder<'a, S, K, V, QueryValues, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
@@ -416,6 +416,49 @@ impl<'a, S: Select<K, V>, K, V> SelectBuilder<'a, S, K, V, QueryConsistency, Sta
             key: self.key,
             builder: S::bind_values(self.builder.consistency(consistency), &self.key),
         }
+    }
+
+    pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, QueryPagingState, StaticRequest> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: S::bind_values(self.builder.consistency(Consistency::One), &self.key).page_size(page_size),
+        }
+    }
+    /// Set the paging state.
+    pub fn paging_state(
+        self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, StaticRequest> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: S::bind_values(self.builder.consistency(Consistency::One), &self.key).paging_state(paging_state),
+        }
+    }
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: S::bind_values(self.builder.consistency(Consistency::One), &self.key).timestamp(timestamp),
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+        let query = S::bind_values(self.builder.consistency(Consistency::One), &self.key).build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
     }
 }
 
@@ -433,6 +476,67 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
             builder,
         }
     }
+
+    pub fn page_size(
+        self,
+        page_size: i32,
+    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryPagingState, DynamicRequest> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: self
+                .builder
+                .consistency(Consistency::One)
+                .bind(self.key)
+                .page_size(page_size),
+        }
+    }
+    /// Set the paging state.
+    pub fn paging_state(
+        self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QuerySerialConsistency, DynamicRequest> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: self
+                .builder
+                .consistency(Consistency::One)
+                .bind(self.key)
+                .paging_state(paging_state),
+        }
+    }
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: self
+                .builder
+                .consistency(Consistency::One)
+                .bind(self.key)
+                .timestamp(timestamp),
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+        let query = self.builder.consistency(Consistency::One).bind(self.key).build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
 }
 
 impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
@@ -445,7 +549,6 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
             builder: self.builder.page_size(page_size),
         }
     }
-    /// Set the paging state.
     pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
@@ -466,24 +569,7 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest>
-{
-    /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.get_token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
-
-impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V, QueryValues, StaticRequest> {
-    /// Build the SelectRequest
+impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
@@ -496,24 +582,7 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
     }
 }
 
-impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest>
-{
-    /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.get_token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
-
-impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
-    /// Build the SelectRequest
+impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
@@ -526,8 +595,7 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
     }
 }
 
-impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
-    /// Set the paging state in the query frame.
+impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
     pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
@@ -538,7 +606,6 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
         }
     }
 
-    /// Set the timestamp of the query frame.
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
@@ -548,8 +615,7 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
             builder: self.builder.timestamp(timestamp),
         }
     }
-}
-impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V, QueryPagingState, StaticRequest> {
+
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
@@ -559,59 +625,25 @@ impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder> SelectBuilder<'a, S, K, V
             statement: self.statement,
         }
         .into())
-    }
-}
-impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryPagingState, DynamicRequest>
-{
-    /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.get_token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
-impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
-    /// Set the timestamp of the query frame.
-    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
-        SelectBuilder {
-            _marker: self._marker,
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            builder: self.builder.timestamp(timestamp),
-        }
     }
 }
 
-impl<'a, S: Keyspace, K: ComputeToken, V: RowsDecoder>
-    SelectBuilder<'a, S, K, V, QuerySerialConsistency, StaticRequest>
-{
+impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
+        SelectBuilder {
+            _marker: self._marker,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+        }
+    }
+
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
-impl<'a, S: Keyspace, V: RowsDecoder>
-    SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QuerySerialConsistency, DynamicRequest>
-{
-    /// Build the SelectRequest
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.get_token(),
             payload: query.into(),
             statement: self.statement,
         }

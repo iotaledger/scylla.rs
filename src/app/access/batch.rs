@@ -472,6 +472,33 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
     pub fn consistency(self, consistency: Consistency) -> BatchCollector<'a, S, Type, BatchFlags> {
         Self::step(self.builder.consistency(consistency), self.map, self.keyspace)
     }
+
+    /// Set the serial consistency for the batch
+    pub fn serial_consistency(self, consistency: Consistency) -> BatchCollector<'a, S, Type, BatchTimestamp> {
+        Self::step(
+            self.builder
+                .consistency(Consistency::Quorum)
+                .serial_consistency(consistency),
+            self.map,
+            self.keyspace,
+        )
+    }
+    /// Set the timestamp for the batch
+    pub fn timestamp(self, timestamp: i64) -> BatchCollector<'a, S, Type, BatchBuild> {
+        Self::step(
+            self.builder.consistency(Consistency::Quorum).timestamp(timestamp),
+            self.map,
+            self.keyspace,
+        )
+    }
+    /// Build the batch request using the current collector
+    pub fn build(self) -> anyhow::Result<BatchRequest> {
+        Ok(BatchRequest {
+            token: rand::random(),
+            map: self.map,
+            payload: self.builder.consistency(Consistency::Quorum).build()?.0.into(),
+        })
+    }
 }
 
 impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchFlags> {
@@ -582,9 +609,9 @@ impl BatchRequest {
     /// Compute the murmur3 token from the provided K
     pub fn compute_token<K>(mut self, key: &K) -> Self
     where
-        K: ComputeToken,
+        K: TokenEncoder,
     {
-        self.token = K::token(key);
+        self.token = key.token();
         self
     }
 

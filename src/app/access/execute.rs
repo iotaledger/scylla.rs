@@ -205,6 +205,33 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> 
             builder,
         }
     }
+
+    pub fn timestamp(self, timestamp: i64) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryBuild> {
+        ExecuteBuilder {
+            statement: self.statement,
+            variables: self.variables,
+            builder: self
+                .builder
+                .consistency(Consistency::Quorum)
+                .bind(self.variables)
+                .timestamp(timestamp),
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<ExecuteRequest> {
+        let query = self
+            .builder
+            .consistency(Consistency::Quorum)
+            .bind(self.variables)
+            .build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: rand::random(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
 }
 
 impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryValues> {
@@ -215,7 +242,7 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryValues> {
             builder: self.builder.timestamp(timestamp),
         }
     }
-    /// Build the ExecuteRequest
+
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
         let query = self.builder.build()?;
         // create the request
@@ -229,7 +256,6 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryValues> {
 }
 
 impl<'a, V: ?Sized> ExecuteBuilder<'a, V, QueryBuild> {
-    /// Build the ExecuteRequest
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
         let query = self.builder.build()?;
         // create the request

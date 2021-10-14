@@ -92,10 +92,7 @@ pub use insert::{
     Insert,
     InsertRequest,
 };
-pub use keyspace::{
-    AsBytes,
-    Keyspace,
-};
+pub use keyspace::Keyspace;
 pub use prepare::{
     AsDynamicPrepareRequest,
     GetDynamicPrepareRequest,
@@ -277,12 +274,6 @@ pub enum RequestError {
     Worker(#[from] WorkerError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
-}
-
-/// Defines a computed token for a key type
-pub trait ComputeToken {
-    /// Compute the token from the provided partition_key by using murmur3 hash function
-    fn token(&self) -> i64;
 }
 
 /// A request which has a token, statement, and payload
@@ -680,7 +671,6 @@ pub mod tests {
                 &[&3],
                 StatementType::Query,
             )
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .worker()
@@ -689,31 +679,24 @@ pub mod tests {
         assert!(res.is_err());
         let res = "SELECT col1 FROM keyspace.table WHERE key = ?"
             .as_select_prepared::<f32>(&[&3])
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
         let res = keyspace
             .select_prepared::<f32>(&3u32)
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let req2 = keyspace
-            .select::<i32>(&3)
-            .consistency(Consistency::One)
-            .page_size(500)
-            .build()
-            .unwrap();
+        let req2 = keyspace.select::<i32>(&3).page_size(500).build().unwrap();
         let _res = req2.clone().send_local();
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
+        let req = keyspace.insert(&3, &8.0).build().unwrap();
         let _res = req.send_local();
 
         "my_keyspace"
@@ -724,7 +707,6 @@ pub mod tests {
                 StatementType::Query,
             )
             .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .get_local_blocking()
@@ -733,7 +715,6 @@ pub mod tests {
         "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
             .as_insert_query(&[&3], &[&8.0, &"hello"])
             .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .send_local()
@@ -743,7 +724,7 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build().unwrap();
+        let req = keyspace.update(&3, &8.0).build().unwrap();
 
         let _res = req.send_local();
     }
@@ -753,7 +734,7 @@ pub mod tests {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace
             .delete::<f32>(&3)
-            .consistency(Consistency::One)
+            .consistency(Consistency::All)
             .build()
             .unwrap();
 
@@ -771,7 +752,6 @@ pub mod tests {
             .update_query(&3, &8.0)
             .insert_prepared(&3, &8.0)
             .delete_prepared::<_, f32>(&3)
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .compute_token(&3);
@@ -811,7 +791,6 @@ pub mod tests {
                     &[&"Test 1"],
                     &[&1],
                 )
-                .consistency(Consistency::One)
                 .build()?
                 .send_local()?;
             Result::<_, RequestError>::Ok(())

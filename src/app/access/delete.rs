@@ -405,7 +405,7 @@ pub struct DeleteBuilder<'a, S, K: ?Sized, V, Stage, T> {
     pub(crate) _marker: PhantomData<fn(V, T) -> (V, T)>,
 }
 
-impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
+impl<'a, S: Delete<K, V>, K: TokenEncoder, V> DeleteBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
     pub fn consistency(self, consistency: Consistency) -> DeleteBuilder<'a, S, K, V, QueryValues, StaticRequest> {
         DeleteBuilder {
             _marker: self._marker,
@@ -414,6 +414,27 @@ impl<'a, S: Delete<K, V>, K, V> DeleteBuilder<'a, S, K, V, QueryConsistency, Sta
             key: self.key,
             builder: S::bind_values(self.builder.consistency(consistency), &self.key),
         }
+    }
+
+    pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
+        DeleteBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key).timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<DeleteRequest> {
+        let query = S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key).build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
     }
 }
 
@@ -431,32 +452,7 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
             builder,
         }
     }
-}
 
-impl<'a, S: Delete<K, V>, K: ComputeToken, V> DeleteBuilder<'a, S, K, V, QueryValues, StaticRequest> {
-    pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
-        DeleteBuilder {
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            builder: self.builder.timestamp(timestamp),
-            _marker: self._marker,
-        }
-    }
-    /// Build the DeleteRequest
-    pub fn build(self) -> anyhow::Result<DeleteRequest> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement,
-        }
-        .into())
-    }
-}
-
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
     pub fn timestamp(
         self,
         timestamp: i64,
@@ -465,16 +461,20 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: self.builder.timestamp(timestamp),
+            builder: self
+                .builder
+                .consistency(Consistency::Quorum)
+                .bind(self.key)
+                .timestamp(timestamp),
             _marker: self._marker,
         }
     }
-    /// Build the DeleteRequest
+
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
-        let query = self.builder.build()?;
+        let query = self.builder.consistency(Consistency::Quorum).bind(self.key).build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.get_token(),
+            token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
         }
@@ -482,8 +482,19 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
     }
 }
 
-impl<'a, S: Delete<K, V>, K: ComputeToken, V, T> DeleteBuilder<'a, S, K, V, QueryBuild, T> {
-    /// Build the DeleteRequest
+impl<'a, S, K, V, T> DeleteBuilder<'a, S, K, V, QueryValues, T> {
+    pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, QueryBuild, T> {
+        DeleteBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            builder: self.builder.timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<'a, S, K: TokenEncoder, V, T> DeleteBuilder<'a, S, K, V, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request
@@ -496,13 +507,12 @@ impl<'a, S: Delete<K, V>, K: ComputeToken, V, T> DeleteBuilder<'a, S, K, V, Quer
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
-    /// Build the DeleteRequest
+impl<'a, S, K: TokenEncoder, V, T> DeleteBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.get_token(),
+            token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
         }
