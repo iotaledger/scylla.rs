@@ -36,7 +36,6 @@ async fn main() {
         .await
         .expect("Runtime failed to start!");
     let cluster_handle = runtime
-        .handle()
         .cluster_handle()
         .await
         .expect("Failed to acquire cluster handle!");
@@ -54,13 +53,7 @@ async fn main() {
     }
     runtime.handle().shutdown().await;
 
-    let session = Arc::new(
-        SessionBuilder::new()
-            .known_node_addr(([127, 0, 0, 1], 9042).into())
-            .build()
-            .await
-            .unwrap(),
-    );
+    let session = Arc::new(SessionBuilder::new().known_node_addr(node).build().await.unwrap());
 
     for (n, t, _) in timings.iter_mut() {
         match run_benchmark_scylla(&session, *n).await {
