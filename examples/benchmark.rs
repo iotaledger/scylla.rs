@@ -5,13 +5,9 @@ use scylla_rs::prelude::*;
 use std::{
     borrow::Cow,
     net::SocketAddr,
-    sync::Arc,
     time::SystemTime,
 };
-use tokio::sync::{
-    mpsc::unbounded_channel,
-    Mutex,
-};
+use tokio::sync::mpsc::unbounded_channel;
 
 #[tokio::main]
 async fn main() {
@@ -30,39 +26,43 @@ async fn main() {
         .flatten()
         .zip(std::iter::repeat(vec![2u8, 4, 8, 16].into_iter()).flatten());
 
-    let timings = combinations
-        .map(|(n, r)| (n, r, Arc::new(Mutex::new(0u128))))
-        .collect::<Vec<_>>();
+    let mut timings = combinations.map(|(n, r)| (n, r, 0u128)).collect::<Vec<_>>();
 
-    for (n, r, t) in timings.iter().cloned() {
-        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), r, Default::default()))
-            .await
-            .expect("runtime to run");
+    for (n, r, t) in timings.iter_mut() {
+        let runtime = Runtime::new(
+            None,
+            Scylla::new("datacenter1", num_cpus::get(), *r, Default::default()),
+        )
+        .await
+        .expect("Runtime failed to start!");
         let cluster_handle = runtime
             .handle()
             .cluster_handle()
             .await
-            .expect("running scylla application");
+            .expect("Failed to acquire cluster handle!");
         cluster_handle.add_node(node).await.expect("to add node");
         cluster_handle.build_ring(1).await.expect("to build ring");
-        let handle = runtime.handle().clone();
-        backstage::spawn_task("adding node task", async move {
-            match run_benchmark(n, t).await {
-                Ok(_) => info!("Successfully ran benchmark"),
-                Err(e) => error!("{}", e),
+        match run_benchmark(*n).await {
+            Ok(time) => {
+                *t = time;
+                info!("Successfully ran benchmark")
             }
-            handle.shutdown().await;
-        });
-        runtime.block_on().await.expect("runtime to gracefully shutdown")
+            Err(e) => error!("{}", e),
+        }
+        runtime.handle().shutdown().await;
+        runtime
+            .block_on()
+            .await
+            .expect("Runtime failed to shutdown gracefully!");
     }
     info!("Timings:");
-    info!("{:8}{:8}{:8}", "N", "R", "Time");
+    info!("{:8}{:8}{:8}", "N", "R", "Time (ms)");
     for (n, r, t) in timings.iter() {
-        info!("{:<8}{:<8}{:<8}", n * 2, r, *t.lock().await);
+        info!("{:<8}{:<8}{:<8.2}", n * 2, r, *t as f32 / 1000000.);
     }
 }
 
-async fn run_benchmark(n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<()> {
+async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let keyspace = MyKeyspace::new();
@@ -132,13 +132,9 @@ async fn run_benchmark(n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<()> {
             Err(e) => error!("Select error: {}", e),
         }
     }
-    let time = start.elapsed().unwrap().as_millis();
-    info!(
-        "Finished benchmark. Total time: {} ms",
-        start.elapsed().unwrap().as_millis()
-    );
-    *t.lock().await = time;
-    Ok(())
+    let time = start.elapsed().unwrap().as_nanos();
+    info!("Finished benchmark. Total time: {} ms", time / 1000000);
+    Ok(time)
 }
 
 #[derive(Default, Clone, Debug)]

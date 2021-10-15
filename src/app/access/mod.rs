@@ -776,12 +776,12 @@ pub mod tests {
         );
         let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 2, Default::default()))
             .await
-            .expect("runtime to run");
+            .expect("Runtime failed to start!");
         let cluster_handle = runtime
             .handle()
             .cluster_handle()
             .await
-            .expect("running scylla application");
+            .expect("Failed to acquire cluster handle!");
         cluster_handle.add_node(node).await.expect("to add node");
         cluster_handle.build_ring(1).await.expect("to build ring");
         backstage::spawn_task("adding node task", async move {
@@ -795,6 +795,9 @@ pub mod tests {
                 .send_local()?;
             Result::<_, RequestError>::Ok(())
         });
-        runtime.block_on().await.expect("runtime to gracefully shutdown")
+        runtime
+            .block_on()
+            .await
+            .expect("Runtime failed to shutdown gracefully!")
     }
 }

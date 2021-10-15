@@ -10,12 +10,15 @@ async fn main() {
     let scylla = Scylla::default();
     let runtime = Runtime::new(None, scylla)
         .await
-        .expect("runtime to run")
+        .expect("Runtime failed to start!")
         .backserver("127.0.0.1:10000".parse().unwrap())
         .await
         .expect("backserver to run");
     backstage::spawn_task("adding node task", ws_client());
-    runtime.block_on().await.expect("runtime to gracefully shutdown")
+    runtime
+        .block_on()
+        .await
+        .expect("Runtime failed to shutdown gracefully!")
 }
 
 async fn ws_client() {

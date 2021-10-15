@@ -13,10 +13,7 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
-use tokio::sync::{
-    mpsc::unbounded_channel,
-    Mutex,
-};
+use tokio::sync::mpsc::unbounded_channel;
 
 #[tokio::main]
 async fn main() {
@@ -30,32 +27,32 @@ async fn main() {
         },
     );
 
-    let timings = vec![10i32, 100, 1000, 10000, 100000]
+    let mut timings = vec![10i32, 100, 1000, 10000, 100000]
         .into_iter()
-        .map(|n| (n, Arc::new(Mutex::new(0u128)), Arc::new(Mutex::new(0u128))))
+        .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
 
-    for (n, _, t) in timings.iter().cloned() {
-        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 8, Default::default()))
-            .await
-            .expect("runtime to run");
-        let cluster_handle = runtime
-            .handle()
-            .cluster_handle()
-            .await
-            .expect("running scylla application");
-        cluster_handle.add_node(node).await.expect("to add node");
-        cluster_handle.build_ring(1).await.expect("to build ring");
-        let handle = runtime.handle().clone();
-        backstage::spawn_task("adding node task", async move {
-            match run_benchmark_scylla_rs(n, t).await {
-                Ok(_) => info!("Successfully ran scylla-rs benchmark for {} queries", n),
-                Err(e) => error!("{}", e),
+    let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 8, Default::default()))
+        .await
+        .expect("Runtime failed to start!");
+    let cluster_handle = runtime
+        .handle()
+        .cluster_handle()
+        .await
+        .expect("Failed to acquire cluster handle!");
+    cluster_handle.add_node(node).await.expect("Failed to add node!");
+    cluster_handle.build_ring(1).await.expect("Failed to build ring!");
+
+    for (n, _, t) in timings.iter_mut() {
+        match run_benchmark_scylla_rs(*n).await {
+            Ok(time) => {
+                *t = time;
+                info!("Successfully ran scylla-rs benchmark for {} queries", n);
             }
-            handle.shutdown().await;
-        });
-        runtime.block_on().await.expect("runtime to gracefully shutdown")
+            Err(e) => error!("{}", e),
+        }
     }
+    runtime.handle().shutdown().await;
 
     let session = Arc::new(
         SessionBuilder::new()
@@ -65,9 +62,12 @@ async fn main() {
             .unwrap(),
     );
 
-    for (n, t, _) in timings.iter().cloned() {
-        match run_benchmark_scylla(&session, n, t).await {
-            Ok(_) => info!("Successfully ran scylla-rust-driver benchmark for {} queries", n),
+    for (n, t, _) in timings.iter_mut() {
+        match run_benchmark_scylla(&session, *n).await {
+            Ok(time) => {
+                *t = time;
+                info!("Successfully ran scylla-rust-driver benchmark for {} queries", n);
+            }
             Err(e) => error!("{}", e),
         }
     }
@@ -84,7 +84,7 @@ async fn main() {
     );
     for (n, t1, t2) in timings.iter() {
         let n = n * 2;
-        let (t1, t2) = (*t1.lock().await as i128, *t2.lock().await as i128);
+        let (t1, t2) = (*t1 as i128, *t2 as i128);
         let diff = 100. * (t1 - t2) as f32 / f32::min(t1 as f32, t2 as f32);
         let (avg1, avg2) = (t1 / n as i128, t2 / n as i128);
         info!(
@@ -99,7 +99,7 @@ async fn main() {
     }
 }
 
-async fn run_benchmark_scylla_rs(n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<()> {
+async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let keyspace = MyKeyspace::new();
@@ -197,11 +197,10 @@ async fn run_benchmark_scylla_rs(n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<
     }
     let time = start.elapsed().unwrap().as_nanos();
     info!("Finished benchmark. Total time: {} ms", time / 1000000);
-    *t.lock().await = time;
-    Ok(())
+    Ok(time)
 }
 
-async fn run_benchmark_scylla(session: &Arc<Session>, n: i32, t: Arc<Mutex<u128>>) -> anyhow::Result<()> {
+async fn run_benchmark_scylla(session: &Arc<Session>, n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let mut query = Query::new(
@@ -308,8 +307,7 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32, t: Arc<Mutex<u128>
 
     let time = start.elapsed().unwrap().as_nanos();
     info!("Finished benchmark. Total time: {} ms", time / 1000000);
-    *t.lock().await = time;
-    Ok(())
+    Ok(time)
 }
 
 #[derive(Default, Clone, Debug)]
