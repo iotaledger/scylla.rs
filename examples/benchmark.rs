@@ -40,8 +40,8 @@ async fn main() {
             .cluster_handle()
             .await
             .expect("Failed to acquire cluster handle!");
-        cluster_handle.add_node(node).await.expect("to add node");
-        cluster_handle.build_ring(1).await.expect("to build ring");
+        cluster_handle.add_node(node).await.expect("Failed to add node!");
+        cluster_handle.build_ring(1).await.expect("Failed to build ring!");
         match run_benchmark(*n).await {
             Ok(time) => {
                 *t = time;

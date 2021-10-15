@@ -16,8 +16,8 @@ async fn main() {
     cluster_handle
         .add_node(example_scylla_node())
         .await
-        .expect("to add node");
-    cluster_handle.build_ring(1).await.expect("to build ring");
+        .expect("Failed to add node!");
+    cluster_handle.build_ring(1).await.expect("Failed to build ring!");
     runtime
         .block_on()
         .await

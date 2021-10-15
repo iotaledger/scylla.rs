@@ -410,7 +410,9 @@ impl Endpoints for Replicas {
         mut rng: &mut ThreadRng,
         uniform: Uniform<u8>,
     ) -> anyhow::Result<(), RingSendError> {
-        let replicas = self.get_mut(data_center).expect("Expected Replicas");
+        let replicas = self
+            .get_mut(data_center)
+            .expect(&format!("No replica for datacenter {}", data_center));
         if let Some(replica) = replicas.get_mut(replica_index) {
             replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
         } else {
