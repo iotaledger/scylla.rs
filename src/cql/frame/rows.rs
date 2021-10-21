@@ -9,16 +9,7 @@ use super::{
 };
 use anyhow::ensure;
 use log::error;
-use std::{
-    collections::HashMap,
-    convert::TryInto,
-    hash::Hash,
-    net::{
-        IpAddr,
-        Ipv4Addr,
-        Ipv6Addr,
-    },
-};
+use std::convert::TryInto;
 
 /// The column count type.
 pub type ColumnsCount = i32;
@@ -111,6 +102,18 @@ pub trait Row: Sized {
     fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
     where
         Self: Sized;
+}
+
+impl<T> Row for T
+where
+    T: ColumnDecoder,
+{
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        rows.column_value()
+    }
 }
 
 /// Defines a result-set column value
@@ -235,167 +238,6 @@ row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTT
 row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT));
 row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT, TTTTTTTTTTTTTT));
 row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT, TTTTTTTTTTTTTT, TTTTTTTTTTTTTTT));
-
-impl<T: ColumnDecoder> Row for Option<T> {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for i64 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for u64 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for f64 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for i32 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for u32 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for f32 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for i16 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for u16 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for i8 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for u8 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for String {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for IpAddr {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for Ipv4Addr {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl Row for Ipv6Addr {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl<E> Row for Vec<E>
-where
-    E: ColumnDecoder,
-{
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
-
-impl<K, V, S> Row for HashMap<K, V, S>
-where
-    K: Eq + Hash + ColumnDecoder,
-    V: ColumnDecoder,
-    S: ::std::hash::BuildHasher + Default,
-{
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
-    }
-}
 
 #[macro_export]
 /// The rows macro implements the row decoder.

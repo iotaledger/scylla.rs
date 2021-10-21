@@ -55,7 +55,7 @@ pub trait RowsDecoder: Sized {
 
 impl<T> RowsDecoder for T
 where
-    T: ColumnDecoder + Row,
+    T: Row,
 {
     type Row = T;
 
@@ -66,14 +66,14 @@ where
 
 impl<T> RowsDecoder for crate::prelude::Iter<T>
 where
-    T: ColumnDecoder + Row,
+    T: Row,
 {
     type Row = T;
 
     fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
         ensure!(decoder.is_rows()?, "Decoded response is not rows!");
         let rows_iter = Self::Row::rows_iter(decoder)?;
-        if rows_iter.is_empty() {
+        if rows_iter.is_empty() && !rows_iter.has_more_pages() {
             Ok(None)
         } else {
             Ok(Some(rows_iter))
