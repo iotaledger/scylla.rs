@@ -429,7 +429,7 @@ where
                             if let Err(ActorError {
                                 source: _,
                                 request: Some(ActorRequest::Restart(_)),
-                            }) = result_opt.expect("node with eol service")
+                            }) = result_opt.expect("No result received from microservice!")
                             {
                                 let my_handle = rt.handle().clone();
                                 Self::restart_node(my_handle, address);

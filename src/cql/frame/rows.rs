@@ -3,14 +3,21 @@
 
 //! This module defines the row/column decoder/encoder for the frame structure.
 
-use super::{ColumnDecoder, Frame};
+use super::{
+    ColumnDecoder,
+    Frame,
+};
 use anyhow::ensure;
 use log::error;
 use std::{
     collections::HashMap,
     convert::TryInto,
     hash::Hash,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{
+        IpAddr,
+        Ipv4Addr,
+        Ipv6Addr,
+    },
 };
 
 /// The column count type.
@@ -191,9 +198,9 @@ impl<T: Row> ColumnValue for Iter<T> {
             let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
             // update the next column_start to start from next column
             self.column_start += length as usize;
-            C::try_decode(col_slice)
+            C::try_decode_column(col_slice)
         } else {
-            C::try_decode(&[])
+            C::try_decode_column(&[])
         }
     }
 }
@@ -474,9 +481,9 @@ macro_rules! rows {
                                     let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
                                     // update the next column_start to start from next column
                                     self.column_start += (length as usize);
-                                    <$col_type>::try_decode(col_slice).map_err(|e| log::error!("{}", e)).ok()?
+                                    <$col_type>::try_decode_column(col_slice).map_err(|e| log::error!("{}", e)).ok()?
                                 } else {
-                                    <$col_type>::try_decode(&[]).map_err(|e| log::error!("{}", e)).ok()?
+                                    <$col_type>::try_decode_column(&[]).map_err(|e| log::error!("{}", e)).ok()?
                                 }
                             },
                         )*

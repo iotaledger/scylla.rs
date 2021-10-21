@@ -5,7 +5,11 @@
 
 use std::convert::TryFrom;
 
-use super::decoder::{bytes, Decoder, Frame};
+use super::decoder::{
+    bytes,
+    Decoder,
+    Frame,
+};
 
 /// The Autentication Challenge structure with the token field.
 pub(crate) struct AuthChallenge {

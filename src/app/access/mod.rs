@@ -23,9 +23,22 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
+pub(crate) mod execute;
+
+pub(crate) mod prepare;
+
 use super::{
+    worker::BasicRetryWorker,
     Worker,
     WorkerError,
+};
+pub use crate::cql::{
+    query::StatementType,
+    Bindable,
+    Consistency,
+    PreparedStatement,
+    QueryStatement,
+    Values,
 };
 use crate::{
     app::{
@@ -33,110 +46,426 @@ use crate::{
             Ring,
             RingSendError,
         },
-        stage::reporter::{
-            ReporterEvent,
-            ReporterHandle,
-        },
+        stage::reporter::ReporterEvent,
     },
     cql::{
-        Consistency,
         Decoder,
-        Prepare,
-        PreparedStatement,
+        DynValues,
         Query,
         QueryBuild,
         QueryBuilder,
         QueryConsistency,
         QueryOrPrepared,
-        QueryStatement,
+        QueryPagingState,
+        QuerySerialConsistency,
         QueryValues,
         RowsDecoder,
-        Statements,
-        Values,
+        TokenChainer,
         VoidDecoder,
+    },
+    prelude::{
+        ColumnEncoder,
+        IntoRespondingWorker,
+        ReporterHandle,
+        RetryableWorker,
+        TokenEncoder,
     },
 };
 pub use batch::*;
 pub use delete::{
+    AsDynamicDeleteRequest,
     Delete,
     DeleteRequest,
-    GetDeleteRequest,
-    GetDeleteStatement,
+    GetDynamicDeleteRequest,
+    GetStaticDeleteRequest,
+};
+use dyn_clone::DynClone;
+pub use execute::{
+    AsDynamicExecuteRequest,
+    ExecuteRequest,
+    GetDynamicExecuteRequest,
 };
 pub use insert::{
-    GetInsertRequest,
-    GetInsertStatement,
+    AsDynamicInsertRequest,
+    GetDynamicInsertRequest,
+    GetStaticInsertRequest,
     Insert,
     InsertRequest,
 };
 pub use keyspace::Keyspace;
+pub use prepare::{
+    AsDynamicPrepareRequest,
+    GetDynamicPrepareRequest,
+    GetStaticPrepareRequest,
+    PrepareRequest,
+};
 pub use select::{
-    GetSelectRequest,
-    GetSelectStatement,
+    AsDynamicSelectRequest,
+    GetDynamicSelectRequest,
+    GetStaticSelectRequest,
     Select,
     SelectRequest,
 };
+pub use std::borrow::Cow;
 use std::{
-    borrow::Cow,
     convert::TryInto,
+    fmt::Debug,
     marker::PhantomData,
-    ops::Deref,
+    ops::{
+        Deref,
+        DerefMut,
+    },
 };
+use thiserror::Error;
 pub use update::{
-    GetUpdateRequest,
-    GetUpdateStatement,
+    AsDynamicUpdateRequest,
+    GetDynamicUpdateRequest,
+    GetStaticUpdateRequest,
     Update,
     UpdateRequest,
 };
 
+/// The possible request types
+#[allow(missing_docs)]
 #[repr(u8)]
 #[derive(Copy, Clone)]
-enum RequestType {
+pub enum RequestType {
     Insert = 0,
     Update = 1,
     Delete = 2,
     Select = 3,
     Batch = 4,
+    Execute = 5,
 }
 
-/// Defines a computed token for a key type
-pub trait ComputeToken<K>: Keyspace {
-    /// Compute the token from the provided partition_key by using murmur3 hash function
-    fn token(key: &K) -> i64;
+/// Represents anything that can be used to generate a statement.
+/// For instance, a select query string or a keyspace with a `Select<K, V>` impl.
+pub trait ToStatement: DynClone + Debug + Send + Sync {
+    /// Get the statement from this type
+    fn to_statement(&self) -> Cow<'static, str>;
+}
+dyn_clone::clone_trait_object!(ToStatement);
+
+struct UpdateStatement<S: Update<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Update<K, V>, K, V> UpdateStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Update<K, V>, K, V> Clone for UpdateStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Update<K, V> + Debug, K, V> Debug for UpdateStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("UpdateStatement").field(&self.0).finish()
+    }
+}
+struct InsertStatement<S: Insert<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Insert<K, V>, K, V> InsertStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V>, K, V> Clone for InsertStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("InsertStatement").field(&self.0).finish()
+    }
+}
+struct DeleteStatement<S: Delete<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Delete<K, V>, K, V> DeleteStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V>, K, V> Clone for DeleteStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V> + Debug, K, V> Debug for DeleteStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DeleteStatement").field(&self.0).finish()
+    }
 }
 
-/// Create request from cql frame
-pub trait CreateRequest<T>: Keyspace {
-    /// Create request of Type T
-    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> T;
+struct SelectStatement<S: Select<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Select<K, V>, K, V> SelectStatement<S, K, V> {
+    #[allow(unused)]
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Select<K, V>, K, V> Clone for SelectStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Select<K, V> + Debug, K, V> Debug for SelectStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SelectStatement").field(&self.0).finish()
+    }
 }
 
-/// Unifying trait for requests which defines shared functionality
-pub trait Request: Send + std::fmt::Debug {
+impl<S: Update<K, V> + Debug, K, V> ToStatement for UpdateStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl<S: Delete<K, V> + Debug, K, V> ToStatement for DeleteStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl<S: Select<K, V> + Debug, K, V> ToStatement for SelectStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+}
+
+impl ToStatement for String {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.clone().into()
+    }
+}
+
+impl ToStatement for &str {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.to_string().into()
+    }
+}
+
+/// Marker for dynamic requests
+pub struct DynamicRequest;
+/// Marker for static requests
+pub struct StaticRequest;
+/// Marker for requests that need to use a manually defined bind fn
+pub struct ManualBoundRequest<'a> {
+    pub(crate) bind_fn: Box<
+        dyn Fn(
+            Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
+            &'a [&(dyn TokenChainer + Sync)],
+            &'a [&(dyn ColumnEncoder + Sync)],
+        ) -> QueryBuilder<QueryValues>,
+    >,
+}
+
+/// Errors which can be returned from a sent request
+#[allow(missing_docs)]
+#[derive(Error, Debug)]
+pub enum RequestError {
+    #[error("Error sending to the Ring: {0}")]
+    Ring(#[from] RingSendError),
+    #[error("{0}")]
+    Worker(#[from] WorkerError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// A request which has a token, statement, and payload
+pub trait Request {
+    /// Get the token for this request
+    fn token(&self) -> i64;
+
     /// Get the statement that was used to create this request
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> &Cow<'static, str>;
 
     /// Get the request payload
-    fn payload(&self) -> &Vec<u8>;
+    fn payload(&self) -> Vec<u8>;
 }
+
+/// Extension trait which provides helper functions for sending requests and retrieving their responses
+#[async_trait::async_trait]
+pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
+    /// The marker type which will be returned when sending a request
+    type Marker: 'static + Marker;
+    /// The default worker type
+    type Worker: RetryableWorker<Self>;
+    /// The request type
+    const TYPE: RequestType;
+
+    /// Create a worker containing this request
+    fn worker(self) -> Box<Self::Worker>;
+
+    /// Send this request to a specific reporter, without waiting for a response
+    fn send_to_reporter(self, reporter: &ReporterHandle) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        self.worker().send_to_reporter(reporter)?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
+    /// Send this request to the local datacenter, without waiting for a response
+    fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_local(self.token(), self.payload(), self.worker())?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
+    /// Send this request to a global datacenter, without waiting for a response
+    fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_global(self.token(), self.payload(), self.worker())?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
+    /// Send this request to the local datacenter and await the response asynchronously
+    async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        self.worker().get_local().await
+    }
+
+    /// Send this request to the local datacenter and await the response synchronously
+    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        self.worker().get_local_blocking()
+    }
+
+    /// Send this request to a global datacenter and await the response asynchronously
+    async fn get_global(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        self.worker().get_global().await
+    }
+
+    /// Send this request to a global datacenter and await the response synchronously
+    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        self.worker().get_global_blocking()
+    }
+}
+
+/// A common request type which contains only the bare minimum information needed
+#[derive(Debug, Clone)]
+pub struct CommonRequest {
+    pub(crate) token: i64,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) statement: Cow<'static, str>,
+}
+
+impl CommonRequest {
+    #[allow(missing_docs)]
+    pub fn new(statement: &str, payload: Vec<u8>) -> Self {
+        Self {
+            token: 0,
+            payload,
+            statement: statement.to_string().into(),
+        }
+    }
+}
+
+impl Request for CommonRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn statement(&self) -> &Cow<'static, str> {
+        &self.statement
+    }
+
+    fn payload(&self) -> Vec<u8> {
+        self.payload.clone()
+    }
+}
+
+/// Defines two helper methods to specify statement / id
+#[allow(missing_docs)]
+pub trait GetStatementIdExt {
+    fn select_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Select<K, V>,
+    {
+        self.statement()
+    }
+
+    fn select_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Select<K, V>,
+    {
+        self.id()
+    }
+
+    fn insert_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Insert<K, V>,
+    {
+        self.statement()
+    }
+
+    fn insert_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Insert<K, V>,
+    {
+        self.id()
+    }
+
+    fn update_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Update<K, V>,
+    {
+        self.statement()
+    }
+
+    fn update_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Update<K, V>,
+    {
+        self.id()
+    }
+
+    fn delete_statement<K, V>(&self) -> Cow<'static, str>
+    where
+        Self: Delete<K, V>,
+    {
+        self.statement()
+    }
+
+    fn delete_id<K, V>(&self) -> [u8; 16]
+    where
+        Self: Delete<K, V>,
+    {
+        self.id()
+    }
+}
+
+impl<S: Keyspace> GetStatementIdExt for S {}
 
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
 #[derive(Clone, Copy, Default)]
-pub struct DecodeRows<S, K, V> {
-    _marker: PhantomData<(S, K, V)>,
+pub struct DecodeRows<V> {
+    _marker: PhantomData<fn(V) -> V>,
 }
 
-impl<S, K, V> DecodeRows<S, K, V> {
+impl<V> DecodeRows<V> {
     fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
+impl<V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
-        S::try_decode(bytes.try_into()?)
+        V::try_decode_rows(bytes.try_into()?)
     }
 }
 
@@ -144,20 +473,53 @@ impl<'a, S: RowsDecoder<K, V>, K, V> DecodeRows<S, K, V> {
 /// so that it may be decoded (checked for errors)
 /// via `VoidDecoder` later
 #[derive(Copy, Clone)]
-pub struct DecodeVoid<S> {
-    _marker: PhantomData<S>,
-}
+pub struct DecodeVoid;
 
-impl<S> DecodeVoid<S> {
-    fn new() -> Self {
-        Self { _marker: PhantomData }
+impl DecodeVoid {
+    /// Decode a result payload using the `VoidDecoder` impl
+    pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
+        VoidDecoder::try_decode_void(bytes.try_into()?)
     }
 }
 
-impl<S: VoidDecoder> DecodeVoid<S> {
-    /// Decode a result payload using the `VoidDecoder` impl
-    pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        S::try_decode(bytes.try_into()?)
+/// A marker returned by a request to allow for later decoding of the response
+pub trait Marker {
+    /// The marker's output
+    type Output: Send;
+
+    #[allow(missing_docs)]
+    fn new() -> Self;
+
+    /// Try to decode the response payload using this marker
+    fn try_decode(&self, d: Decoder) -> anyhow::Result<Self::Output> {
+        Self::internal_try_decode(d)
+    }
+
+    #[allow(missing_docs)]
+    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output>;
+}
+
+impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
+    type Output = Option<T>;
+
+    fn new() -> Self {
+        DecodeRows::new()
+    }
+
+    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
+        T::try_decode_rows(d)
+    }
+}
+
+impl Marker for DecodeVoid {
+    type Output = ();
+
+    fn new() -> Self {
+        Self
+    }
+
+    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
+        VoidDecoder::try_decode_void(d)
     }
 }
 
@@ -170,61 +532,29 @@ pub struct DecodeResult<T> {
     inner: T,
     request_type: RequestType,
 }
-impl<S, K, V> DecodeResult<DecodeRows<S, K, V>> {
+impl<T> DecodeResult<T> {
+    pub(crate) fn new(inner: T, request_type: RequestType) -> Self {
+        Self { inner, request_type }
+    }
+}
+impl<V> DecodeResult<DecodeRows<V>> {
     fn select() -> Self {
         Self {
-            inner: DecodeRows::<S, K, V>::new(),
+            inner: DecodeRows::<V>::new(),
             request_type: RequestType::Select,
         }
     }
 }
 
-impl<S> DecodeResult<DecodeVoid<S>> {
-    fn insert() -> Self {
-        Self {
-            inner: DecodeVoid::<S>::new(),
-            request_type: RequestType::Insert,
-        }
-    }
-    fn update() -> Self {
-        Self {
-            inner: DecodeVoid::<S>::new(),
-            request_type: RequestType::Update,
-        }
-    }
-    fn delete() -> Self {
-        Self {
-            inner: DecodeVoid::<S>::new(),
-            request_type: RequestType::Delete,
-        }
-    }
-    fn batch() -> Self {
-        Self {
-            inner: DecodeVoid::<S>::new(),
-            request_type: RequestType::Batch,
-        }
-    }
-}
-
 /// Send a local request to the Ring
-pub fn send_local(
-    token: i64,
-    payload: Vec<u8>,
-    worker: Box<dyn Worker>,
-    _keyspace: String,
-) -> Result<(), RingSendError> {
+pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     Ring::send_local_random_replica(token, request)
 }
 
 /// Send a global request to the Ring
-pub fn send_global(
-    token: i64,
-    payload: Vec<u8>,
-    worker: Box<dyn Worker>,
-    _keyspace: String,
-) -> Result<(), RingSendError> {
+pub fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     Ring::send_global_random_replica(token, request)
@@ -240,14 +570,18 @@ impl<T> Deref for DecodeResult<T> {
 
 #[doc(hidden)]
 pub mod tests {
-
-    use crate::app::worker::InsertWorker;
-
     use super::*;
+    use crate::{
+        cql::query::StatementType,
+        prelude::select::{
+            AsDynamicSelectRequest,
+            GetDynamicSelectRequest,
+        },
+    };
 
     #[derive(Default, Clone, Debug)]
     pub struct MyKeyspace {
-        pub name: Cow<'static, str>,
+        pub name: String,
     }
 
     impl MyKeyspace {
@@ -258,9 +592,9 @@ pub mod tests {
         }
     }
 
-    impl Keyspace for MyKeyspace {
-        fn name(&self) -> &Cow<'static, str> {
-            &self.name
+    impl ToString for MyKeyspace {
+        fn to_string(&self) -> String {
+            self.name.to_string()
         }
     }
 
@@ -285,11 +619,6 @@ pub mod tests {
         }
     }
 
-    impl ComputeToken<u32> for MyKeyspace {
-        fn token(_key: &u32) -> i64 {
-            rand::random()
-        }
-    }
     impl Insert<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
@@ -333,174 +662,71 @@ pub mod tests {
         }
     }
 
-    impl RowsDecoder<u32, f32> for MyKeyspace {
-        type Row = f32;
-        fn try_decode(_decoder: Decoder) -> anyhow::Result<Option<f32>> {
-            todo!()
-        }
-    }
-
-    impl RowsDecoder<u32, i32> for MyKeyspace {
-        type Row = i32;
-        fn try_decode(_decoder: Decoder) -> anyhow::Result<Option<i32>> {
-            todo!()
-        }
-    }
-
-    impl VoidDecoder for MyKeyspace {}
-
-    #[derive(Debug)]
-    struct TestWorker {
-        request: Box<dyn Request>,
-    }
-
-    impl Worker for TestWorker {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-            // Do nothing
-            Ok(())
-        }
-
-        fn handle_error(
-            self: Box<Self>,
-            error: crate::app::worker::WorkerError,
-            reporter: &ReporterHandle,
-        ) -> anyhow::Result<()> {
-            if let WorkerError::Cql(mut cql_error) = error {
-                if let Some(_) = cql_error.take_unprepared_id() {
-                    if let Ok(prepare) = Prepare::new().statement(&self.request.statement()).build() {
-                        let prepare_worker = PrepareWorker {
-                            retries: 3,
-                            payload: prepare.0.clone(),
-                        };
-                        let prepare_request = ReporterEvent::Request {
-                            worker: Box::new(prepare_worker),
-                            payload: prepare.0,
-                        };
-                        reporter.send(prepare_request).ok();
-                        let payload = self.request.payload().clone();
-                        let retry_request = ReporterEvent::Request { worker: self, payload };
-                        reporter.send(retry_request).ok();
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    struct BatchWorker<S> {
-        request: BatchRequest<S>,
-    }
-
-    impl<S: 'static + Keyspace + std::fmt::Debug> Worker for BatchWorker<S> {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-            // Do nothing
-            Ok(())
-        }
-
-        fn handle_error(
-            self: Box<Self>,
-            error: crate::app::worker::WorkerError,
-            reporter: &crate::app::stage::reporter::ReporterHandle,
-        ) -> anyhow::Result<()> {
-            if let WorkerError::Cql(mut cql_error) = error {
-                if let Some(id) = cql_error.take_unprepared_id() {
-                    if let Some(statement) = self.request.get_statement(&id) {
-                        if let Ok(prepare) = Prepare::new().statement(&statement).build() {
-                            let prepare_worker = PrepareWorker {
-                                retries: 3,
-                                payload: prepare.0.clone(),
-                            };
-                            let prepare_request = ReporterEvent::Request {
-                                worker: Box::new(prepare_worker),
-                                payload: prepare.0,
-                            };
-                            reporter.send(prepare_request).ok();
-                            let payload = self.request.payload().clone();
-                            let retry_request = ReporterEvent::Request { worker: self, payload };
-                            reporter.send(retry_request).ok();
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct PrepareWorker {
-        pub retries: usize,
-        pub payload: Vec<u8>,
-    }
-
-    impl Worker for PrepareWorker {
-        fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-            // Do nothing
-            Ok(())
-        }
-
-        fn handle_error(self: Box<Self>, _error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
-            if self.retries > 0 {
-                let prepare_worker = PrepareWorker {
-                    retries: self.retries - 1,
-                    payload: self.payload.clone(),
-                };
-                let _request = ReporterEvent::Request {
-                    worker: Box::new(prepare_worker),
-                    payload: self.payload.clone(),
-                };
-            }
-            Ok(())
-        }
-    }
-
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let req1 = keyspace
-            .select::<f32>(&3)
-            .consistency(Consistency::One)
+        let res: Result<DecodeResult<DecodeRows<f32>>, RequestError> = keyspace
+            .select_with::<f32>(
+                "SELECT col1 FROM keyspace.table WHERE key = ?",
+                &[&3],
+                StatementType::Query,
+            )
             .build()
-            .unwrap();
-        assert_eq!(req1.payload().len(), 100);
-        let worker1 = TestWorker {
-            request: Box::new(req1.clone()),
-        };
-        let req2 = keyspace
-            .select::<i32>(&3)
-            .consistency(Consistency::One)
-            .page_size(500)
+            .unwrap()
+            .worker()
+            .with_retries(3)
+            .send_local();
+        assert!(res.is_err());
+        let res = "SELECT col1 FROM keyspace.table WHERE key = ?"
+            .as_select_prepared::<f32>(&[&3])
             .build()
-            .unwrap();
-        let worker2 = TestWorker {
-            request: Box::new(req1.clone()),
-        };
-        let worker3 = TestWorker {
-            request: Box::new(req2.clone()),
-        };
-        let _res = req1.clone().send_local(Box::new(worker1));
-        let _res = req1.send_local(Box::new(worker2));
-        let _res = req2.send_local(Box::new(worker3));
+            .unwrap()
+            .get_local_blocking();
+        assert!(res.is_err());
+        let res = keyspace
+            .select_prepared::<f32>(&3u32)
+            .build()
+            .unwrap()
+            .get_local_blocking();
+        assert!(res.is_err());
+        let req2 = keyspace.select::<i32>(&3).page_size(500).build().unwrap();
+        let _res = req2.clone().send_local();
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.insert(&3, &8.0).consistency(Consistency::One).build().unwrap();
-        let worker = InsertWorker::boxed(keyspace, 3, 8.0, 0);
+        let req = keyspace.insert(&3, &8.0).build().unwrap();
+        let _res = req.send_local();
 
-        let _res = req.send_local(worker);
+        "my_keyspace"
+            .insert_with(
+                "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+                &[&3],
+                &[&8.0, &"hello"],
+                StatementType::Query,
+            )
+            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
+            .build()
+            .unwrap()
+            .get_local_blocking()
+            .unwrap();
+
+        "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+            .as_insert_query(&[&3], &[&8.0, &"hello"])
+            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
+            .build()
+            .unwrap()
+            .send_local()
+            .unwrap();
     }
 
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.update(&3, &8.0).consistency(Consistency::One).build().unwrap();
-        let worker = TestWorker {
-            request: Box::new(req.clone()),
-        };
+        let req = keyspace.update(&3, &8.0).build().unwrap();
 
-        let _res = req.send_local(Box::new(worker));
+        let _res = req.send_local();
     }
 
     #[allow(dead_code)]
@@ -508,14 +734,11 @@ pub mod tests {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace
             .delete::<f32>(&3)
-            .consistency(Consistency::One)
+            .consistency(Consistency::All)
             .build()
             .unwrap();
-        let worker = TestWorker {
-            request: Box::new(req.clone()),
-        };
 
-        let _res = req.send_local(Box::new(worker));
+        let _res = req.send_local();
     }
 
     #[test]
@@ -529,14 +752,52 @@ pub mod tests {
             .update_query(&3, &8.0)
             .insert_prepared(&3, &8.0)
             .delete_prepared::<_, f32>(&3)
-            .consistency(Consistency::One)
             .build()
             .unwrap()
             .compute_token(&3);
         let id = keyspace.insert_id::<u32, f32>();
         let statement = req.get_statement(&id).unwrap();
         assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
-        let worker = BatchWorker { request: req.clone() };
-        let _res = req.clone().send_local(Box::new(worker));
+        let _res = req.clone().send_local().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert2() {
+        use crate::prelude::*;
+        use std::net::SocketAddr;
+        std::env::set_var("RUST_LOG", "info");
+        env_logger::init();
+        let node: SocketAddr = std::env::var("SCYLLA_NODE").map_or_else(
+            |_| ([127, 0, 0, 1], 9042).into(),
+            |n| {
+                n.parse()
+                    .expect("Invalid SCYLLA_NODE env, use this format '127.0.0.1:19042' ")
+            },
+        );
+        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 2, Default::default()))
+            .await
+            .expect("Runtime failed to start!");
+        let cluster_handle = runtime
+            .handle()
+            .cluster_handle()
+            .await
+            .expect("Failed to acquire cluster handle!");
+        cluster_handle.add_node(node).await.expect("Failed to add node!");
+        cluster_handle.build_ring(1).await.expect("Failed to build ring!");
+        backstage::spawn_task("adding node task", async move {
+            "scylla_example"
+                .insert_query_with(
+                    "INSERT INTO {{keyspace}}.test (key, data) VALUES (?, ?)",
+                    &[&"Test 1"],
+                    &[&1],
+                )
+                .build()?
+                .send_local()?;
+            Result::<_, RequestError>::Ok(())
+        });
+        runtime
+            .block_on()
+            .await
+            .expect("Runtime failed to shutdown gracefully!")
     }
 }

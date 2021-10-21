@@ -2,163 +2,165 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use std::fmt::Debug;
+use crate::prelude::RowsDecoder;
+use std::{
+    fmt::Debug,
+    marker::PhantomData,
+};
 /// A value selecting worker
-#[derive(Clone, Debug)]
-pub struct ValueWorker<H, S: Select<K, V>, K, V>
-where
-    S: 'static + Select<K, V> + Clone + Debug,
-    K: 'static + Send + Clone + Debug,
-    V: 'static + Send + Clone + Debug,
-    H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone + Debug,
-{
+pub struct ValueWorker<H, V, R> {
+    /// The worker's request
+    pub request: R,
     /// A handle which can be used to return the queried value
     pub handle: H,
-    /// The keyspace this worker operates on
-    pub keyspace: S,
-    /// The key used to lookup the value
-    pub key: K,
     /// The query page size, used when retying due to failure
     pub page_size: Option<i32>,
     /// The query paging state, used when retrying due to failure
     pub paging_state: Option<Vec<u8>>,
     /// The number of times this worker will retry on failure
     pub retries: usize,
-    _marker: std::marker::PhantomData<V>,
+    _val: PhantomData<fn(V) -> V>,
 }
 
-impl<H, S: Select<K, V>, K, V> ValueWorker<H, S, K, V>
+impl<H, V, R> Debug for ValueWorker<H, V, R>
 where
-    S: 'static + Select<K, V> + Clone + Debug,
-    K: 'static + Send + Clone + Debug,
-    V: 'static + Send + Clone + Debug,
-    H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone + Debug,
+    H: Debug,
+    R: Debug,
 {
-    /// Create a new value selecting worker with a number of retries and a response handle
-    pub fn new(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Self {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValueWorker")
+            .field("request", &self.request)
+            .field("handle", &self.handle)
+            .field("page_size", &self.page_size)
+            .field("paging_state", &self.paging_state)
+            .field("retries", &self.retries)
+            .finish()
+    }
+}
+
+impl<H, V, R> Clone for ValueWorker<H, V, R>
+where
+    R: Clone,
+    H: Clone,
+{
+    fn clone(&self) -> Self {
         Self {
-            handle,
-            keyspace,
-            key,
-            page_size: None,
-            paging_state: None,
-            retries,
-            _marker,
+            request: self.request.clone(),
+            handle: self.handle.clone(),
+            page_size: self.page_size.clone(),
+            paging_state: self.paging_state.clone(),
+            retries: self.retries.clone(),
+            _val: PhantomData,
         }
     }
-    /// Create a new boxed value selecting worker with a number of retries and a response handle
-    pub fn boxed(handle: H, keyspace: S, key: K, retries: usize, _marker: std::marker::PhantomData<V>) -> Box<Self> {
-        Box::new(Self::new(handle, keyspace, key, retries, _marker))
+}
+
+impl<H, V, R> ValueWorker<H, V, R> {
+    /// Create a new value worker from a request and a handle
+    pub fn new(request: R, handle: H) -> Box<Self> {
+        Box::new(Self {
+            request,
+            handle,
+            page_size: None,
+            paging_state: None,
+            retries: 0,
+            _val: PhantomData,
+        })
     }
+
+    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self>
+    where
+        H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+        R: 'static + Request + Debug + Send + Sync,
+        V: 'static + RowsDecoder + Send,
+    {
+        Self::new(request, handle).with_retries(retries)
+    }
+
     /// Add paging information to this worker
-    pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self, page_size: i32, paging_state: P) -> Self {
+    pub fn with_paging<P: Into<Option<Vec<u8>>>>(mut self: Box<Self>, page_size: i32, paging_state: P) -> Box<Self> {
         self.page_size = Some(page_size);
         self.paging_state = paging_state.into();
         self
     }
 }
-
-impl<H, S, K, V> DecodeResponse<Option<V>> for ValueWorker<H, S, K, V>
+impl<H, V, R> ValueWorker<H, V, R>
 where
-    H: Send + HandleResponse<Self, Response = Option<V>> + HandleError<ValueWorker<H, S, K, V>> + Clone + Debug,
-    S: Select<K, V> + Clone + Debug,
-    K: Send + Clone + Debug,
-    V: Send + Clone + Debug,
+    V: 'static + Send + RowsDecoder,
+    R: 'static + Send + Debug + Clone + Request + Sync,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Clone + Send + Sync,
 {
-    fn decode_response(decoder: Decoder) -> anyhow::Result<Option<V>> {
-        S::try_decode(decoder)
+    /// Give the worker an inbox and create a spawning worker
+    pub fn with_inbox<I>(self: Box<Self>, inbox: I) -> Box<SpawnableRespondWorker<R, I, Self>> {
+        SpawnableRespondWorker::new(inbox, *self)
     }
 }
 
-impl<S, H, K, V> Worker for ValueWorker<H, S, K, V>
+impl<H, V, R> Worker for ValueWorker<H, V, R>
 where
-    S: 'static + Select<K, V> + Clone + Debug,
-    K: 'static + Send + Clone + Debug,
-    V: 'static + Send + Clone + Debug,
-    H: 'static + Send + HandleResponse<Self, Response = Option<V>> + HandleError<Self> + Clone + Debug,
+    V: 'static + Send + RowsDecoder,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+    R: 'static + Send + Debug + Request + Sync,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
-            Ok(decoder) => match Self::decode_response(decoder) {
-                Ok(res) => H::handle_response(self, res),
-                Err(e) => H::handle_error(self, WorkerError::Other(e)),
+            Ok(decoder) => match V::try_decode_rows(decoder) {
+                Ok(res) => self.handle.handle_response(res),
+                Err(e) => self.handle.handle_error(WorkerError::Other(e)),
             },
-            Err(e) => H::handle_error(self, WorkerError::Other(e)),
+            Err(e) => self.handle.handle_error(WorkerError::Other(e)),
         }
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+        error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
             if let Some(id) = cql_error.take_unprepared_id() {
-                handle_select_unprepared_error(
-                    &self,
-                    &self.keyspace,
-                    &self.key,
-                    id,
-                    self.page_size,
-                    &self.paging_state,
-                    reporter,
-                )
-                .or_else(|e| {
-                    error!("Error trying to prepare query: {}", e);
-                    H::handle_error(self, error)
+                handle_unprepared_error(self, id, reporter).or_else(|worker| {
+                    error!("Error trying to reprepare query: {}", worker.request().statement());
+                    worker.handle.handle_error(error)
                 })
             } else {
-                H::handle_error(self, error)
+                match self.retry() {
+                    Ok(_) => Ok(()),
+                    Err(worker) => worker.handle.handle_error(error),
+                }
             }
         } else {
-            H::handle_error(self, error)
+            match self.retry() {
+                Ok(_) => Ok(()),
+                Err(worker) => worker.handle.handle_error(error),
+            }
         }
     }
 }
 
-impl<S, K, V> HandleResponse<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>
-    for UnboundedSender<Result<Option<V>, WorkerError>>
+impl<H, V, R> RetryableWorker<R> for ValueWorker<H, V, R>
 where
-    S: 'static + Send + Select<K, V> + Clone + Debug,
-    K: 'static + Send + Clone + Debug,
-    V: 'static + Send + Clone + Debug,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+    V: 'static + Send + RowsDecoder,
+    R: 'static + Send + Debug + Request + Sync,
 {
-    type Response = Option<V>;
-    fn handle_response(
-        worker: Box<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>,
-        response: Self::Response,
-    ) -> anyhow::Result<()> {
-        worker.handle.send(Ok(response)).map_err(|e| anyhow!(e.to_string()))
+    fn retries(&self) -> usize {
+        self.retries
+    }
+
+    fn request(&self) -> &R {
+        &self.request
+    }
+
+    fn retries_mut(&mut self) -> &mut usize {
+        &mut self.retries
     }
 }
 
-impl<S, K, V> HandleError<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>
-    for UnboundedSender<Result<Option<V>, WorkerError>>
+impl<R, H, V> RespondingWorker<R, H, Option<V>> for ValueWorker<H, V, R>
 where
-    S: 'static + Send + Select<K, V> + Clone + Debug,
-    K: 'static + Send + Clone + Debug,
-    V: 'static + Send + Clone + Debug,
+    H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
+    R: 'static + Send + Debug + Request + Sync,
+    V: 'static + Send + RowsDecoder,
 {
-    fn handle_error(
-        mut worker: Box<ValueWorker<UnboundedSender<Result<Option<V>, WorkerError>>, S, K, V>>,
-        worker_error: WorkerError,
-    ) -> anyhow::Result<()> {
-        if worker.retries > 0 {
-            worker.retries -= 1;
-            // currently we assume all cql/worker errors are retryable, but we might change this in future
-            let req = worker
-                .keyspace
-                .select_query::<V>(&worker.key)
-                .consistency(Consistency::One);
-            let req = if let Some(page_size) = worker.page_size {
-                req.page_size(page_size).paging_state(&worker.paging_state)
-            } else {
-                req.paging_state(&worker.paging_state)
-            }
-            .build()?;
-            tokio::spawn(async { req.send_global(worker) });
-            Ok(())
-        } else {
-            worker
-                .handle
-                .send(Err(worker_error))
-                .map_err(|e| anyhow!(e.to_string()))
-        }
+    fn handle(&self) -> &H {
+        &self.handle
     }
 }

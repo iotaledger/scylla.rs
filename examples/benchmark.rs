@@ -1,34 +1,20 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
-use anyhow::bail;
-use backstage::prefab::websocket::*;
-use futures::SinkExt;
 use log::*;
-use scylla_rs::{
-    app::cluster::Topology,
-    prelude::*,
-};
+use scylla_rs::prelude::*;
 use std::{
     borrow::Cow,
-    marker::PhantomData,
     net::SocketAddr,
-    sync::Arc,
     time::SystemTime,
 };
-use tokio::sync::{
-    mpsc::{
-        unbounded_channel,
-        UnboundedSender,
-    },
-    Mutex,
-};
+use tokio::sync::mpsc::unbounded_channel;
 
 #[tokio::main]
 async fn main() {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     let node: SocketAddr = std::env::var("SCYLLA_NODE").map_or_else(
-        |_| ([127, 0, 0, 1], 19042).into(),
+        |_| ([127, 0, 0, 1], 9042).into(),
         |n| {
             n.parse()
                 .expect("Invalid SCYLLA_NODE env, use this format '127.0.0.1:19042' ")
@@ -40,178 +26,104 @@ async fn main() {
         .flatten()
         .zip(std::iter::repeat(vec![2u8, 4, 8, 16].into_iter()).flatten());
 
-    let timings = combinations
-        .map(|(n, r)| (n, r, Arc::new(Mutex::new(0u128))))
-        .collect::<Vec<_>>();
+    let mut timings = combinations.map(|(n, r)| (n, r, 0u128)).collect::<Vec<_>>();
 
-    for (n, r, t) in timings.iter().cloned() {
-        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), r, Default::default()))
-            .await
-            .expect("runtime to run");
+    for (n, r, t) in timings.iter_mut() {
+        let runtime = Runtime::new(
+            None,
+            Scylla::new("datacenter1", num_cpus::get(), *r, Default::default()),
+        )
+        .await
+        .expect("Runtime failed to start!");
         let cluster_handle = runtime
             .handle()
             .cluster_handle()
             .await
-            .expect("running scylla application");
-        cluster_handle.add_node(node).await.expect("to add node");
-        cluster_handle.build_ring(1).await.expect("to build ring");
-        let handle = runtime.handle().clone();
-        backstage::spawn_task("adding node task", async move {
-            match run_benchmark_on_single_node(n, t, node).await {
-                Ok(_) => info!("Successfully ran benchmark"),
-                Err(e) => error!("{}", e),
+            .expect("Failed to acquire cluster handle!");
+        cluster_handle.add_node(node).await.expect("Failed to add node!");
+        cluster_handle.build_ring(1).await.expect("Failed to build ring!");
+        match run_benchmark(*n).await {
+            Ok(time) => {
+                *t = time;
+                info!("Successfully ran benchmark")
             }
-            handle.shutdown().await;
-        });
-        runtime.block_on().await.expect("runtime to gracefully shutdown")
+            Err(e) => error!("{}", e),
+        }
+        runtime.handle().shutdown().await;
+        runtime
+            .block_on()
+            .await
+            .expect("Runtime failed to shutdown gracefully!");
     }
     info!("Timings:");
-    info!("N\tR\tTime");
+    info!("{:8}{:8}{:8}", "N", "R", "Time (ms)");
     for (n, r, t) in timings.iter() {
-        info!("{}\t{}\t{}", n, r, *t.lock().await);
+        info!("{:<8}{:<8}{:<8.2}", n * 2, r, *t as f32 / 1000000.);
     }
 }
 
-async fn run_benchmark_on_single_node(n: i32, t: Arc<Mutex<u128>>, node: SocketAddr) -> anyhow::Result<()> {
-    match init_database(n).await {
-        Ok(time) => {
-            *t.lock().await = time;
-        }
-        Err(e) => {
-            error!("{}", e);
-        }
-    }
-    Ok(())
-}
-
-async fn init_database(n: i32) -> anyhow::Result<u128> {
+async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
-    let (sender, mut inbox) = unbounded_channel::<Result<(), WorkerError>>();
-    let worker = BatchWorker::boxed(sender.clone());
-    let token = 1;
-    let keyspace = "scylla_example".to_string();
-    let keyspace_statement = Query::new()
-        .statement(&format!(
-            "CREATE KEYSPACE IF NOT EXISTS {}
-            WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}
-            AND durable_writes = true;",
-            keyspace
-        ))
-        .consistency(Consistency::One)
-        .build()?;
-    send_local(token, keyspace_statement.0, worker, keyspace.clone()).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
-    if let Some(msg) = inbox.recv().await {
-        match msg {
-            Ok(_) => (),
-            Err(e) => bail!(e),
-        }
-    } else {
-        bail!("Could not verify if keyspace was created!")
-    }
-
-    let worker = BatchWorker::boxed(sender.clone());
-    let drop_statement = Query::new()
-        .statement(&format!("DROP TABLE IF EXISTS {}.test;", keyspace))
-        .consistency(Consistency::One)
-        .build()?;
-    send_local(token, drop_statement.0, worker, keyspace.clone()).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
-    if let Some(msg) = inbox.recv().await {
-        match msg {
-            Ok(_) => (),
-            Err(e) => bail!(e),
-        }
-    } else {
-        bail!("Could not verify if table was dropped!")
-    }
-
-    let table_query = format!(
-        "CREATE TABLE IF NOT EXISTS {}.test (
-            key text PRIMARY KEY,
-            data blob,
-        );",
-        keyspace
-    );
-    let worker = BatchWorker::boxed(sender.clone());
-    let statement = Query::new()
-        .statement(table_query.as_str())
-        .consistency(Consistency::One)
-        .build()?;
-    send_local(token, statement.0, worker, keyspace.clone()).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
-    if let Some(msg) = inbox.recv().await {
-        match msg {
-            Ok(_) => (),
-            Err(e) => bail!(e),
-        }
-    } else {
-        bail!("Could not verify if table was created!")
-    }
 
     let keyspace = MyKeyspace::new();
-    let worker = PrepareWorker::boxed(
-        <MyKeyspace as Insert<String, i32>>::id(&keyspace),
-        <MyKeyspace as Insert<String, i32>>::statement(&keyspace),
-    );
-    let Prepare(payload) = Prepare::new()
-        .statement(&<MyKeyspace as Insert<String, i32>>::statement(&keyspace))
-        .build()?;
-    send_local(token, payload, worker, keyspace.name().to_string()).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
+    keyspace
+        .execute_query(
+            "CREATE KEYSPACE IF NOT EXISTS {{keyspace}}
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
+            AND durable_writes = true",
+            &[],
+        )
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-    let worker = PrepareWorker::boxed(
-        <MyKeyspace as Select<String, i32>>::id(&keyspace),
-        <MyKeyspace as Select<String, i32>>::statement(&keyspace),
-    );
-    let Prepare(payload) = Prepare::new()
-        .statement(&<MyKeyspace as Select<String, i32>>::statement(&keyspace))
-        .build()?;
-    send_local(token, payload, worker, keyspace.name().to_string()).map_err(|e| {
-        error!("{}", e);
-        anyhow::anyhow!(e.to_string())
-    })?;
+    keyspace
+        .execute_query("DROP TABLE IF EXISTS {{keyspace}}.test", &[])
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    keyspace
+        .execute_query(
+            "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
+                key text PRIMARY KEY,
+                data blob,
+            )",
+            &[],
+        )
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
+
+    keyspace.prepare_insert::<String, i32>().get_local().await?;
+    keyspace.prepare_select::<String, i32>().get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
-        let worker = InsertWorker::boxed(keyspace.clone(), format!("Key {}", i), i, 3);
-        let request = keyspace
+        keyspace
             .insert(&format!("Key {}", i), &i)
-            .consistency(Consistency::One)
-            .build()?;
-        request.send_local(worker).map_err(|e| {
-            error!("{}", e);
-            anyhow::anyhow!(e.to_string())
-        })?;
+            .build()?
+            .send_local()
+            .map_err(|e| {
+                error!("{}", e);
+                anyhow::anyhow!(e.to_string())
+            })?;
     }
 
-    let (sender, mut inbox) = unbounded_channel();
+    let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
     for i in 0..n {
-        let worker = ValueWorker::boxed(
-            sender.clone(),
-            keyspace.clone(),
-            format!("Key {}", i),
-            2,
-            PhantomData::<i32>,
-        );
-        let request = keyspace
-            .select(&format!("Key {}", i))
-            .consistency(Consistency::One)
-            .build()?;
-        request.send_local(worker).map_err(|e| {
-            error!("{}", e);
-            anyhow::anyhow!(e.to_string())
-        })?;
+        keyspace
+            .select::<i32>(&format!("Key {}", i))
+            .build()?
+            .worker()
+            .with_handle(sender.clone())
+            .send_local()?;
     }
     drop(sender);
     while let Some(res) = inbox.recv().await {
@@ -220,40 +132,14 @@ async fn init_database(n: i32) -> anyhow::Result<u128> {
             Err(e) => error!("Select error: {}", e),
         }
     }
-    let t = start.elapsed().unwrap().as_millis();
-    info!(
-        "Finished benchmark. Total time: {} ms",
-        start.elapsed().unwrap().as_millis()
-    );
-    Ok(t)
-}
-
-#[derive(Debug)]
-struct BatchWorker {
-    sender: UnboundedSender<Result<(), WorkerError>>,
-}
-
-impl BatchWorker {
-    pub fn boxed(sender: UnboundedSender<Result<(), WorkerError>>) -> Box<Self> {
-        Box::new(Self { sender: sender.into() })
-    }
-}
-
-impl Worker for BatchWorker {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        self.sender.send(Ok(()))?;
-        Ok(())
-    }
-
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
-        self.sender.send(Err(error))?;
-        Ok(())
-    }
+    let time = start.elapsed().unwrap().as_nanos();
+    info!("Finished benchmark. Total time: {} ms", time / 1000000);
+    Ok(time)
 }
 
 #[derive(Default, Clone, Debug)]
 pub struct MyKeyspace {
-    pub name: Cow<'static, str>,
+    pub name: String,
 }
 
 impl MyKeyspace {
@@ -264,28 +150,9 @@ impl MyKeyspace {
     }
 }
 
-impl Keyspace for MyKeyspace {
-    fn name(&self) -> &Cow<'static, str> {
-        &self.name
-    }
-}
-
-impl VoidDecoder for MyKeyspace {}
-
-impl RowsDecoder<String, i32> for MyKeyspace {
-    type Row = i32;
-    fn try_decode(decoder: Decoder) -> anyhow::Result<Option<i32>> {
-        anyhow::ensure!(decoder.is_rows()?, "Decoded response is not rows!");
-        Self::Row::rows_iter(decoder)?
-            .next()
-            .map(|row| Some(row))
-            .ok_or_else(|| anyhow::anyhow!("Row not found!"))
-    }
-}
-
-impl<T> ComputeToken<T> for MyKeyspace {
-    fn token(_key: &T) -> i64 {
-        rand::random()
+impl ToString for MyKeyspace {
+    fn to_string(&self) -> String {
+        self.name.to_string()
     }
 }
 

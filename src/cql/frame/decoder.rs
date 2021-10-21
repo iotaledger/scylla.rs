@@ -4,35 +4,101 @@
 //! This module implements the frame decoder.
 
 use super::{
-    error, header, opcode, result,
-    rows::{ColumnsCount, Flags, Metadata, PagingState},
+    error,
+    header,
+    opcode,
+    result,
+    rows::{
+        ColumnsCount,
+        Flags,
+        Metadata,
+        PagingState,
+    },
 };
-use crate::cql::compression::{Compression, MyCompression};
-use anyhow::{anyhow, ensure};
+use crate::{
+    cql::compression::{
+        Compression,
+        MyCompression,
+    },
+    prelude::Row,
+};
+use anyhow::{
+    anyhow,
+    ensure,
+};
 use std::{
     collections::HashMap,
-    convert::{TryFrom, TryInto},
+    convert::{
+        TryFrom,
+        TryInto,
+    },
     hash::Hash,
     io::Cursor,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{
+        IpAddr,
+        Ipv4Addr,
+        Ipv6Addr,
+    },
     str,
 };
 /// RowsDecoder trait to decode the rows result from scylla
-pub trait RowsDecoder<K, V> {
+pub trait RowsDecoder: Sized {
     /// The Row to decode. Must implement [`super::Row`].
-    type Row: super::Row;
+    type Row: Row;
     /// Try to decode the provided Decoder with an expected Rows result
-    fn try_decode(decoder: Decoder) -> anyhow::Result<Option<V>>;
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>>;
     /// Decode the provided Decoder with deterministic Rows result
-    fn decode(decoder: Decoder) -> Option<V> {
-        Self::try_decode(decoder).unwrap()
+    fn decode_rows(decoder: Decoder) -> Option<Self> {
+        Self::try_decode_rows(decoder).unwrap()
     }
 }
 
+impl<T> RowsDecoder for T
+where
+    T: ColumnDecoder + Row,
+{
+    type Row = T;
+
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
+        Ok(Self::Row::rows_iter(decoder)?.next())
+    }
+}
+
+impl<T> RowsDecoder for crate::prelude::Iter<T>
+where
+    T: ColumnDecoder + Row,
+{
+    type Row = T;
+
+    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
+        ensure!(decoder.is_rows()?, "Decoded response is not rows!");
+        let rows_iter = Self::Row::rows_iter(decoder)?;
+        if rows_iter.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(rows_iter))
+        }
+    }
+}
+
+// impl<T> RowsDecoder for Vec<T>
+// where
+//    T: ColumnDecoder + Row,
+//{
+//    type Row = T;
+//
+//    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
+//        ensure!(decoder.is_rows()?, "Decoded response is not rows!");
+//        Ok(Some(Self::Row::rows_iter(decoder)?.collect()))
+//    }
+//}
+
 /// VoidDecoder trait to decode the VOID result from scylla
-pub trait VoidDecoder {
+pub struct VoidDecoder;
+
+impl VoidDecoder {
     /// Try to decode the provided Decoder with an expected Void result
-    fn try_decode(decoder: Decoder) -> anyhow::Result<()> {
+    pub fn try_decode_void(decoder: Decoder) -> anyhow::Result<()> {
         if decoder.is_error()? {
             Err(anyhow!(decoder.get_error()?))
         } else {
@@ -40,8 +106,8 @@ pub trait VoidDecoder {
         }
     }
     /// Decode the provided Decoder with an deterministic Void result
-    fn decode(decoder: Decoder) {
-        Self::try_decode(decoder).unwrap()
+    pub fn decode_void(decoder: Decoder) {
+        Self::try_decode_void(decoder).unwrap()
     }
 }
 
@@ -137,7 +203,7 @@ pub trait Frame {
     fn metadata(&self) -> anyhow::Result<Metadata>;
 }
 /// The frame decoder structure.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Decoder {
     buffer: Vec<u8>,
     header_flags: HeaderFlags,
@@ -164,7 +230,7 @@ impl Decoder {
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 /// The header flags structure in the CQL frame.
 pub struct HeaderFlags {
     compression: bool,
@@ -405,105 +471,105 @@ impl Frame for Decoder {
 /// The column decoder trait to decode the frame.
 pub trait ColumnDecoder {
     /// Decode the column.
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self>
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self>
     where
         Self: Sized;
 }
 
 impl<T: ColumnDecoder> ColumnDecoder for Option<T> {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         if slice.is_empty() {
             Ok(None)
         } else {
-            T::try_decode(slice).map(Into::into)
+            T::try_decode_column(slice).map(Into::into)
         }
     }
 }
 
 impl ColumnDecoder for i64 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(i64::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u64 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(u64::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for f64 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(f64::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for i32 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(i32::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u32 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(u32::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for f32 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(f32::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for i16 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(i16::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u16 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(u16::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for i8 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(i8::from_be_bytes(slice.try_into()?))
     }
 }
 
 impl ColumnDecoder for u8 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(slice[0])
     }
 }
 
 impl ColumnDecoder for String {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(String::from_utf8(slice.to_vec())?)
     }
 }
 
 impl ColumnDecoder for IpAddr {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(if slice.len() == 4 {
-            IpAddr::V4(Ipv4Addr::try_decode(slice)?)
+            IpAddr::V4(Ipv4Addr::try_decode_column(slice)?)
         } else {
-            IpAddr::V6(Ipv6Addr::try_decode(slice)?)
+            IpAddr::V6(Ipv6Addr::try_decode_column(slice)?)
         })
     }
 }
 
 impl ColumnDecoder for Ipv4Addr {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(Ipv4Addr::new(slice[0], slice[1], slice[2], slice[3]))
     }
 }
 
 impl ColumnDecoder for Ipv6Addr {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         Ok(Ipv6Addr::new(
             ((slice[0] as u16) << 8) | slice[1] as u16,
             ((slice[2] as u16) << 8) | slice[3] as u16,
@@ -518,7 +584,7 @@ impl ColumnDecoder for Ipv6Addr {
 }
 
 impl ColumnDecoder for Cursor<Vec<u8>> {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(slice);
         Ok(Cursor::new(bytes))
@@ -529,7 +595,7 @@ impl<E> ColumnDecoder for Vec<E>
 where
     E: ColumnDecoder,
 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let list_len = i32::from_be_bytes(slice[0..4].try_into()?) as usize;
         let mut list: Vec<E> = Vec::new();
         let mut element_start = 4;
@@ -538,12 +604,12 @@ where
             let element_value_start = element_start + 4;
             let length = i32::from_be_bytes(slice[element_start..element_value_start].try_into()?) as usize;
             if length > 0 {
-                let e = E::try_decode(&slice[element_value_start..(element_value_start + length)])?;
+                let e = E::try_decode_column(&slice[element_value_start..(element_value_start + length)])?;
                 list.push(e);
                 // next element start
                 element_start = element_value_start + length;
             } else {
-                let e = E::try_decode(&[])?;
+                let e = E::try_decode_column(&[])?;
                 list.push(e);
                 // next element start
                 element_start = element_value_start;
@@ -559,7 +625,7 @@ where
     V: ColumnDecoder,
     S: ::std::hash::BuildHasher + Default,
 {
-    fn try_decode(slice: &[u8]) -> anyhow::Result<Self> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let map_len = i32::from_be_bytes(slice[0..4].try_into()?) as usize;
         let mut map: HashMap<K, V, S> = HashMap::default();
         let mut pair_start = 4;
@@ -570,19 +636,19 @@ where
             let length = i32::from_be_bytes(slice[pair_start..][..4].try_into()?) as usize;
             pair_start += 4;
             if length > 0 {
-                k = K::try_decode(&slice[pair_start..][..length])?;
+                k = K::try_decode_column(&slice[pair_start..][..length])?;
                 // modify pair_start to be the vtype_start
                 pair_start += length;
             } else {
-                k = K::try_decode(&[])?;
+                k = K::try_decode_column(&[])?;
             }
             let length = i32::from_be_bytes(slice[pair_start..][..4].try_into()?) as usize;
             pair_start += 4;
             if length > 0 {
-                v = V::try_decode(&slice[pair_start..][..length])?;
+                v = V::try_decode_column(&slice[pair_start..][..length])?;
                 pair_start += length;
             } else {
-                v = V::try_decode(&[])?;
+                v = V::try_decode_column(&[])?;
             }
             // insert key,value
             map.insert(k, v);
@@ -613,7 +679,7 @@ pub fn string_list(slice: &[u8]) -> anyhow::Result<Vec<String>> {
 /// Get the `String` from a u8 slice.
 pub fn string(slice: &[u8]) -> anyhow::Result<String> {
     let length = u16::from_be_bytes(slice[0..2].try_into()?) as usize;
-    String::try_decode(&slice[2..][..length])
+    String::try_decode_column(&slice[2..][..length])
 }
 
 /// Get the `&str` from a u8 slice.

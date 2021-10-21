@@ -5,15 +5,19 @@
 
 use super::opcode::PREPARE;
 
-use crate::cql::compression::{Compression, MyCompression};
+use crate::cql::compression::{
+    Compression,
+    MyCompression,
+};
 
 /// Blanket cql frame header for prepare frame.
 const PREPARE_HEADER: &'static [u8] = &[4, 0, 0, 0, PREPARE, 0, 0, 0, 0];
 
 /// The prepare frame structure.
+#[derive(Debug, Clone)]
 pub struct Prepare(pub Vec<u8>);
 
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct PrepareBuilder<Stage> {
     buffer: Vec<u8>,
     stage: Stage,

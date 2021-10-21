@@ -6,7 +6,11 @@
 use std::{
     collections::HashMap,
     io::Cursor,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{
+        IpAddr,
+        Ipv4Addr,
+        Ipv6Addr,
+    },
 };
 
 /// The 16-byte body length.
@@ -73,9 +77,24 @@ pub trait ColumnEncoder {
     }
 
     /// Start an encoding chain
-    fn chain_encode<T: ColumnEncoder>(&self, other: &T) -> ColumnEncodeChain {
+    fn chain_encode<T: ColumnEncoder>(&self, other: &T) -> ColumnEncodeChain
+    where
+        Self: Sized,
+    {
         let buffer = self.encode_new();
         ColumnEncodeChain { buffer }.chain(other)
+    }
+}
+
+impl<T: ColumnEncoder + ?Sized> ColumnEncoder for &T {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        T::encode(*self, buffer)
+    }
+}
+
+impl<T: ColumnEncoder + ?Sized> ColumnEncoder for Box<T> {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        T::encode(&*self, buffer)
     }
 }
 
@@ -275,16 +294,26 @@ impl ColumnEncoder for Null {
 }
 
 /// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
+#[derive(Default)]
 pub struct TokenEncodeChain {
     buffer: Vec<u8>,
 }
 
 impl TokenEncodeChain {
     /// Chain a new value
-    pub fn chain<T: TokenEncoder>(mut self, other: &T) -> Self {
+    pub fn chain<T: ColumnEncoder + ?Sized>(mut self, other: &T) -> Self
+    where
+        Self: Sized,
+    {
         self.buffer.extend_from_slice(other.encode_new()[2..].into());
         self.buffer.push(0);
         self
+    }
+
+    /// Chain a new value
+    pub fn append<T: ColumnEncoder + ?Sized>(&mut self, other: &T) {
+        self.buffer.extend_from_slice(other.encode_new()[2..].into());
+        self.buffer.push(0);
     }
 
     /// Complete the chain and return the token
@@ -293,19 +322,48 @@ impl TokenEncodeChain {
     }
 }
 
-/// Encoding functionality for tokens
-pub trait TokenEncoder: ColumnEncoder {
-    /// Encode a single token
-    fn get_token(&self) -> i64 {
-        crate::cql::murmur3_cassandra_x64_128(&self.encode_new()[4..], 0).0
-    }
-
+/// Defines types which can be used as a key, and can build a token for queries
+pub trait TokenChainer: TokenEncoder + ColumnEncoder {
     /// Start an encode chain
-    fn chain_token<T: TokenEncoder>(&self, other: &T) -> TokenEncodeChain {
+    fn chain<E: ColumnEncoder>(&self, other: &E) -> TokenEncodeChain
+    where
+        Self: Sized,
+    {
         let mut buffer: Vec<u8> = self.encode_new()[2..].into();
         buffer.push(0);
         TokenEncodeChain { buffer }.chain(other)
     }
+
+    /// Start an encode chain
+    fn dyn_chain(&self, other: &dyn ColumnEncoder) -> TokenEncodeChain {
+        let mut buffer: Vec<u8> = self.encode_new()[2..].into();
+        buffer.push(0);
+        let mut chain = TokenEncodeChain { buffer };
+        chain.append(other);
+        chain
+    }
 }
 
-impl<T: ColumnEncoder> TokenEncoder for T {}
+impl<T: TokenEncoder + ColumnEncoder> TokenChainer for T {}
+
+/// Encoding functionality for tokens
+pub trait TokenEncoder {
+    /// Encode a single token
+    fn token(&self) -> i64;
+}
+
+impl<T: ColumnEncoder> TokenEncoder for T {
+    fn token(&self) -> i64 {
+        crate::cql::murmur3_cassandra_x64_128(&self.encode_new()[4..], 0).0
+    }
+}
+
+impl<T: ColumnEncoder> TokenEncoder for [T] {
+    fn token(&self) -> i64 {
+        let mut token_chain = TokenEncodeChain::default();
+        for v in self.iter() {
+            token_chain.append(v);
+        }
+        token_chain.finish()
+    }
+}

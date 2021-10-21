@@ -3,7 +3,11 @@
 
 //! This module implements the Supported frame.
 
-use super::decoder::{string_multimap, Decoder, Frame};
+use super::decoder::{
+    string_multimap,
+    Decoder,
+    Frame,
+};
 use std::collections::HashMap;
 
 /// The supported frame with options field.

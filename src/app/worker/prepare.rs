@@ -8,74 +8,129 @@ use std::fmt::Debug;
 #[derive(Debug)]
 pub struct PrepareWorker {
     /// The expected id for this statement
-    pub id: [u8; 16],
-    /// The statement to prepare
-    pub statement: String,
+    pub(crate) id: [u8; 16],
+    pub(crate) retries: usize,
+    pub(crate) request: PrepareRequest,
 }
 impl PrepareWorker {
     /// Create a new prepare worker
-    pub fn new<T: ToString>(id: [u8; 16], statement: T) -> Self {
-        Self {
+    pub fn new(id: [u8; 16], statement: &str) -> Box<Self> {
+        Box::new(Self {
             id,
-            statement: statement.to_string(),
-        }
+            retries: 0,
+            request: PrepareRequest {
+                statement: statement.to_string().into(),
+                token: rand::random(),
+            },
+        })
     }
-    /// Create a new boxed prepare worker
-    pub fn boxed<T: ToString>(id: [u8; 16], statement: T) -> Box<Self> {
-        Box::new(Self::new(id, statement))
-    }
-    /// Create a prepare worker for an insert statement given a keyspace with the
-    /// appropriate trait definition
-    pub fn insert<S, K, V>(keyspace: &S) -> Self
-    where
-        S: Insert<K, V>,
-    {
+}
+impl From<PrepareRequest> for PrepareWorker {
+    fn from(request: PrepareRequest) -> Self {
         Self {
-            id: keyspace.id(),
-            statement: keyspace.statement().to_string(),
-        }
-    }
-    /// Create a prepare worker for a select statement given a keyspace with the
-    /// appropriate trait definition
-    pub fn select<S, K, V>(keyspace: &S) -> Self
-    where
-        S: Select<K, V>,
-    {
-        Self {
-            id: keyspace.id(),
-            statement: keyspace.statement().to_string(),
-        }
-    }
-    /// Create a prepare worker for an update statement given a keyspace with the
-    /// appropriate trait definition
-    pub fn update<S, K, V>(keyspace: &S) -> Self
-    where
-        S: Update<K, V>,
-    {
-        Self {
-            id: keyspace.id(),
-            statement: keyspace.statement().to_string(),
-        }
-    }
-    /// Create a prepare worker for a delete statement given a keyspace with the
-    /// appropriate trait definition
-    pub fn delete<S, K, V>(keyspace: &S) -> Self
-    where
-        S: Delete<K, V>,
-    {
-        Self {
-            id: keyspace.id(),
-            statement: keyspace.statement().to_string(),
+            id: md5::compute(request.statement().as_bytes()).into(),
+            retries: 0,
+            request,
         }
     }
 }
 impl Worker for PrepareWorker {
     fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-        info!("Successfully prepared statement: '{}'", self.statement);
+        info!("Successfully prepared statement: '{}'", self.request.statement());
         Ok(())
     }
     fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
-        error!("Failed to prepare statement: {}, error: {}", self.statement, error);
+        error!(
+            "Failed to prepare statement: {}, error: {}",
+            self.request.statement(),
+            error
+        );
+        self.retry().ok();
         Ok(())
+    }
+}
+
+impl RetryableWorker<PrepareRequest> for PrepareWorker {
+    fn retries(&self) -> usize {
+        self.retries
+    }
+
+    fn retries_mut(&mut self) -> &mut usize {
+        &mut self.retries
+    }
+
+    fn request(&self) -> &PrepareRequest {
+        &self.request
+    }
+}
+
+impl<H> IntoRespondingWorker<PrepareRequest, H, Decoder> for PrepareWorker
+where
+    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+{
+    type Output = RespondingPrepareWorker<H>;
+
+    fn with_handle(self: Box<Self>, handle: H) -> Box<Self::Output> {
+        Box::new(RespondingPrepareWorker {
+            id: self.id,
+            retries: self.retries,
+            request: self.request,
+            handle,
+        })
+    }
+}
+
+/// A statement prepare worker
+#[derive(Debug)]
+pub struct RespondingPrepareWorker<H> {
+    /// The expected id for this statement
+    pub(crate) id: [u8; 16],
+    pub(crate) request: PrepareRequest,
+    pub(crate) retries: usize,
+    pub(crate) handle: H,
+}
+
+impl<H> Worker for RespondingPrepareWorker<H>
+where
+    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+{
+    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
+        match Decoder::try_from(giveload) {
+            Ok(decoder) => self.handle.handle_response(decoder),
+            Err(e) => self.handle.handle_error(WorkerError::Other(e)),
+        }
+    }
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
+        error!("{}", error);
+        match self.retry() {
+            Ok(_) => Ok(()),
+            Err(worker) => worker.handle.handle_error(error),
+        }
+    }
+}
+
+impl<H> RetryableWorker<PrepareRequest> for RespondingPrepareWorker<H>
+where
+    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+{
+    fn retries(&self) -> usize {
+        self.retries
+    }
+
+    fn retries_mut(&mut self) -> &mut usize {
+        &mut self.retries
+    }
+
+    fn request(&self) -> &PrepareRequest {
+        &self.request
+    }
+}
+
+impl<H> RespondingWorker<PrepareRequest, H, Decoder> for RespondingPrepareWorker<H>
+where
+    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+{
+    fn handle(&self) -> &H {
+        &self.handle
     }
 }

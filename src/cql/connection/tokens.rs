@@ -3,8 +3,13 @@
 
 use crate::{
     cql::{
-        frame::decoder::{ColumnDecoder, Frame},
-        Decoder, Metadata, Rows,
+        frame::decoder::{
+            ColumnDecoder,
+            Frame,
+        },
+        Decoder,
+        Metadata,
+        Rows,
     },
     rows,
 };

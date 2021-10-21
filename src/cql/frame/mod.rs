@@ -25,17 +25,43 @@ pub(crate) mod rows;
 pub(crate) mod startup;
 pub(crate) mod supported;
 
-pub use auth_response::{AllowAllAuth, PasswordAuth};
+pub use auth_response::{
+    AllowAllAuth,
+    PasswordAuth,
+};
 pub use auth_success::AuthSuccess;
 pub use batch::*;
 pub use consistency::Consistency;
-pub use decoder::{ColumnDecoder, Decoder, Frame, RowsDecoder, VoidDecoder};
-pub use encoder::{ColumnEncodeChain, ColumnEncoder, TokenEncodeChain, TokenEncoder};
-pub use error::{CqlError, ErrorCodes};
+pub use decoder::{
+    ColumnDecoder,
+    Decoder,
+    Frame,
+    RowsDecoder,
+    VoidDecoder,
+};
+pub use encoder::{
+    ColumnEncodeChain,
+    ColumnEncoder,
+    TokenChainer,
+    TokenEncodeChain,
+    TokenEncoder,
+};
+pub use error::{
+    CqlError,
+    ErrorCodes,
+};
 pub use prepare::Prepare;
 pub use query::{
-    PreparedStatement, Query, QueryBuild, QueryBuilder, QueryConsistency, QueryFlags, QueryPagingState,
-    QuerySerialConsistency, QueryStatement, QueryValues,
+    PreparedStatement,
+    Query,
+    QueryBuild,
+    QueryBuilder,
+    QueryConsistency,
+    QueryFlags,
+    QueryPagingState,
+    QuerySerialConsistency,
+    QueryStatement,
+    QueryValues,
 };
 pub use rows::*;
 pub use std::convert::TryInto;
@@ -62,13 +88,125 @@ pub trait Statements {
 }
 
 /// Defines shared functionality for frames that can receive statement values
-pub trait Values: Sized {
+pub trait Values {
     /// The return type after applying a value
     type Return: Values<Return = Self::Return>;
-    /// Value of type V.
-    fn value<V: ColumnEncoder>(self, value: &V) -> Self::Return;
-    /// Unset value.
-    fn unset_value(self) -> Self::Return;
+    /// Add a single value
+    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Self::Return
+    where
+        Self: Sized;
+    /// Add a slice of values
+    fn bind<V: Bindable + ?Sized>(self, values: &V) -> Self::Return
+    where
+        Self: Sized,
+    {
+        values.bind(self)
+    }
+
+    /// Unset value
+    fn unset_value(self) -> Self::Return
+    where
+        Self: Sized;
     /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> Self::Return;
+    fn null_value(self) -> Self::Return
+    where
+        Self: Sized;
+
+    /// Skip binding a value
+    fn skip_value(self) -> Self::Return
+    where
+        Self: Sized;
+}
+
+/// Defines dynamic versions of `Values` functions
+pub trait DynValues: Values {
+    /// Add a single dynamic value
+    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return;
+    /// Unset value dynamically
+    fn dyn_unset_value(self: Box<Self>) -> Self::Return;
+    /// Set Null value dynamically, note: for write queries this will create tombstone for V;
+    fn dyn_null_value(self: Box<Self>) -> Self::Return;
+    /// Skip binding a value dynamically
+    fn dyn_skip_value(self: Box<Self>) -> Self::Return;
+}
+impl<T> DynValues for T
+where
+    T: Values,
+{
+    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return {
+        self.value(value)
+    }
+
+    fn dyn_unset_value(self: Box<Self>) -> Self::Return {
+        self.unset_value()
+    }
+
+    fn dyn_null_value(self: Box<Self>) -> Self::Return {
+        self.null_value()
+    }
+
+    fn dyn_skip_value(self: Box<Self>) -> Self::Return {
+        self.skip_value()
+    }
+}
+
+impl<T: DynValues + ?Sized> Values for Box<T> {
+    type Return = T::Return;
+
+    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Self::Return
+    where
+        Self: Sized,
+    {
+        T::dyn_value(self, &value)
+    }
+
+    fn unset_value(self) -> Self::Return
+    where
+        Self: Sized,
+    {
+        T::dyn_unset_value(self)
+    }
+
+    fn null_value(self) -> Self::Return
+    where
+        Self: Sized,
+    {
+        T::dyn_null_value(self)
+    }
+
+    fn skip_value(self) -> Self::Return
+    where
+        Self: Sized,
+    {
+        T::dyn_skip_value(self)
+    }
+}
+
+/// Defines a query bindable value
+pub trait Bindable {
+    /// Bind the value using the provided binder
+    fn bind<V: Values>(&self, binder: V) -> V::Return;
+}
+
+impl<T: ColumnEncoder> Bindable for T {
+    fn bind<V: Values>(&self, binder: V) -> V::Return {
+        binder.value(self)
+    }
+}
+
+impl<T: Bindable + ColumnEncoder> Bindable for [T] {
+    fn bind<V: Values>(&self, binder: V) -> V::Return {
+        match self.len() {
+            0 => binder.skip_value(),
+            1 => binder.value(self.first().unwrap()),
+            _ => {
+                let mut iter = self.iter();
+                let mut builder = binder.value(iter.next().unwrap());
+                for v in iter {
+                    builder = builder.value(v);
+                }
+                builder
+            }
+        }
+    }
 }

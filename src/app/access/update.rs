@@ -6,50 +6,36 @@ use super::*;
 /// Update query trait which creates an `UpdateRequest`
 /// that can be sent to the `Ring`.
 ///
-/// ## Examples
+/// ## Example
 /// ```
-/// use scylla_rs::{
-///     app::access::{
-///         ComputeToken,
-///         GetUpdateRequest,
-///         Keyspace,
-///         Update,
-///     },
-///     cql::{
-///         Batch,
-///         Consistency,
-///         PreparedStatement,
-///         Values,
-///         VoidDecoder,
-///     },
-/// };
-/// use std::borrow::Cow;
-/// # #[derive(Default, Clone, Debug)]
-/// # struct MyKeyspace {
-/// #     pub name: Cow<'static, str>,
-/// # }
-/// #
+/// use scylla_rs::app::access::*;
+/// #[derive(Clone, Debug)]
+/// struct MyKeyspace {
+///     pub name: String,
+/// }
 /// # impl MyKeyspace {
-/// #     pub fn new() -> Self {
+/// #     pub fn new(name: &str) -> Self {
 /// #         Self {
-/// #             name: "my_keyspace".into(),
+/// #             name: name.to_string().into(),
 /// #         }
 /// #     }
 /// # }
-///
-/// # impl Keyspace for MyKeyspace {
-/// #     fn name(&self) -> &Cow<'static, str> {
-/// #         &self.name
-/// #     }
-/// # }
-/// # impl ComputeToken<i32> for MyKeyspace {
-/// #     fn token(_key: &i32) -> i64 {
-/// #         rand::random()
-/// #     }
-/// # }
-/// # impl VoidDecoder for MyKeyspace {}
+/// impl Keyspace for MyKeyspace {
+///     fn name(&self) -> String {
+///         self.name.clone()
+///     }
+/// }
 /// # type MyKeyType = i32;
-/// # type MyValueType = f32;
+/// # #[derive(Default)]
+/// struct MyValueType {
+///     value1: f32,
+///     value2: f32,
+/// }
+/// impl Bindable for MyValueType {
+///     fn bind<V: Values>(&self, binder: V) -> V::Return {
+///         binder.bind(&self.value1).bind(&self.value2)
+///     }
+/// }
 /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
@@ -57,21 +43,21 @@ use super::*;
 ///     }
 ///
 ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-///         builder.value(key).value(value).value(value)
+///         builder.bind(value).value(key)
 ///     }
 /// }
 ///
-/// # let keyspace = MyKeyspace::new();
-/// # let (my_key, my_val) = (1, 1.0);
-/// let request = keyspace // A Scylla keyspace
-///     .update(&my_key, &my_val) // Get the Update Request
+/// # let (my_key, my_val) = (1, MyValueType::default());
+/// let request = MyKeyspace::new("my_keyspace")
+///     .update_query(&my_key, &my_val)
 ///     .consistency(Consistency::One)
 ///     .build()?;
+/// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
+pub trait Update<K, V>: Keyspace {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
-    type QueryOrPrepared: UpdateRecommended<Self, K, V>;
+    type QueryOrPrepared: QueryOrPrepared;
 
     /// Create your update statement here.
     fn statement(&self) -> Cow<'static, str>;
@@ -85,206 +71,735 @@ pub trait Update<K, V>: Keyspace + VoidDecoder + ComputeToken<K> {
     fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
 }
 
-pub trait UpdateRecommended<S: Update<K, V>, K, V>: QueryOrPrepared {
-    fn make<T: Statements>(query_or_batch: T, keyspace: &S) -> T::Return {
-        Self::encode_statement(query_or_batch, &keyspace.statement())
-    }
-}
-
-impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for QueryStatement {}
-
-impl<S: Update<K, V>, K, V> UpdateRecommended<S, K, V> for PreparedStatement {}
-
-/// Wrapper for the `Update` trait which provides the `update` function
-pub trait GetUpdateRequest<S, K, V> {
-    /// Calls the appropriate `Update` implementation for this Key/Value pair
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+/// Specifies helper functions for creating static update requests from a keyspace with a `Delete<K, V>` definition
+pub trait GetStaticUpdateRequest<K, V>: Keyspace {
+    /// Create a static update request from a keyspace with a `Update<K, V>` definition. Will use the default `type
+    /// QueryOrPrepared` from the trait definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: String,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.to_string().into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # #[derive(Default)]
+    /// struct MyValueType {
+    ///     value1: f32,
+    ///     value2: f32,
+    /// }
+    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///     }
+    ///
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///         builder.value(&value.value1).value(&value.value2).value(key)
+    ///     }
+    /// }
+    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// MyKeyspace::new("my_keyspace")
+    ///     .update(&my_key, &my_val)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Update<K, V>;
-    /// Calls the `Update` implementation for this Key/Value pair using a query statement
-    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Update<K, V>;
-    /// Calls the `Update` implementation for this Key/Value pair using a prepared statement id
-    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Update<K, V>;
-}
-
-impl<S: Update<K, V>, K, V> GetUpdateRequest<S, K, V> for S {
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
-    where
-        S: Update<K, V>,
+        Self: Update<K, V>,
     {
         UpdateBuilder {
-            _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
+            statement: self.statement(),
             key,
             value,
-            builder: S::QueryOrPrepared::make(Query::new(), self),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            _marker: StaticRequest,
         }
     }
-    fn update_query<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+
+    /// Create a static update query request from a keyspace with a `Update<K, V>` definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: String,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.to_string().into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # #[derive(Default)]
+    /// struct MyValueType {
+    ///     value1: f32,
+    ///     value2: f32,
+    /// }
+    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///     }
+    ///
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///         builder.value(&value.value1).value(&value.value2).value(key)
+    ///     }
+    /// }
+    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// MyKeyspace::new("my_keyspace")
+    ///     .update_query(&my_key, &my_val)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn update_query<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpdateBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Update<K, V>,
+        Self: Update<K, V>,
     {
         UpdateBuilder {
-            _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
+            statement: self.statement(),
             key,
             value,
-            builder: <QueryStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            _marker: StaticRequest,
         }
     }
-    fn update_prepared<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, S, K, V, QueryConsistency>
+
+    /// Create a static update prepared request from a keyspace with a `Update<K, V>` definition.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// #[derive(Clone, Debug)]
+    /// struct MyKeyspace {
+    ///     pub name: String,
+    /// }
+    /// # impl MyKeyspace {
+    /// #     pub fn new(name: &str) -> Self {
+    /// #         Self {
+    /// #             name: name.to_string().into(),
+    /// #         }
+    /// #     }
+    /// # }
+    /// impl Keyspace for MyKeyspace {
+    ///     fn name(&self) -> String {
+    ///         self.name.clone()
+    ///     }
+    /// }
+    /// # type MyKeyType = i32;
+    /// # #[derive(Default)]
+    /// struct MyValueType {
+    ///     value1: f32,
+    ///     value2: f32,
+    /// }
+    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    ///     type QueryOrPrepared = PreparedStatement;
+    ///     fn statement(&self) -> Cow<'static, str> {
+    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///     }
+    ///
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///         builder.value(&value.value1).value(&value.value2).value(key)
+    ///     }
+    /// }
+    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// MyKeyspace::new("my_keyspace")
+    ///     .update_prepared(&my_key, &my_val)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn update_prepared<'a>(
+        &'a self,
+        key: &'a K,
+        value: &'a V,
+    ) -> UpdateBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
-        S: Update<K, V>,
+        Self: Update<K, V>,
     {
         UpdateBuilder {
-            _marker: PhantomData,
-            keyspace: self,
+            keyspace: PhantomData,
+            statement: self.statement(),
             key,
             value,
-            builder: <PreparedStatement as UpdateRecommended<S, K, V>>::make(Query::new(), self),
+            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            _marker: StaticRequest,
         }
     }
 }
-pub struct UpdateBuilder<'a, S, K, V, Stage> {
-    _marker: PhantomData<(&'a S, &'a K, &'a V)>,
-    keyspace: &'a S,
-    key: &'a K,
-    value: &'a V,
-    builder: QueryBuilder<Stage>,
+
+/// Specifies helper functions for creating dynamic update requests from anything that can be interpreted as a keyspace
+
+pub trait GetDynamicUpdateRequest: Keyspace {
+    /// Create a dynamic update request from a statement and variables. Can be specified as either
+    /// a query or prepared statement. The token `{{keyspace}}` will be replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// "my_keyspace"
+    ///     .update_with(
+    ///         "UPDATE {{keyspace}}.table SET val1 = ?, val2 = ? WHERE key = ?",
+    ///         &[&3],
+    ///         &[&4.0, &5.0],
+    ///         StatementType::Query,
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn update_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        statement_type: StatementType,
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenChainer + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        match statement_type {
+            StatementType::Query => self.update_query_with(statement, key, variables),
+            StatementType::Prepared => self.update_prepared_with(statement, key, variables),
+        }
+    }
+
+    /// Create a dynamic update query request from a statement and variables. The token `{{keyspace}}` will be replaced
+    /// with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// "my_keyspace"
+    ///     .update_query_with(
+    ///         "UPDATE {{keyspace}}.table SET val1 = ?, val2 = ? WHERE key = ?",
+    ///         &[&3],
+    ///         &[&4.0, &5.0],
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn update_query_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenChainer + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            keyspace: PhantomData,
+            statement: statement.to_owned().into(),
+            key,
+            value: variables,
+            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
+            _marker: DynamicRequest,
+        }
+    }
+
+    /// Create a dynamic update prepared request from a statement and variables. The token `{{keyspace}}` will be
+    /// replaced with the keyspace name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// "my_keyspace"
+    ///     .update_prepared_with(
+    ///         "UPDATE {{keyspace}}.table SET val1 = ?, val2 = ? WHERE key = ?",
+    ///         &[&3],
+    ///         &[&4.0, &5.0],
+    ///     )
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn update_prepared_with<'a>(
+        &'a self,
+        statement: &str,
+        key: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&(dyn TokenChainer + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            keyspace: PhantomData,
+            statement: statement.to_owned().into(),
+            key,
+            value: variables,
+            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
+            _marker: DynamicRequest,
+        }
+    }
 }
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryConsistency> {
-    pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, QueryValues> {
+
+/// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
+
+pub trait AsDynamicUpdateRequest: ToStatement
+where
+    Self: Sized,
+{
+    /// Create a dynamic update request from a statement and variables. Can be specified as either
+    /// a query or prepared statement.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// "UPDATE my_keyspace.table SET val1 = ?, val2 = ? WHERE key = ?"
+    ///     .as_update(&[&3], &[&4.0, &5.0], StatementType::Query)
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn as_update<'a>(
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        statement_type: StatementType,
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        match statement_type {
+            StatementType::Query => self.as_update_query(key, variables),
+            StatementType::Prepared => self.as_update_prepared(key, variables),
+        }
+    }
+
+    /// Create a dynamic update query request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// "UPDATE my_keyspace.table SET val1 = ?, val2 = ? WHERE key = ?"
+    ///     .as_update_query(&[&3], &[&4.0, &5.0])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn as_update_query<'a>(
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        let statement = self.to_statement();
+        UpdateBuilder {
+            _marker: DynamicRequest,
+            keyspace: PhantomData,
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
+            key,
+            value: variables,
+        }
+    }
+
+    /// Create a dynamic update prepared request from a statement and variables.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// "UPDATE my_keyspace.table SET val1 = ?, val2 = ? WHERE key = ?"
+    ///     .as_update_prepared(&[&3], &[&4.0, &5.0])
+    ///     .consistency(Consistency::One)
+    ///     .build()?
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn as_update_prepared<'a>(
+        &self,
+        key: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn ColumnEncoder + Sync)],
+    ) -> UpdateBuilder<
+        'a,
+        Self,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        let statement = self.to_statement();
+        UpdateBuilder {
+            _marker: DynamicRequest,
+            keyspace: PhantomData,
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
+            key,
+            value: variables,
+        }
+    }
+}
+
+impl<S: Keyspace, K, V> GetStaticUpdateRequest<K, V> for S {}
+impl<S: Keyspace> GetDynamicUpdateRequest for S {}
+impl<S: ToStatement> AsDynamicUpdateRequest for S {}
+
+pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
+    pub(crate) keyspace: PhantomData<fn(S) -> S>,
+    pub(crate) statement: Cow<'static, str>,
+    pub(crate) key: &'a K,
+    pub(crate) value: &'a V,
+    pub(crate) builder: QueryBuilder<Stage>,
+    pub(crate) _marker: T,
+}
+
+impl<'a, S: Update<K, V>, K: TokenEncoder, V> UpdateBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
+    pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, QueryValues, StaticRequest> {
         UpdateBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
+            statement: self.statement,
             key: self.key,
             value: self.value,
-            builder: S::bind_values(self.builder.consistency(consistency), self.key, self.value),
+            builder: S::bind_values(self.builder.consistency(consistency), &self.key, &self.value),
         }
+    }
+
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value)
+                .timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let query = S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value).build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
     }
 }
 
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryValues> {
-    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild> {
+impl<'a, S: Keyspace>
+    UpdateBuilder<
+        'a,
+        S,
+        [&(dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        DynamicRequest,
+    >
+{
+    pub fn bind_values<
+        F: 'static
+            + Fn(
+                Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
+                &[&(dyn TokenChainer + Sync)],
+                &[&(dyn ColumnEncoder + Sync)],
+            ) -> QueryBuilder<QueryValues>,
+    >(
+        self,
+        bind_fn: F,
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        ManualBoundRequest<'a>,
+    > {
+        UpdateBuilder {
+            _marker: ManualBoundRequest {
+                bind_fn: Box::new(bind_fn),
+            },
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: self.builder,
+        }
+    }
+
+    pub fn consistency(
+        self,
+        consistency: Consistency,
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryValues,
+        DynamicRequest,
+    > {
+        let builder = self.builder.consistency(consistency).bind(self.value).bind(self.key);
         UpdateBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder,
+        }
+    }
+
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryBuild,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: self
+                .builder
+                .consistency(Consistency::Quorum)
+                .bind(self.value)
+                .bind(self.key)
+                .timestamp(timestamp),
+            _marker: self._marker,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let query = self
+            .builder
+            .consistency(Consistency::Quorum)
+            .bind(self.value)
+            .bind(self.key)
+            .build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+
+impl<'a, S: Keyspace>
+    UpdateBuilder<
+        'a,
+        S,
+        [&(dyn TokenChainer + Sync)],
+        [&(dyn ColumnEncoder + Sync)],
+        QueryConsistency,
+        ManualBoundRequest<'a>,
+    >
+{
+    pub fn consistency(
+        self,
+        consistency: Consistency,
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryValues,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            _marker: DynamicRequest,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), self.key, self.value),
+        }
+    }
+
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> UpdateBuilder<
+        'a,
+        S,
+        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn ColumnEncoder + Sync)],
+        QueryBuild,
+        DynamicRequest,
+    > {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            value: self.value,
+            builder: (self._marker.bind_fn)(
+                Box::new(self.builder.consistency(Consistency::Quorum)),
+                self.key,
+                self.value,
+            )
+            .timestamp(timestamp),
+            _marker: DynamicRequest,
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let query = (self._marker.bind_fn)(
+            Box::new(self.builder.consistency(Consistency::Quorum)),
+            self.key,
+            self.value,
+        )
+        .build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+
+impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryValues, T> {
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
+        UpdateBuilder {
+            keyspace: self.keyspace,
+            statement: self.statement,
             key: self.key,
             value: self.value,
             builder: self.builder.timestamp(timestamp),
+            _marker: self._marker,
         }
     }
-    /// Build the UpdateRequest
-    pub fn build(self) -> anyhow::Result<UpdateRequest<S, K, V>> {
+
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(self.keyspace.create_request(query, S::token(self.key)))
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
     }
 }
 
-impl<'a, S: Update<K, V>, K, V> UpdateBuilder<'a, S, K, V, QueryBuild> {
-    /// Build the UpdateRequest
-    pub fn build(self) -> anyhow::Result<UpdateRequest<S, K, V>> {
+impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
+    pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(self.keyspace.create_request(query, S::token(self.key)))
-    }
-}
-
-/// Defines two helper methods to specify statement / id
-pub trait GetUpdateStatement<S> {
-    /// Specifies the Key and Value type for an update statement
-    fn update_statement<K, V>(&self) -> Cow<'static, str>
-    where
-        S: Update<K, V>;
-
-    /// Specifies the Key and Value type for a prepared update statement id
-    fn update_id<K, V>(&self) -> [u8; 16]
-    where
-        S: Update<K, V>;
-}
-
-impl<S: Keyspace> GetUpdateStatement<S> for S {
-    fn update_statement<K, V>(&self) -> Cow<'static, str>
-    where
-        S: Update<K, V>,
-    {
-        S::statement(self)
-    }
-
-    fn update_id<K, V>(&self) -> [u8; 16]
-    where
-        S: Update<K, V>,
-    {
-        S::id(self)
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
     }
 }
 
 /// A request to update a record which can be sent to the ring
-#[derive(Clone, Debug)]
-pub struct UpdateRequest<S, K, V> {
-    token: i64,
-    inner: Vec<u8>,
-    keyspace: S,
-    _marker: PhantomData<(S, K, V)>,
-}
+#[derive(Debug, Clone)]
+pub struct UpdateRequest(CommonRequest);
 
-impl<K, V, S: Update<K, V> + Clone> CreateRequest<UpdateRequest<S, K, V>> for S {
-    /// Create a new Update Request from a Query/Execute, token, and the keyspace.
-    fn create_request<Q: Into<Vec<u8>>>(&self, query: Q, token: i64) -> UpdateRequest<S, K, V> {
-        UpdateRequest::<S, K, V> {
-            token,
-            inner: query.into(),
-            keyspace: self.clone(),
-            _marker: PhantomData,
-        }
+impl From<CommonRequest> for UpdateRequest {
+    fn from(req: CommonRequest) -> Self {
+        UpdateRequest(req)
     }
 }
 
-impl<S, K, V> Request for UpdateRequest<S, K, V>
-where
-    S: Update<K, V> + std::fmt::Debug + Clone,
-    K: Send + std::fmt::Debug,
-    V: Send + std::fmt::Debug,
-{
-    fn statement(&self) -> Cow<'static, str> {
-        self.keyspace.update_statement::<K, V>()
-    }
+impl Deref for UpdateRequest {
+    type Target = CommonRequest;
 
-    fn payload(&self) -> &Vec<u8> {
-        &self.inner
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<S: Update<K, V>, K, V> UpdateRequest<S, K, V> {
-    /// Send a local request using the keyspace impl and return a type marker
-    pub fn send_local(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_local(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
-        Ok(DecodeResult::update())
+impl DerefMut for UpdateRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Request for UpdateRequest {
+    fn token(&self) -> i64 {
+        self.0.token()
     }
 
-    /// Send a global request using the keyspace impl and return a type marker
-    pub fn send_global(self, worker: Box<dyn Worker>) -> Result<DecodeResult<DecodeVoid<S>>, RingSendError> {
-        send_global(
-            self.token,
-            self.inner,
-            worker,
-            self.keyspace.name().clone().into_owned(),
-        )?;
-        Ok(DecodeResult::update())
+    fn statement(&self) -> &Cow<'static, str> {
+        self.0.statement()
     }
 
-    /// Consume the request to retrieve the payload
-    pub fn into_payload(self) -> Vec<u8> {
-        self.inner
+    fn payload(&self) -> Vec<u8> {
+        self.0.payload()
+    }
+}
+
+impl SendRequestExt for UpdateRequest {
+    type Marker = DecodeVoid;
+    type Worker = BasicRetryWorker<Self>;
+    const TYPE: RequestType = RequestType::Update;
+
+    fn worker(self) -> Box<Self::Worker> {
+        BasicRetryWorker::new(self)
     }
 }

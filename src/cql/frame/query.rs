@@ -5,12 +5,25 @@
 
 use super::{
     consistency::Consistency,
-    encoder::{ColumnEncoder, BE_8_BYTES_LEN, BE_NULL_BYTES_LEN, BE_UNSET_BYTES_LEN},
-    opcode::{EXECUTE, QUERY},
+    encoder::{
+        ColumnEncoder,
+        BE_8_BYTES_LEN,
+        BE_NULL_BYTES_LEN,
+        BE_UNSET_BYTES_LEN,
+    },
+    opcode::{
+        EXECUTE,
+        QUERY,
+    },
     queryflags::*,
-    QueryOrPrepared, Statements, Values,
+    QueryOrPrepared,
+    Statements,
+    Values,
 };
-use crate::cql::compression::{Compression, MyCompression};
+use crate::cql::compression::{
+    Compression,
+    MyCompression,
+};
 
 /// Blanket cql frame header for query frame.
 const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
@@ -20,7 +33,12 @@ const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
 ///
 /// ## Example
 /// ```
-/// use scylla_rs::cql::{Consistency, Query, Statements, Values};
+/// use scylla_rs::cql::{
+///     Consistency,
+///     Query,
+///     Statements,
+///     Values,
+/// };
 ///
 /// let builder = Query::new();
 /// let query = builder
@@ -47,6 +65,11 @@ pub struct PreparedStatement;
 
 /// Gating type for query consistency
 pub struct QueryConsistency;
+
+pub enum StatementType {
+    Query,
+    Prepared,
+}
 
 /// Gating type for query flags
 pub struct QueryFlags {
@@ -155,46 +178,8 @@ impl QueryBuilder<QueryConsistency> {
 
 impl Values for QueryBuilder<QueryFlags> {
     type Return = QueryBuilder<QueryValues>;
-    /// Set the first value to be null in the query frame.
-    fn null_value(mut self) -> QueryBuilder<QueryValues> {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // apply null value
-        self.buffer.extend(&BE_NULL_BYTES_LEN);
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
-    /// Set the value to be unset in the query frame.
-    fn unset_value(mut self) -> QueryBuilder<QueryValues> {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // apply null value
-        self.buffer.extend(&BE_UNSET_BYTES_LEN);
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
     /// Set the first value in the query frame.
-    fn value<V: ColumnEncoder>(mut self, value: &V) -> QueryBuilder<QueryValues> {
+    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return {
         // push SKIP_METADATA and VALUES query_flag to the buffer
         self.buffer.push(SKIP_METADATA | VALUES);
         let value_count = 1;
@@ -212,7 +197,54 @@ impl Values for QueryBuilder<QueryFlags> {
             stage: query_values,
         }
     }
+    /// Set the value to be unset in the query frame.
+    fn unset_value(mut self) -> Self::Return {
+        // push SKIP_METADATA and VALUES query_flag to the buffer
+        self.buffer.push(SKIP_METADATA | VALUES);
+        let value_count = 1;
+        // push value_count
+        self.buffer.extend(&u16::to_be_bytes(value_count));
+        // apply null value
+        self.buffer.extend(&BE_UNSET_BYTES_LEN);
+        // create query_values
+        let query_values = QueryValues {
+            query_flags: self.stage,
+            value_count,
+        };
+        QueryBuilder::<QueryValues> {
+            buffer: self.buffer,
+            stage: query_values,
+        }
+    }
+
+    /// Set the first value to be null in the query frame.
+    fn null_value(mut self) -> Self::Return {
+        // push SKIP_METADATA and VALUES query_flag to the buffer
+        self.buffer.push(SKIP_METADATA | VALUES);
+        let value_count = 1;
+        // push value_count
+        self.buffer.extend(&u16::to_be_bytes(value_count));
+        // apply null value
+        self.buffer.extend(&BE_NULL_BYTES_LEN);
+        // create query_values
+        let query_values = QueryValues {
+            query_flags: self.stage,
+            value_count,
+        };
+        QueryBuilder::<QueryValues> {
+            buffer: self.buffer,
+            stage: query_values,
+        }
+    }
+
+    fn skip_value(self) -> Self::Return
+    where
+        Self: Sized,
+    {
+        self.skip_values()
+    }
 }
+
 impl QueryBuilder<QueryFlags> {
     /// Set the page size in the query frame, without any value.
     pub fn page_size(mut self, page_size: i32) -> QueryBuilder<QueryPagingState> {
@@ -279,6 +311,16 @@ impl QueryBuilder<QueryFlags> {
             stage: query_build,
         }
     }
+    pub(crate) fn skip_values(mut self) -> QueryBuilder<QueryValues> {
+        self.buffer.push(SKIP_METADATA);
+        QueryBuilder {
+            buffer: self.buffer,
+            stage: QueryValues {
+                query_flags: self.stage,
+                value_count: 0,
+            },
+        }
+    }
     /// Build a query frame with an assigned compression type, without any value.
     pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
@@ -294,7 +336,7 @@ impl QueryBuilder<QueryFlags> {
 impl Values for QueryBuilder<QueryValues> {
     type Return = QueryBuilder<QueryValues>;
     /// Set the next value in the query frame.
-    fn value<V: ColumnEncoder>(mut self, value: &V) -> Self {
+    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -302,19 +344,27 @@ impl Values for QueryBuilder<QueryValues> {
         self
     }
     /// Set the value to be unset in the query frame.
-    fn unset_value(mut self) -> Self {
+    fn unset_value(mut self) -> Self::Return {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
         self.buffer.extend(&BE_UNSET_BYTES_LEN);
         self
     }
+
     /// Set the value to be null in the query frame.
-    fn null_value(mut self) -> Self {
+    fn null_value(mut self) -> Self::Return {
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
         self.buffer.extend(&BE_NULL_BYTES_LEN);
+        self
+    }
+
+    fn skip_value(self) -> Self::Return
+    where
+        Self: Sized,
+    {
         self
     }
 }
@@ -403,9 +453,11 @@ impl QueryBuilder<QueryValues> {
         // apply compression flag(if any to the header)
         self.buffer[1] |= MyCompression::flag();
         // modiy the buffer total value_count
-        let start = self.stage.query_flags.index + 1;
-        let end = start + 2;
-        self.buffer[start..end].copy_from_slice(&self.stage.value_count.to_be_bytes());
+        if self.stage.value_count > 0 {
+            let start = self.stage.query_flags.index + 1;
+            let end = start + 2;
+            self.buffer[start..end].copy_from_slice(&self.stage.value_count.to_be_bytes());
+        }
         // apply compression to query frame
         self.buffer = MyCompression::get().compress(self.buffer)?;
         // create query
@@ -577,7 +629,10 @@ impl Into<Vec<u8>> for Query {
 mod tests {
     use super::*;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{
+        SystemTime,
+        UNIX_EPOCH,
+    };
     #[test]
     // note: junk data
     fn simple_query_builder_test() {
