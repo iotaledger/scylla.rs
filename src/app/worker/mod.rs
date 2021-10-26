@@ -13,7 +13,6 @@ use crate::{
     cql::{
         CqlError,
         Decoder,
-        RowsDecoder,
     },
 };
 use anyhow::anyhow;
@@ -165,9 +164,9 @@ pub trait RetryableWorker<R>: Worker {
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_local()?;
-        Ok(marker.try_decode(
-            futures::executor::block_on(inbox).map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
-        )?)
+        let blocking_inbox =
+            tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(async move { inbox.await }));
+        Ok(marker.try_decode(blocking_inbox.map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??)?)
     }
 
     /// Send the worker to a global datacenter and await a response asynchronously
@@ -194,9 +193,9 @@ pub trait RetryableWorker<R>: Worker {
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_global()?;
-        Ok(marker.try_decode(
-            futures::executor::block_on(inbox).map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
-        )?)
+        let blocking_inbox =
+            tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(async move { inbox.await }));
+        Ok(marker.try_decode(blocking_inbox.map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??)?)
     }
 }
 

@@ -55,9 +55,9 @@ where
     }
 }
 
-impl<H, V, R> ValueWorker<H, V, R> {
+impl<H, V, S: ValueDecoder<V>> ValueWorker<H, V, SelectRequest<V, S>> {
     /// Create a new value worker from a request and a handle
-    pub fn new(request: R, handle: H) -> Box<Self> {
+    pub fn new(request: SelectRequest<V, S>, handle: H) -> Box<Self> {
         Box::new(Self {
             request,
             handle,
@@ -68,11 +68,15 @@ impl<H, V, R> ValueWorker<H, V, R> {
         })
     }
 
-    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self>
+    pub(crate) fn from(
+        BasicRetryWorker { request, retries }: BasicRetryWorker<SelectRequest<V, S>>,
+        handle: H,
+    ) -> Box<Self>
     where
         H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
-        R: 'static + Request + Debug + Send + Sync,
-        V: 'static + RowsDecoder + Send,
+        SelectRequest<V, S>: 'static + Request + Debug + Send + Sync,
+        V: 'static + Send,
+        S: ValueDecoder<V>,
     {
         Self::new(request, handle).with_retries(retries)
     }
@@ -84,27 +88,29 @@ impl<H, V, R> ValueWorker<H, V, R> {
         self
     }
 }
-impl<H, V, R> ValueWorker<H, V, R>
+impl<H, V, S> ValueWorker<H, V, SelectRequest<V, S>>
 where
-    V: 'static + Send + RowsDecoder,
-    R: 'static + Send + Debug + Clone + Request + Sync,
+    V: 'static + Send,
+    SelectRequest<V, S>: 'static + Send + Debug + Clone + Request + Sync,
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Clone + Send + Sync,
+    S: ValueDecoder<V>,
 {
     /// Give the worker an inbox and create a spawning worker
-    pub fn with_inbox<I>(self: Box<Self>, inbox: I) -> Box<SpawnableRespondWorker<R, I, Self>> {
+    pub fn with_inbox<I>(self: Box<Self>, inbox: I) -> Box<SpawnableRespondWorker<SelectRequest<V, S>, I, Self>> {
         SpawnableRespondWorker::new(inbox, *self)
     }
 }
 
-impl<H, V, R> Worker for ValueWorker<H, V, R>
+impl<H, V, S> Worker for ValueWorker<H, V, SelectRequest<V, S>>
 where
-    V: 'static + Send + RowsDecoder,
+    V: 'static + Send,
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
-    R: 'static + Send + Debug + Request + Sync,
+    SelectRequest<V, S>: 'static + Send + Debug + Request + Sync,
+    S: ValueDecoder<V>,
 {
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
         match Decoder::try_from(giveload) {
-            Ok(decoder) => match V::try_decode_rows(decoder) {
+            Ok(decoder) => match S::try_decode_value(decoder) {
                 Ok(res) => self.handle.handle_response(res),
                 Err(e) => self.handle.handle_error(WorkerError::Other(e)),
             },
@@ -135,17 +141,18 @@ where
     }
 }
 
-impl<H, V, R> RetryableWorker<R> for ValueWorker<H, V, R>
+impl<H, V, S> RetryableWorker<SelectRequest<V, S>> for ValueWorker<H, V, SelectRequest<V, S>>
 where
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
-    V: 'static + Send + RowsDecoder,
-    R: 'static + Send + Debug + Request + Sync,
+    V: 'static + Send,
+    SelectRequest<V, S>: 'static + Send + Debug + Request + Sync,
+    S: ValueDecoder<V>,
 {
     fn retries(&self) -> usize {
         self.retries
     }
 
-    fn request(&self) -> &R {
+    fn request(&self) -> &SelectRequest<V, S> {
         &self.request
     }
 
@@ -154,11 +161,12 @@ where
     }
 }
 
-impl<R, H, V> RespondingWorker<R, H, Option<V>> for ValueWorker<H, V, R>
+impl<S, H, V> RespondingWorker<SelectRequest<V, S>, H, Option<V>> for ValueWorker<H, V, SelectRequest<V, S>>
 where
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
-    R: 'static + Send + Debug + Request + Sync,
-    V: 'static + Send + RowsDecoder,
+    SelectRequest<V, S>: 'static + Send + Debug + Request + Sync,
+    V: 'static + Send,
+    S: ValueDecoder<V>,
 {
     fn handle(&self) -> &H {
         &self.handle

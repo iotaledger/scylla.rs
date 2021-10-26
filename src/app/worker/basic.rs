@@ -78,14 +78,15 @@ where
         SelectWorker::<H, R>::from(*self, handle)
     }
 }
-impl<H, V> IntoRespondingWorker<SelectRequest<V>, H, Option<V>> for BasicRetryWorker<SelectRequest<V>>
+impl<H, V, S> IntoRespondingWorker<SelectRequest<V, S>, H, Option<V>> for BasicRetryWorker<SelectRequest<V, S>>
 where
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
-    V: 'static + Send + RowsDecoder + Debug,
+    V: 'static + Send + Debug,
+    S: 'static + ValueDecoder<V>,
 {
-    type Output = ValueWorker<H, V, SelectRequest<V>>;
-    fn with_handle(self: Box<Self>, handle: H) -> Box<ValueWorker<H, V, SelectRequest<V>>> {
-        ValueWorker::<H, V, SelectRequest<V>>::from(*self, handle)
+    type Output = ValueWorker<H, V, SelectRequest<V, S>>;
+    fn with_handle(self: Box<Self>, handle: H) -> Box<ValueWorker<H, V, SelectRequest<V, S>>> {
+        ValueWorker::<H, V, SelectRequest<V, S>>::from(*self, handle)
     }
 }
 

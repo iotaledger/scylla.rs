@@ -81,17 +81,6 @@ where
     }
 }
 
-// impl<T> RowsDecoder for Vec<T>
-// where
-//    T: ColumnDecoder + Row,
-//{
-//    type Row = T;
-//
-//    fn try_decode_rows(decoder: Decoder) -> anyhow::Result<Option<Self>> {
-//        ensure!(decoder.is_rows()?, "Decoded response is not rows!");
-//        Ok(Some(Self::Row::rows_iter(decoder)?.collect()))
-//    }
-//}
 
 /// VoidDecoder trait to decode the VOID result from scylla
 pub struct VoidDecoder;

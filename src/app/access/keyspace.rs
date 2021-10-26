@@ -18,7 +18,7 @@ use crate::cql::{
 /// - `Update`
 /// - `Insert`
 /// - `Delete`
-pub trait Keyspace: Send + Sized + Sync + Clone {
+pub trait Keyspace: Send + Sized + Sync + Clone + std::fmt::Debug {
     /// Get the name of the keyspace as represented in the database
     fn name(&self) -> String;
 
@@ -43,7 +43,7 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
 
 impl<T> Keyspace for T
 where
-    T: ToString + Clone + Send + Sync,
+    T: ToString + Clone + Send + Sync + std::fmt::Debug,
 {
     fn name(&self) -> String {
         self.to_string()

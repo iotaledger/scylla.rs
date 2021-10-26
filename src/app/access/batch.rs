@@ -492,8 +492,9 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         )
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest> {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
         Ok(BatchRequest {
+            _marker: PhantomData,
             token: rand::random(),
             map: self.map,
             payload: self.builder.consistency(Consistency::Quorum).build()?.0.into(),
@@ -511,8 +512,9 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchFl
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest> {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
         Ok(BatchRequest {
+            _marker: PhantomData,
             token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
@@ -526,8 +528,9 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchTi
         Self::step(self.builder.timestamp(timestamp), self.map, self.keyspace)
     }
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest> {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
         Ok(BatchRequest {
+            _marker: PhantomData,
             token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
@@ -537,8 +540,9 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchTi
 
 impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBuild> {
     /// Build the batch request using the current collector
-    pub fn build(self) -> anyhow::Result<BatchRequest> {
+    pub fn build(self) -> anyhow::Result<BatchRequest<S>> {
         Ok(BatchRequest {
+            _marker: PhantomData,
             token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
@@ -575,13 +579,14 @@ impl<S: Keyspace + Clone> Batchable for S {}
 /// Stores a map of prepared statement IDs that were added to the
 /// batch so that the associated statements can be re-prepared if necessary.
 #[derive(Clone, Debug)]
-pub struct BatchRequest {
+pub struct BatchRequest<S: Keyspace> {
+    _marker: PhantomData<S>,
     token: i64,
     payload: Vec<u8>,
     map: HashMap<[u8; 16], Box<dyn ToStatement>>,
 }
 
-impl Request for BatchRequest {
+impl<S: Keyspace> Request for BatchRequest<S> {
     fn token(&self) -> i64 {
         self.token
     }
@@ -595,7 +600,7 @@ impl Request for BatchRequest {
     }
 }
 
-impl SendRequestExt for BatchRequest {
+impl<S: Keyspace + 'static> SendRequestExt for BatchRequest<S> {
     type Marker = DecodeVoid;
     type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Batch;
@@ -605,13 +610,13 @@ impl SendRequestExt for BatchRequest {
     }
 }
 
-impl BatchRequest {
+impl<S: Keyspace> BatchRequest<S> {
     /// Compute the murmur3 token from the provided K
     pub fn compute_token<K>(mut self, key: &K) -> Self
     where
-        K: TokenEncoder,
+        S: ComputeToken<K>,
     {
-        self.token = key.token();
+        self.token = S::compute_token(key);
         self
     }
 

@@ -457,8 +457,8 @@ where
     /// Create a dynamic insert prepared request from a statement and variables.
     ///
     /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
+    /// ```no_compile
+    /// use scylla_rs::prelude::*;
     /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
     ///     .as_insert_prepared(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
@@ -502,7 +502,7 @@ pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
     pub(crate) _marker: T,
 }
 
-impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
+impl<'a, S: Insert<K, V> + ComputeToken<K>, K, V> InsertBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
     pub fn consistency(self, consistency: Consistency) -> InsertBuilder<'a, S, K, V, QueryValues, StaticRequest> {
         InsertBuilder {
             _marker: self._marker,
@@ -530,7 +530,7 @@ impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryCo
         let query = S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value).build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }
@@ -730,12 +730,12 @@ impl<'a, S, K, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
+impl<'a, S: ComputeToken<K>, K, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }
@@ -743,12 +743,12 @@ impl<'a, S, K: TokenEncoder, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> InsertBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S: ComputeToken<K>, K, V, T> InsertBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }

@@ -455,20 +455,20 @@ impl<S: Keyspace> GetStatementIdExt for S {}
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
 #[derive(Clone, Copy, Default)]
-pub struct DecodeRows<V> {
-    _marker: PhantomData<fn(V) -> V>,
+pub struct DecodeRows<V, S> {
+    _marker: PhantomData<(fn(V) -> V, S)>,
 }
 
-impl<V> DecodeRows<V> {
+impl<V, S> DecodeRows<V, S> {
     fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<V: RowsDecoder> DecodeRows<V> {
+impl<V, S: ValueDecoder<V>> DecodeRows<V, S> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
-        V::try_decode_rows(bytes.try_into()?)
+        S::try_decode_value(bytes.try_into()?)
     }
 }
 
@@ -502,7 +502,7 @@ pub trait Marker {
     fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output>;
 }
 
-impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
+impl<T: Send, S: ValueDecoder<T>> Marker for DecodeRows<T, S> {
     type Output = Option<T>;
 
     fn new() -> Self {
@@ -510,7 +510,7 @@ impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
     }
 
     fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
-        T::try_decode_rows(d)
+        S::try_decode_value(d)
     }
 }
 
@@ -540,10 +540,10 @@ impl<T> DecodeResult<T> {
         Self { inner, request_type }
     }
 }
-impl<V> DecodeResult<DecodeRows<V>> {
+impl<V, S> DecodeResult<DecodeRows<V, S>> {
     fn select() -> Self {
         Self {
-            inner: DecodeRows::<V>::new(),
+            inner: DecodeRows::<V, S>::new(),
             request_type: RequestType::Select,
         }
     }
@@ -568,6 +568,44 @@ impl<T> Deref for DecodeResult<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+/// Compute token from the provided K, Ideally you should impl TokenEncoder for K
+pub trait ComputeToken<K>: Keyspace {
+    /// Generate the token for the privided K
+    fn compute_token(key: &K) -> i64;
+}
+
+impl<T, K: TokenEncoder> ComputeToken<K> for T
+where
+    T: Keyspace,
+{
+    fn compute_token(key: &K) -> i64 {
+        key.token()
+    }
+}
+/// ValueDecoder<V> trait to decode the rows result from scylla,
+/// NOTE: Instead please implement RowsDecoder for V if possible.
+pub trait ValueDecoder<V>: Keyspace {
+    /// The Row to decode. Must implement [`super::Row`].
+    type Row: crate::cql::Row;
+    /// Try to decode the provided Decoder with an expected Rows result
+    fn try_decode_value(decoder: Decoder) -> anyhow::Result<Option<V>>;
+    /// Decode the provided Decoder with deterministic Rows result
+    fn decode_value(decoder: Decoder) -> Option<V> {
+        Self::try_decode_value(decoder).unwrap()
+    }
+}
+
+impl<T, V: RowsDecoder> ValueDecoder<V> for T
+where
+    T: Keyspace,
+{
+    type Row = V::Row;
+
+    fn try_decode_value(decoder: Decoder) -> anyhow::Result<Option<V>> {
+        V::try_decode_rows(decoder)
     }
 }
 
@@ -668,7 +706,7 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let res: Result<DecodeResult<DecodeRows<f32>>, RequestError> = keyspace
+        let res = keyspace
             .select_with::<f32>(
                 "SELECT col1 FROM keyspace.table WHERE key = ?",
                 &[&3],
@@ -695,33 +733,29 @@ pub mod tests {
         let req2 = keyspace.select::<i32>(&3).page_size(500).build().unwrap();
         let _res = req2.clone().send_local();
     }
-
-    #[allow(dead_code)]
-    fn test_insert() {
+    #[tokio::test]
+    async fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace.insert(&3, &8.0).build().unwrap();
         let _res = req.send_local();
-
-        "my_keyspace"
+        let res = "my_keyspace"
             .insert_with(
                 "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
                 &[&3],
                 &[&8.0, &"hello"],
                 StatementType::Query,
             )
-            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
+            //.bind_values(|builder, keys, values| builder.bind(keys).bind(values))
             .build()
             .unwrap()
-            .get_local_blocking()
-            .unwrap();
-
+            .get_local()
+            .await;
         "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
             .as_insert_query(&[&3], &[&8.0, &"hello"])
-            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
+            //.bind_values(|builder, keys, values| builder.bind(keys).bind(values))
             .build()
             .unwrap()
-            .send_local()
-            .unwrap();
+            .send_local();
     }
 
     #[allow(dead_code)]
@@ -761,7 +795,7 @@ pub mod tests {
         let id = keyspace.insert_id::<u32, f32>();
         let statement = req.get_statement(&id).unwrap();
         assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
-        let _res = req.clone().send_local().unwrap();
+        let _res = req.clone().send_local();
     }
 
     #[tokio::test]
@@ -780,8 +814,8 @@ pub mod tests {
         let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 2, Default::default()))
             .await
             .expect("Runtime failed to start!");
+
         let cluster_handle = runtime
-            .handle()
             .cluster_handle()
             .await
             .expect("Failed to acquire cluster handle!");
@@ -795,9 +829,12 @@ pub mod tests {
                     &[&1],
                 )
                 .build()?
-                .send_local()?;
+                .get_local()
+                .await?;
             Result::<_, RequestError>::Ok(())
-        });
+        })
+        .await;
+        runtime.handle().shutdown().await;
         runtime
             .block_on()
             .await

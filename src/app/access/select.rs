@@ -450,7 +450,7 @@ impl<'a, S: Select<K, V>, K: TokenEncoder, V> SelectBuilder<'a, S, K, V, QueryCo
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V, S>> {
         let query = S::bind_values(self.builder.consistency(Consistency::One), &self.key).build()?;
         // create the request
         Ok(CommonRequest {
@@ -527,7 +527,7 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn BindableToken + Sync)], V, 
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V, S>> {
         let query = self.builder.consistency(Consistency::One).bind(self.key).build()?;
         // create the request
         Ok(CommonRequest {
@@ -569,12 +569,12 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+impl<'a, S: ComputeToken<K> + ValueDecoder<V>, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V, S>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }
@@ -582,12 +582,12 @@ impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, Query
     }
 }
 
-impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryBuild, T> {
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+impl<'a, S: ComputeToken<K> + ValueDecoder<V>, K, V, T> SelectBuilder<'a, S, K, V, QueryBuild, T> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V, S>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }
@@ -595,7 +595,7 @@ impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, Query
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
+impl<'a, S: ComputeToken<K> + ValueDecoder<V>, K, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
     pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
@@ -616,11 +616,11 @@ impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, 
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V, S>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }
@@ -628,7 +628,7 @@ impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, 
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+impl<'a, S: ComputeToken<K> + ValueDecoder<V>, K, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
@@ -639,11 +639,11 @@ impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsist
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<V, V>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            token: self.key.token(),
+            token: S::compute_token(&self.key),
             payload: query.into(),
             statement: self.statement,
         }
@@ -652,12 +652,12 @@ impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsist
 }
 
 /// A request to select a record which can be sent to the ring
-pub struct SelectRequest<V> {
+pub struct SelectRequest<V, S> {
     inner: CommonRequest,
-    _marker: PhantomData<fn(V) -> V>,
+    _marker: PhantomData<(fn(V) -> V, S)>,
 }
 
-impl<V> From<CommonRequest> for SelectRequest<V> {
+impl<V, S> From<CommonRequest> for SelectRequest<V, S> {
     fn from(inner: CommonRequest) -> Self {
         SelectRequest {
             inner,
@@ -666,7 +666,7 @@ impl<V> From<CommonRequest> for SelectRequest<V> {
     }
 }
 
-impl<V> Deref for SelectRequest<V> {
+impl<V, S> Deref for SelectRequest<V, S> {
     type Target = CommonRequest;
 
     fn deref(&self) -> &Self::Target {
@@ -674,19 +674,19 @@ impl<V> Deref for SelectRequest<V> {
     }
 }
 
-impl<V> DerefMut for SelectRequest<V> {
+impl<V, S> DerefMut for SelectRequest<V, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<V> Debug for SelectRequest<V> {
+impl<V, S> Debug for SelectRequest<V, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectRequest").field("inner", &self.inner).finish()
     }
 }
 
-impl<V> Clone for SelectRequest<V> {
+impl<V, S> Clone for SelectRequest<V, S> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -695,7 +695,7 @@ impl<V> Clone for SelectRequest<V> {
     }
 }
 
-impl<V: 'static> Request for SelectRequest<V> {
+impl<V: 'static, S> Request for SelectRequest<V, S> {
     fn token(&self) -> i64 {
         self.inner.token()
     }
@@ -709,19 +709,19 @@ impl<V: 'static> Request for SelectRequest<V> {
     }
 }
 
-impl<V> SelectRequest<V> {
+impl<V, S> SelectRequest<V, S> {
     /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
     /// decoder in order to decode the response inside handle_response method.
-    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<V>> {
+    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<V, S>> {
         DecodeResult::select()
     }
 }
 
-impl<V> SendRequestExt for SelectRequest<V>
+impl<V, S: ValueDecoder<V> + 'static> SendRequestExt for SelectRequest<V, S>
 where
-    V: 'static + Send + RowsDecoder + Debug,
+    V: 'static + Send + Debug,
 {
-    type Marker = DecodeRows<V>;
+    type Marker = DecodeRows<V, S>;
     type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Select;
 
