@@ -309,7 +309,7 @@ impl TokenEncodeChain {
         if self.len > 0 {
             self.buffer.push(0);
         }
-        self.buffer.extend_from_slice(&other.encode().buffer[..]);
+        self.buffer.extend_from_slice(&other.encode_token().buffer[..]);
         self.len += 1;
         self
     }
@@ -319,7 +319,7 @@ impl TokenEncodeChain {
         if self.len > 0 {
             self.buffer.push(0);
         }
-        self.buffer.extend_from_slice(&other.encode().buffer[..]);
+        self.buffer.extend_from_slice(&other.encode_token().buffer[..]);
         self.len += 1;
     }
 
@@ -342,25 +342,25 @@ pub trait TokenEncoder {
     where
         Self: Sized,
     {
-        self.encode().chain(other)
+        self.encode_token().chain(other)
     }
 
     /// Start an encode chain
     fn dyn_chain(&self, other: &dyn TokenEncoder) -> TokenEncodeChain {
-        let mut chain = self.encode();
+        let mut chain = self.encode_token();
         chain.append(other);
         chain
     }
     /// Create a token encoding chain for this value
-    fn encode(&self) -> TokenEncodeChain;
+    fn encode_token(&self) -> TokenEncodeChain;
     /// Encode a single token
     fn token(&self) -> i64 {
-        self.encode().finish()
+        self.encode_token().finish()
     }
 }
 
 impl<T: ColumnEncoder> TokenEncoder for T {
-    fn encode(&self) -> TokenEncodeChain {
+    fn encode_token(&self) -> TokenEncodeChain {
         TokenEncodeChain {
             len: 1,
             buffer: self.encode_new()[2..].into(),
@@ -369,7 +369,7 @@ impl<T: ColumnEncoder> TokenEncoder for T {
 }
 
 impl<T: TokenEncoder> TokenEncoder for [T] {
-    fn encode(&self) -> TokenEncodeChain {
+    fn encode_token(&self) -> TokenEncodeChain {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.iter() {
             token_chain.append(v);
