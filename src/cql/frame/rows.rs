@@ -124,7 +124,7 @@ pub trait ColumnValue {
 
 /// An iterator over the rows of a result-set
 #[allow(unused)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Iter<T: Row> {
     decoder: super::Decoder,
     rows_count: usize,
