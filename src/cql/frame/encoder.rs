@@ -301,69 +301,81 @@ pub struct TokenEncodeChain {
 
 impl TokenEncodeChain {
     /// Chain a new value
-    pub fn chain<T: ColumnEncoder + ?Sized>(mut self, other: &T) -> Self
+    pub fn chain<T: TokenEncoder + ?Sized>(mut self, other: &T) -> Self
     where
         Self: Sized,
     {
-        self.buffer.extend_from_slice(other.encode_new()[2..].into());
-        self.buffer.push(0);
+        if self.buffer.len() > 0 {
+            self.buffer.push(0);
+        }
+        self.buffer.extend_from_slice(&other.encode().buffer[..]);
         self
     }
 
     /// Chain a new value
-    pub fn append<T: ColumnEncoder + ?Sized>(&mut self, other: &T) {
-        self.buffer.extend_from_slice(other.encode_new()[2..].into());
-        self.buffer.push(0);
+    pub fn append<T: TokenEncoder + ?Sized>(&mut self, other: &[T]) {
+        if self.buffer.len() > 0 {
+            self.buffer.push(0);
+        }
+        self.buffer.extend_from_slice(&other.encode().buffer[..]);
     }
 
     /// Complete the chain and return the token
     pub fn finish(self) -> i64 {
+        // TODO: Do we need a trailing byte?
+        // self.buffer.push(0);
         crate::cql::murmur3_cassandra_x64_128(&self.buffer, 0).0
     }
 }
 
 /// Defines types which can be used as a key, and can build a token for queries
-pub trait TokenChainer: TokenEncoder + ColumnEncoder {
+pub trait TokenChainer: TokenEncoder {
     /// Start an encode chain
-    fn chain<E: ColumnEncoder>(&self, other: &E) -> TokenEncodeChain
+    fn chain<E: TokenEncoder>(&self, other: &E) -> TokenEncodeChain
     where
         Self: Sized,
     {
-        let mut buffer: Vec<u8> = self.encode_new()[2..].into();
-        buffer.push(0);
-        TokenEncodeChain { buffer }.chain(other)
+        self.encode().chain(other)
     }
 
     /// Start an encode chain
-    fn dyn_chain(&self, other: &dyn ColumnEncoder) -> TokenEncodeChain {
-        let mut buffer: Vec<u8> = self.encode_new()[2..].into();
-        buffer.push(0);
-        let mut chain = TokenEncodeChain { buffer };
+    fn dyn_chain(&self, other: &dyn TokenEncoder) -> TokenEncodeChain {
+        let mut chain = self.encode();
         chain.append(other);
         chain
     }
 }
 
-impl<T: TokenEncoder + ColumnEncoder> TokenChainer for T {}
+impl<T: TokenEncoder> TokenChainer for T {}
 
 /// Encoding functionality for tokens
 pub trait TokenEncoder {
+    fn encode(&self) -> TokenEncodeChain;
     /// Encode a single token
-    fn token(&self) -> i64;
+    fn token(&self) -> i64 {
+        self.encode().finish()
+    }
 }
 
 impl<T: ColumnEncoder> TokenEncoder for T {
+    fn encode(&self) -> TokenEncodeChain {
+        TokenEncodeChain {
+            buffer: self.encode_new()[2..].into(),
+        }
+    }
+
     fn token(&self) -> i64 {
+        // Remove the size bytes as they are not needed for the token
         crate::cql::murmur3_cassandra_x64_128(&self.encode_new()[4..], 0).0
     }
 }
 
 impl<T: ColumnEncoder> TokenEncoder for [T] {
-    fn token(&self) -> i64 {
+    fn encode(&self) -> TokenEncodeChain {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.iter() {
             token_chain.append(v);
         }
-        token_chain.finish()
+        token_chain
     }
 }
