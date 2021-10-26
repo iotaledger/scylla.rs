@@ -42,7 +42,6 @@ pub use decoder::{
 pub use encoder::{
     ColumnEncodeChain,
     ColumnEncoder,
-    TokenChainer,
     TokenEncodeChain,
     TokenEncoder,
 };

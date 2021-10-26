@@ -248,9 +248,9 @@ pub trait GetDynamicSelectRequest: Keyspace {
     fn select_with<'a, V>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.select_query_with(statement, key),
             StatementType::Prepared => self.select_prepared_with(statement, key),
@@ -273,8 +273,8 @@ pub trait GetDynamicSelectRequest: Keyspace {
     fn select_query_with<'a, V>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn TokenChainer + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn BindableToken + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
             keyspace: PhantomData,
@@ -300,8 +300,8 @@ pub trait GetDynamicSelectRequest: Keyspace {
     fn select_prepared_with<'a, V>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn TokenChainer + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn BindableToken + Sync)],
+    ) -> SelectBuilder<'a, Self, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: PhantomData,
             keyspace: PhantomData,
@@ -333,9 +333,9 @@ where
     /// ```
     fn as_select<'a, V>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.as_select_query(key),
             StatementType::Prepared => self.as_select_prepared(key),
@@ -356,8 +356,8 @@ where
     /// ```
     fn as_select_query<'a, V>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
-    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn BindableToken + Sync)],
+    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
         let statement = self.to_statement();
         SelectBuilder {
             _marker: PhantomData,
@@ -382,8 +382,8 @@ where
     /// ```
     fn as_select_prepared<'a, V>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
-    ) -> SelectBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn BindableToken + Sync)],
+    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
         let statement = self.to_statement();
         SelectBuilder {
             _marker: PhantomData,
@@ -462,11 +462,11 @@ impl<'a, S: Select<K, V>, K: TokenEncoder, V> SelectBuilder<'a, S, K, V, QueryCo
     }
 }
 
-impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
+    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryValues, DynamicRequest> {
         let builder = self.builder.consistency(consistency).bind(self.key);
         SelectBuilder {
             _marker: self._marker,
@@ -480,7 +480,7 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
     pub fn page_size(
         self,
         page_size: i32,
-    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryPagingState, DynamicRequest> {
+    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryPagingState, DynamicRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -497,7 +497,7 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
     pub fn paging_state(
         self,
         paging_state: &Option<Vec<u8>>,
-    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QuerySerialConsistency, DynamicRequest> {
+    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QuerySerialConsistency, DynamicRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
@@ -513,7 +513,7 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
     pub fn timestamp(
         self,
         timestamp: i64,
-    ) -> SelectBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
+    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryBuild, DynamicRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,

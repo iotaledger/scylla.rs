@@ -60,7 +60,6 @@ use crate::{
         QuerySerialConsistency,
         QueryValues,
         RowsDecoder,
-        TokenChainer,
         VoidDecoder,
     },
     prelude::{
@@ -124,6 +123,10 @@ pub use update::{
     Update,
     UpdateRequest,
 };
+
+/// A token that is bindable as a column
+pub trait BindableToken: TokenEncoder + ColumnEncoder {}
+impl<T: TokenEncoder + ColumnEncoder> BindableToken for T {}
 
 /// The possible request types
 #[allow(missing_docs)]
@@ -258,7 +261,7 @@ pub struct ManualBoundRequest<'a> {
     pub(crate) bind_fn: Box<
         dyn Fn(
             Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-            &'a [&(dyn TokenChainer + Sync)],
+            &'a [&(dyn BindableToken + Sync)],
             &'a [&(dyn ColumnEncoder + Sync)],
         ) -> QueryBuilder<QueryValues>,
     >,

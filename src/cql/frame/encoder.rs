@@ -294,8 +294,9 @@ impl ColumnEncoder for Null {
 }
 
 /// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct TokenEncodeChain {
+    len: usize,
     buffer: Vec<u8>,
 }
 
@@ -305,31 +306,37 @@ impl TokenEncodeChain {
     where
         Self: Sized,
     {
-        if self.buffer.len() > 0 {
+        if self.len > 0 {
             self.buffer.push(0);
         }
         self.buffer.extend_from_slice(&other.encode().buffer[..]);
+        self.len += 1;
         self
     }
 
     /// Chain a new value
-    pub fn append<T: TokenEncoder + ?Sized>(&mut self, other: &[T]) {
-        if self.buffer.len() > 0 {
+    pub fn append<T: TokenEncoder + ?Sized>(&mut self, other: &T) {
+        if self.len > 0 {
             self.buffer.push(0);
         }
         self.buffer.extend_from_slice(&other.encode().buffer[..]);
+        self.len += 1;
     }
 
     /// Complete the chain and return the token
     pub fn finish(self) -> i64 {
         // TODO: Do we need a trailing byte?
         // self.buffer.push(0);
-        crate::cql::murmur3_cassandra_x64_128(&self.buffer, 0).0
+        match self.len {
+            0 => 0,
+            1 => crate::cql::murmur3_cassandra_x64_128(&self.buffer[2..], 0).0,
+            _ => crate::cql::murmur3_cassandra_x64_128(&self.buffer, 0).0,
+        }
     }
 }
 
-/// Defines types which can be used as a key, and can build a token for queries
-pub trait TokenChainer: TokenEncoder {
+/// Encoding functionality for tokens
+pub trait TokenEncoder {
     /// Start an encode chain
     fn chain<E: TokenEncoder>(&self, other: &E) -> TokenEncodeChain
     where
@@ -344,12 +351,7 @@ pub trait TokenChainer: TokenEncoder {
         chain.append(other);
         chain
     }
-}
-
-impl<T: TokenEncoder> TokenChainer for T {}
-
-/// Encoding functionality for tokens
-pub trait TokenEncoder {
+    /// Create a token encoding chain for this value
     fn encode(&self) -> TokenEncodeChain;
     /// Encode a single token
     fn token(&self) -> i64 {
@@ -360,17 +362,13 @@ pub trait TokenEncoder {
 impl<T: ColumnEncoder> TokenEncoder for T {
     fn encode(&self) -> TokenEncodeChain {
         TokenEncodeChain {
+            len: 1,
             buffer: self.encode_new()[2..].into(),
         }
     }
-
-    fn token(&self) -> i64 {
-        // Remove the size bytes as they are not needed for the token
-        crate::cql::murmur3_cassandra_x64_128(&self.encode_new()[4..], 0).0
-    }
 }
 
-impl<T: ColumnEncoder> TokenEncoder for [T] {
+impl<T: TokenEncoder> TokenEncoder for [T] {
     fn encode(&self) -> TokenEncodeChain {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.iter() {

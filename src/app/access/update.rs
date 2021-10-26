@@ -284,13 +284,13 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         variables: &'a [&(dyn ColumnEncoder + Sync)],
         statement_type: StatementType,
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&(dyn TokenChainer + Sync)],
+        [&(dyn BindableToken + Sync)],
         [&(dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -321,12 +321,12 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_query_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         variables: &'a [&(dyn ColumnEncoder + Sync)],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&(dyn TokenChainer + Sync)],
+        [&(dyn BindableToken + Sync)],
         [&(dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -361,12 +361,12 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_prepared_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         variables: &'a [&(dyn ColumnEncoder + Sync)],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&(dyn TokenChainer + Sync)],
+        [&(dyn BindableToken + Sync)],
         [&(dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -403,13 +403,13 @@ where
     /// ```
     fn as_update<'a>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         variables: &'a [&(dyn ColumnEncoder + Sync)],
         statement_type: StatementType,
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -434,12 +434,12 @@ where
     /// ```
     fn as_update_query<'a>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         variables: &'a [&(dyn ColumnEncoder + Sync)],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -469,12 +469,12 @@ where
     /// ```
     fn as_update_prepared<'a>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
+        key: &'a [&(dyn BindableToken + Sync)],
         variables: &'a [&(dyn ColumnEncoder + Sync)],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -544,7 +544,7 @@ impl<'a, S: Keyspace>
     UpdateBuilder<
         'a,
         S,
-        [&(dyn TokenChainer + Sync)],
+        [&(dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -554,7 +554,7 @@ impl<'a, S: Keyspace>
         F: 'static
             + Fn(
                 Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-                &[&(dyn TokenChainer + Sync)],
+                &[&(dyn BindableToken + Sync)],
                 &[&(dyn ColumnEncoder + Sync)],
             ) -> QueryBuilder<QueryValues>,
     >(
@@ -563,7 +563,7 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         ManualBoundRequest<'a>,
@@ -586,7 +586,7 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryValues,
         DynamicRequest,
@@ -608,7 +608,7 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryBuild,
         DynamicRequest,
@@ -649,7 +649,7 @@ impl<'a, S: Keyspace>
     UpdateBuilder<
         'a,
         S,
-        [&(dyn TokenChainer + Sync)],
+        [&(dyn BindableToken + Sync)],
         [&(dyn ColumnEncoder + Sync)],
         QueryConsistency,
         ManualBoundRequest<'a>,
@@ -661,7 +661,7 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryValues,
         DynamicRequest,
@@ -682,7 +682,7 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn TokenChainer + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryBuild,
         DynamicRequest,

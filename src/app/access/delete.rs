@@ -247,9 +247,9 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     fn delete_with<'a>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenChainer + Sync)],
+        variables: &'a [&(dyn BindableToken + Sync)],
         statement_type: StatementType,
-    ) -> DeleteBuilder<'a, Self, [&(dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+    ) -> DeleteBuilder<'a, Self, [&(dyn BindableToken + Sync)], (), QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.delete_query_with(statement, variables),
             StatementType::Prepared => self.delete_prepared_with(statement, variables),
@@ -272,8 +272,8 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     fn delete_query_with<'a>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenChainer + Sync)],
-    ) -> DeleteBuilder<'a, Self, [&(dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn BindableToken + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&(dyn BindableToken + Sync)], (), QueryConsistency, DynamicRequest> {
         DeleteBuilder {
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
@@ -299,8 +299,8 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     fn delete_prepared_with<'a>(
         &'a self,
         statement: &str,
-        variables: &'a [&(dyn TokenChainer + Sync)],
-    ) -> DeleteBuilder<'a, Self, [&(dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        variables: &'a [&(dyn BindableToken + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&(dyn BindableToken + Sync)], (), QueryConsistency, DynamicRequest> {
         DeleteBuilder {
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
@@ -331,9 +331,9 @@ where
     /// ```
     fn as_delete<'a>(
         &self,
-        key: &'a [&'a (dyn TokenChainer + Sync)],
+        key: &'a [&'a (dyn BindableToken + Sync)],
         statement_type: StatementType,
-    ) -> DeleteBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+    ) -> DeleteBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], (), QueryConsistency, DynamicRequest> {
         match statement_type {
             StatementType::Query => self.as_delete_query(key),
             StatementType::Prepared => self.as_delete_prepared(key),
@@ -354,8 +354,8 @@ where
     /// ```
     fn as_delete_query<'a>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
-    ) -> DeleteBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn BindableToken + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], (), QueryConsistency, DynamicRequest> {
         let statement = self.to_statement();
         DeleteBuilder {
             _marker: PhantomData,
@@ -380,8 +380,8 @@ where
     /// ```
     fn as_delete_prepared<'a>(
         &self,
-        key: &'a [&(dyn TokenChainer + Sync)],
-    ) -> DeleteBuilder<'a, Self, [&'a (dyn TokenChainer + Sync)], (), QueryConsistency, DynamicRequest> {
+        key: &'a [&(dyn BindableToken + Sync)],
+    ) -> DeleteBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], (), QueryConsistency, DynamicRequest> {
         let statement = self.to_statement();
         DeleteBuilder {
             _marker: PhantomData,
@@ -438,11 +438,11 @@ impl<'a, S: Delete<K, V>, K: TokenEncoder, V> DeleteBuilder<'a, S, K, V, QueryCo
     }
 }
 
-impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryValues, DynamicRequest> {
+    ) -> DeleteBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryValues, DynamicRequest> {
         let builder = self.builder.consistency(consistency).bind(self.key);
         DeleteBuilder {
             _marker: self._marker,
@@ -456,7 +456,7 @@ impl<'a, S: Keyspace, V> DeleteBuilder<'a, S, [&(dyn TokenChainer + Sync)], V, Q
     pub fn timestamp(
         self,
         timestamp: i64,
-    ) -> DeleteBuilder<'a, S, [&'a (dyn TokenChainer + Sync)], V, QueryBuild, DynamicRequest> {
+    ) -> DeleteBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryBuild, DynamicRequest> {
         DeleteBuilder {
             keyspace: self.keyspace,
             statement: self.statement,
