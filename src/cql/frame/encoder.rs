@@ -297,7 +297,7 @@ impl ColumnEncoder for Null {
 #[derive(Default, Debug)]
 pub struct TokenEncodeChain {
     len: usize,
-    buffer: Vec<u8>,
+    buffer: Option<Vec<u8>>,
 }
 
 impl TokenEncodeChain {
@@ -306,21 +306,28 @@ impl TokenEncodeChain {
     where
         Self: Sized,
     {
-        if self.len > 0 {
-            self.buffer.push(0);
-        }
-        self.buffer.extend_from_slice(&other.encode_token().buffer[..]);
-        self.len += 1;
+        self.append(other);
         self
     }
 
     /// Chain a new value
     pub fn append<T: TokenEncoder + ?Sized>(&mut self, other: &T) {
-        if self.len > 0 {
-            self.buffer.push(0);
+        let other = other.encode_token();
+        if other.len > 0 {
+            if let Some(other_buffer) = other.buffer {
+                match self.buffer.as_mut() {
+                    Some(buffer) => {
+                        buffer.push(0);
+                        buffer.extend_from_slice(&other_buffer[..]);
+                        self.len += 1;
+                    }
+                    None => {
+                        self.buffer = Some(other_buffer);
+                        self.len = 1;
+                    }
+                }
+            }
         }
-        self.buffer.extend_from_slice(&other.encode_token().buffer[..]);
-        self.len += 1;
     }
 
     /// Complete the chain and return the token
@@ -328,9 +335,9 @@ impl TokenEncodeChain {
         // TODO: Do we need a trailing byte?
         // self.buffer.push(0);
         match self.len {
-            0 => 0,
-            1 => crate::cql::murmur3_cassandra_x64_128(&self.buffer[2..], 0).0,
-            _ => crate::cql::murmur3_cassandra_x64_128(&self.buffer, 0).0,
+            0 => rand::random(),
+            1 => crate::cql::murmur3_cassandra_x64_128(&self.buffer.unwrap()[2..], 0).0,
+            _ => crate::cql::murmur3_cassandra_x64_128(&self.buffer.unwrap(), 0).0,
         }
     }
 }
@@ -352,7 +359,9 @@ pub trait TokenEncoder {
         chain
     }
     /// Create a token encoding chain for this value
-    fn encode_token(&self) -> TokenEncodeChain;
+    fn encode_token(&self) -> TokenEncodeChain {
+        TokenEncodeChain::default()
+    }
     /// Encode a single token
     fn token(&self) -> i64 {
         self.encode_token().finish()
@@ -363,7 +372,7 @@ impl<T: ColumnEncoder> TokenEncoder for T {
     fn encode_token(&self) -> TokenEncodeChain {
         TokenEncodeChain {
             len: 1,
-            buffer: self.encode_new()[2..].into(),
+            buffer: Some(self.encode_new()[2..].into()),
         }
     }
 }

@@ -542,7 +542,7 @@ impl<'a, S: Keyspace>
     InsertBuilder<
         'a,
         S,
-        [&(dyn BindableToken + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -730,7 +730,7 @@ impl<'a, S, K, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = self.builder.build()?;
         // create the request
@@ -743,7 +743,7 @@ impl<'a, S, K: TokenEncoder, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> InsertBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = self.builder.build()?;
         // create the request

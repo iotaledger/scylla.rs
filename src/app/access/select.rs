@@ -569,7 +569,7 @@ impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
@@ -582,7 +582,7 @@ impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, Query
     }
 }
 
-impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
         let query = self.builder.build()?;
         // create the request
@@ -595,7 +595,7 @@ impl<'a, S, K: TokenEncoder, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, Query
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
     pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
@@ -628,7 +628,7 @@ impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, 
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,

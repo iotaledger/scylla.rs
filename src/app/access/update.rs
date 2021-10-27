@@ -544,7 +544,7 @@ impl<'a, S: Keyspace>
     UpdateBuilder<
         'a,
         S,
-        [&(dyn BindableToken + Sync)],
+        [&'a (dyn BindableToken + Sync)],
         [&'a (dyn ColumnEncoder + Sync)],
         QueryConsistency,
         DynamicRequest,
@@ -719,7 +719,7 @@ impl<'a, S: Keyspace>
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryValues, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> UpdateBuilder<'a, S, K, V, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
         UpdateBuilder {
             keyspace: self.keyspace,
@@ -743,7 +743,7 @@ impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request

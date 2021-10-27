@@ -494,7 +494,7 @@ impl<'a, S, K, V, T> DeleteBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> DeleteBuilder<'a, S, K, V, QueryValues, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V, T> DeleteBuilder<'a, S, K, V, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request
@@ -507,7 +507,7 @@ impl<'a, S, K: TokenEncoder, V, T> DeleteBuilder<'a, S, K, V, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder, V, T> DeleteBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V, T> DeleteBuilder<'a, S, K, V, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request

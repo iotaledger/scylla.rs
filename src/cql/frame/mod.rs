@@ -133,19 +133,19 @@ where
     T: Values,
 {
     fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return {
-        self.value(value)
+        (*self).value(value)
     }
 
     fn dyn_unset_value(self: Box<Self>) -> Self::Return {
-        self.unset_value()
+        (*self).unset_value()
     }
 
     fn dyn_null_value(self: Box<Self>) -> Self::Return {
-        self.null_value()
+        (*self).null_value()
     }
 
     fn dyn_skip_value(self: Box<Self>) -> Self::Return {
-        self.skip_value()
+        (*self).skip_value()
     }
 }
 
@@ -193,16 +193,16 @@ impl<T: ColumnEncoder> Bindable for T {
     }
 }
 
-impl<T: Bindable + ColumnEncoder> Bindable for [T] {
+impl<T: Bindable> Bindable for [T] {
     fn bind<V: Values>(&self, binder: V) -> V::Return {
         match self.len() {
             0 => binder.skip_value(),
-            1 => binder.value(self.first().unwrap()),
+            1 => binder.bind(self.first().unwrap()),
             _ => {
                 let mut iter = self.iter();
-                let mut builder = binder.value(iter.next().unwrap());
+                let mut builder = binder.bind(iter.next().unwrap());
                 for v in iter {
-                    builder = builder.value(v);
+                    builder = builder.bind(v);
                 }
                 builder
             }
