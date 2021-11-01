@@ -22,7 +22,7 @@ use std::collections::HashMap;
 /// Access queries are defined by access traits ([`Insert`], [`Delete`], [`Update`])
 /// and qualified for use in a Batch via batch traits ([`InsertBatch`], [`DeleteBatch`], [`UpdateBatch`])
 /// ## Example
-/// ```
+/// ```no_run
 /// # use scylla_rs::app::access::tests::MyKeyspace;
 /// use scylla_rs::{
 ///     app::access::Batchable,
@@ -39,9 +39,9 @@ use std::collections::HashMap;
 ///     .batch()
 ///     .logged()
 ///     // Add a few pre-defined access queries
-///     .delete::<_, f32>(&my_key)
+///     .delete::<_, _, f32>(&my_key, &())
 ///     .insert_query(&my_key, &my_val)
-///     .update_prepared(&my_key, &my_val)
+///     .update_prepared(&my_key, &(), &my_val)
 ///     .consistency(Consistency::One)
 ///     .build()?
 ///     .compute_token(&token_key);

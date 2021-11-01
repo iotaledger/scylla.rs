@@ -26,19 +26,20 @@ use super::*;
 ///     }
 /// }
 /// # type MyKeyType = i32;
+/// # type MyVarType = String;
 /// # type MyValueType = f32;
-/// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+/// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
-///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
 ///     }
-///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-///         builder.bind(key)
+///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+///         builder.bind(key).bind(variables)
 ///     }
 /// }
-/// # let my_key = 1;
+/// # let (my_key, my_var) = (1, MyVarType::default());
 /// let request = MyKeyspace::new("my_keyspace")
-///     .delete::<MyValueType>(&my_key)
+///     .delete::<MyValueType>(&my_key, &my_var)
 ///     .consistency(Consistency::One)
 ///     .build()?;
 /// let worker = request.worker();
@@ -87,19 +88,20 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
+    /// # let (my_key, my_var) = (1, MyVarType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .delete::<MyValueType>(&my_key)
+    ///     .delete::<MyValueType>(&my_key, &my_var)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -145,19 +147,20 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
+    /// # let (my_key, my_var) = (1, MyVarType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .delete_query::<MyValueType>(&my_key)
+    ///     .delete_query::<MyValueType>(&my_key, &my_var)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -203,19 +206,20 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
+    /// # let (my_key, my_var) = (1, MyVarType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .delete_prepared::<MyValueType>(&my_key)
+    ///     .delete_prepared::<MyValueType>(&my_key, &my_var)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -250,8 +254,9 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_with(
-    ///         "DELETE FROM {{keyspace}}.table WHERE key = ?",
+    ///         "DELETE FROM {{keyspace}}.table WHERE key = ? AND var = ?",
     ///         &[&3],
+    ///         &[&"hello"],
     ///         StatementType::Query,
     ///     )
     ///     .consistency(Consistency::One)
@@ -287,7 +292,11 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// ```no_run
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
-    ///     .delete_query_with("DELETE FROM {{keyspace}}.table WHERE key = ?", &[&3])
+    ///     .delete_query_with(
+    ///         "DELETE FROM {{keyspace}}.table WHERE key = ? AND var = ?",
+    ///         &[&3],
+    ///         &[&"hello"],
+    ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -324,7 +333,11 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// ```no_run
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
-    ///     .delete_prepared_with("DELETE FROM {{keyspace}}.table WHERE key = ?", &[&3])
+    ///     .delete_prepared_with(
+    ///         "DELETE FROM {{keyspace}}.table WHERE key = ? AND var = ?",
+    ///         &[&3],
+    ///         &[&"hello"],
+    ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -366,8 +379,8 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ?"
-    ///     .as_delete(&[&3], StatementType::Prepared)
+    /// "DELETE FROM my_keyspace.table WHERE key = ? AND var = ?"
+    ///     .as_delete(&[&3], &[&"hello"], StatementType::Prepared)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -398,8 +411,8 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ?"
-    ///     .as_delete_query(&[&3])
+    /// "DELETE FROM my_keyspace.table WHERE key = ? AND var = ?"
+    ///     .as_delete_query(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -434,8 +447,8 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ?"
-    ///     .as_delete_prepared(&[&3])
+    /// "DELETE FROM my_keyspace.table WHERE key = ? AND var = ?"
+    ///     .as_delete_prepared(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -605,7 +618,7 @@ impl<'a, S: Keyspace, D>
     }
 }
 
-impl<'a, S, K, V, D, T> DeleteBuilder<'a, S, K, V, D, QueryValues, T> {
+impl<'a, S, K: ?Sized, V: ?Sized, D, T> DeleteBuilder<'a, S, K, V, D, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, D, QueryBuild, T> {
         DeleteBuilder {
             keyspace: self.keyspace,
@@ -618,7 +631,7 @@ impl<'a, S, K, V, D, T> DeleteBuilder<'a, S, K, V, D, QueryValues, T> {
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V, D, T> DeleteBuilder<'a, S, K, V, D, QueryValues, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, D, T> DeleteBuilder<'a, S, K, V, D, QueryValues, T> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request
@@ -631,7 +644,7 @@ impl<'a, S, K: TokenEncoder + ?Sized, V, D, T> DeleteBuilder<'a, S, K, V, D, Que
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V, D, T> DeleteBuilder<'a, S, K, V, D, QueryBuild, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, D, T> DeleteBuilder<'a, S, K, V, D, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         let query = self.builder.build()?;
         // create the request

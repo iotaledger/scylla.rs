@@ -31,8 +31,8 @@ use super::*;
 ///     value1: f32,
 ///     value2: f32,
 /// }
-/// impl Bindable for MyValueType {
-///     fn bind<V: Values>(&self, binder: V) -> V::Return {
+/// impl<B: Binder> Bindable<B> for MyValueType {
+///     fn bind(&self, binder: B) -> B {
 ///         binder.bind(&self.value1).bind(&self.value2)
 ///     }
 /// }
@@ -42,8 +42,8 @@ use super::*;
 ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
 ///     }
 ///
-///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
-///         builder.value(key).bind(value)
+///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
+///         builder.value(key).bind(values)
 ///     }
 /// }
 ///
@@ -106,8 +106,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
-    ///         builder.value(key).value(&value.value1).value(&value.value2)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
+    ///         builder.value(key).value(&values.value1).value(&values.value2)
     ///     }
     /// }
     /// # let (my_key, my_val) = (1, MyValueType::default());
@@ -165,8 +165,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
-    ///         builder.value(key).value(&value.value1).value(&value.value2)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
+    ///         builder.value(key).value(&values.value1).value(&values.value2)
     ///     }
     /// }
     /// # let (my_key, my_val) = (1, MyValueType::default());
@@ -228,8 +228,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
-    ///         builder.value(key).value(&value.value1).value(&value.value2)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
+    ///         builder.value(key).value(&values.value1).value(&values.value2)
     ///     }
     /// }
     /// # let (my_key, my_val) = (1, MyValueType::default());

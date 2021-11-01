@@ -32,8 +32,8 @@ use super::*;
 ///     value1: f32,
 ///     value2: f32,
 /// }
-/// impl Bindable for MyValueType {
-///     fn bind<V: Values>(&self, binder: V) -> V::Return {
+/// impl<B: Binder> Bindable<B> for MyValueType {
+///     fn bind(&self, binder: B) -> B {
 ///         binder.bind(&self.value1).bind(&self.value2)
 ///     }
 /// }
@@ -47,14 +47,14 @@ use super::*;
 ///         .into()
 ///     }
 ///
-///     fn bind_values<B: Binder>(builder: T, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
 ///         builder.bind(value).value(key).value(variables)
 ///     }
 /// }
 ///
-/// # let (my_key, my_val) = (1, MyValueType::default());
+/// # let (my_key, my_var, my_val) = (1, MyVarType::default(), MyValueType::default());
 /// let request = MyKeyspace::new("my_keyspace")
-///     .update_query(&my_key, &my_val)
+///     .update_query(&my_key, &my_var, &my_val)
 ///     .consistency(Consistency::One)
 ///     .build()?;
 /// let worker = request.worker();
@@ -101,24 +101,33 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # #[derive(Default)]
     /// struct MyValueType {
     ///     value1: f32,
     ///     value2: f32,
     /// }
-    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///         format!(
+    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
+    ///             self.name()
+    ///         )
+    ///         .into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.value(&value.value1).value(&value.value2).value(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+    ///         builder
+    ///             .value(&value.value1)
+    ///             .value(&value.value2)
+    ///             .value(key)
+    ///             .value(variables)
     ///     }
     /// }
-    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// # let (my_key, my_var, my_val) = (1, MyVarType::default(), MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .update(&my_key, &my_val)
+    ///     .update(&my_key, &my_var, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -166,24 +175,33 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # #[derive(Default)]
     /// struct MyValueType {
     ///     value1: f32,
     ///     value2: f32,
     /// }
-    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///         format!(
+    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
+    ///             self.name()
+    ///         )
+    ///         .into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.value(&value.value1).value(&value.value2).value(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+    ///         builder
+    ///             .value(&value.value1)
+    ///             .value(&value.value2)
+    ///             .value(key)
+    ///             .value(variables)
     ///     }
     /// }
-    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// # let (my_key, my_var, my_val) = (1, MyVarType::default(), MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .update_query(&my_key, &my_val)
+    ///     .update_query(&my_key, &my_var, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -231,24 +249,33 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # #[derive(Default)]
     /// struct MyValueType {
     ///     value1: f32,
     ///     value2: f32,
     /// }
-    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///         format!(
+    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
+    ///             self.name()
+    ///         )
+    ///         .into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.value(&value.value1).value(&value.value2).value(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+    ///         builder
+    ///             .value(&value.value1)
+    ///             .value(&value.value2)
+    ///             .value(key)
+    ///             .value(variables)
     ///     }
     /// }
-    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// # let (my_key, my_var, my_val) = (1, MyVarType::default(), MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .update_prepared(&my_key, &my_val)
+    ///     .update_prepared(&my_key, &my_var, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -530,9 +557,7 @@ pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, U: ?Sized, Stage, T> {
     pub(crate) _marker: T,
 }
 
-impl<'a, S: Update<K, V, U>, K: BindableToken<QueryBuilder<QueryValues>>, V, U>
-    UpdateBuilder<'a, S, K, V, U, QueryConsistency, StaticRequest>
-{
+impl<'a, S: Update<K, V, U>, K: TokenEncoder, V, U> UpdateBuilder<'a, S, K, V, U, QueryConsistency, StaticRequest> {
     pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, U, QueryValues, StaticRequest> {
         UpdateBuilder {
             _marker: self._marker,
@@ -788,9 +813,7 @@ impl<'a, S: Keyspace>
     }
 }
 
-impl<'a, S, K: BindableToken<QueryBuilder<QueryValues>> + ?Sized, V: ?Sized, U: ?Sized, T>
-    UpdateBuilder<'a, S, K, V, U, QueryValues, T>
-{
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, U: ?Sized, T> UpdateBuilder<'a, S, K, V, U, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, U, QueryBuild, T> {
         UpdateBuilder {
             keyspace: self.keyspace,
@@ -815,9 +838,7 @@ impl<'a, S, K: BindableToken<QueryBuilder<QueryValues>> + ?Sized, V: ?Sized, U: 
     }
 }
 
-impl<'a, S, K: BindableToken<QueryBuilder<QueryValues>> + ?Sized, V: ?Sized, U: ?Sized, T>
-    UpdateBuilder<'a, S, K, V, U, QueryBuild, T>
-{
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, U: ?Sized, T> UpdateBuilder<'a, S, K, V, U, QueryBuild, T> {
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request

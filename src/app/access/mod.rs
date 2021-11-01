@@ -32,7 +32,7 @@ use super::{
     Worker,
     WorkerError,
 };
-use crate::{
+pub use crate::{
     app::{
         ring::{
             Ring,

@@ -26,19 +26,20 @@ use super::*;
 ///     }
 /// }
 /// # type MyKeyType = i32;
+/// # type MyVarType = String;
 /// # type MyValueType = f32;
-/// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+/// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
-///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
 ///     }
-///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-///         builder.bind(key)
+///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+///         builder.bind(key).bind(variables)
 ///     }
 /// }
-/// # let my_key = 1;
+/// # let (my_key, my_var) = (1, MyVarType::default());
 /// let request = MyKeyspace::new("my_keyspace")
-///     .select::<MyValueType>(&my_key)
+///     .select::<MyValueType>(&my_key, &my_var)
 ///     .consistency(Consistency::One)
 ///     .build()?;
 /// let worker = request.worker();
@@ -87,19 +88,20 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
+    /// # let (my_key, my_var) = (1, MyVarType::default());
     /// let res: Option<MyValueType> = MyKeyspace::new("my_keyspace")
-    ///     .select::<MyValueType>(&my_key)
+    ///     .select::<MyValueType>(&my_key, &my_var)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -145,19 +147,20 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
+    /// # let (my_key, my_var) = (1, MyVarType::default());
     /// let res: Option<MyValueType> = MyKeyspace::new("my_keyspace")
-    ///     .select_query::<MyValueType>(&my_key)
+    ///     .select_query::<MyValueType>(&my_key, &my_var)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -203,19 +206,20 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
+    /// # let (my_key, my_var) = (1, MyVarType::default());
     /// let res: Option<MyValueType> = MyKeyspace::new("my_keyspace")
-    ///     .select_prepared::<MyValueType>(&my_key)
+    ///     .select_prepared::<MyValueType>(&my_key, &my_var)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -251,8 +255,9 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ?",
+    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
     ///         &[&3],
+    ///         &[&"hello"],
     ///         StatementType::Query,
     ///     )
     ///     .consistency(Consistency::One)
@@ -288,7 +293,11 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// ```no_run
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
-    ///     .select_query_with::<f32>("SELECT val FROM {{keyspace}}.table where key = ?", &[&3])
+    ///     .select_query_with::<f32>(
+    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         &[&3],
+    ///         &[&"hello"],
+    ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -325,7 +334,11 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// ```no_run
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
-    ///     .select_prepared_with::<f32>("SELECT val FROM {{keyspace}}.table where key = ?", &[&3])
+    ///     .select_prepared_with::<f32>(
+    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         &[&3],
+    ///         &[&"hello"],
+    ///     )
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -368,8 +381,8 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
-    ///     .as_select::<f32>(&[&3], StatementType::Query)
+    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    ///     .as_select::<f32>(&[&3], &[&"hello"], StatementType::Query)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -400,8 +413,8 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
-    ///     .as_select_query::<f32>(&[&3])
+    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    ///     .as_select_query::<f32>(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
@@ -436,8 +449,8 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ?"
-    ///     .as_select_prepared::<f32>(&[&3])
+    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    ///     .as_select_prepared::<f32>(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;

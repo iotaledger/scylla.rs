@@ -32,19 +32,19 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Select<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
     ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
     /// MyKeyspace::new("my_keyspace")
-    ///     .prepare_select::<MyKeyType, MyValueType>()
+    ///     .prepare_select::<MyKeyType, MyVarType, MyValueType>()
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -63,7 +63,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: String
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
@@ -89,12 +89,10 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, value: &MyValueType) -> B {
     ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
-
-    /// # let (my_key, my_val) = (1, MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
     ///     .prepare_insert::<MyKeyType, MyValueType>()
     ///     .get_local_blocking()?;
@@ -115,7 +113,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// #[derive(Clone, Debug)]
     /// struct MyKeyspace {
-    ///     pub name: String
+    ///     pub name: String,
     /// }
     /// # impl MyKeyspace {
     /// #     pub fn new(name: &str) -> Self {
@@ -130,25 +128,32 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # #[derive(Default)]
     /// struct MyValueType {
     ///     value1: f32,
     ///     value2: f32,
     /// }
-    /// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+    ///         format!(
+    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
+    ///             self.name()
+    ///         )
+    ///         .into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-    ///         builder.bind(&value.value1).value(&value.value2).value(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+    ///         builder
+    ///             .bind(&value.value1)
+    ///             .value(&value.value2)
+    ///             .value(key)
+    ///             .bind(variables)
     ///     }
     /// }
-
-    /// # let (my_key, my_val) = (1, MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .prepare_update::<MyKeyType, MyValueType>()
+    ///     .prepare_update::<MyKeyType, MyVarType, MyValueType>()
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -182,19 +187,19 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # type MyValueType = f32;
-    /// impl Delete<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> Cow<'static, str> {
     ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
     ///     }
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType) -> T::Return {
-    ///         builder.bind(key)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
+    ///         builder.bind(key).bind(variables)
     ///     }
     /// }
-    /// # let my_key = 1;
     /// MyKeyspace::new("my_keyspace")
-    ///     .prepare_delete::<MyKeyType, MyValueType>()
+    ///     .prepare_delete::<MyKeyType, MyVarType, MyValueType>()
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
