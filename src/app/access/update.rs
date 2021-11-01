@@ -26,6 +26,7 @@ use super::*;
 ///     }
 /// }
 /// # type MyKeyType = i32;
+/// # type MyVarType = String;
 /// # #[derive(Default)]
 /// struct MyValueType {
 ///     value1: f32,
@@ -36,14 +37,18 @@ use super::*;
 ///         binder.bind(&self.value1).bind(&self.value2)
 ///     }
 /// }
-/// impl Update<MyKeyType, MyValueType> for MyKeyspace {
+/// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
 ///     fn statement(&self) -> Cow<'static, str> {
-///         format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+///         format!(
+///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
+///             self.name()
+///         )
+///         .into()
 ///     }
 ///
-///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
-///         builder.bind(value).value(key)
+///     fn bind_values<B: Binder>(builder: T, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+///         builder.bind(value).value(key).value(variables)
 ///     }
 /// }
 ///
@@ -55,7 +60,7 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Update<K, V>: Keyspace {
+pub trait Update<K, V, U>: Keyspace {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
     type QueryOrPrepared: QueryOrPrepared;
 
@@ -68,11 +73,11 @@ pub trait Update<K, V>: Keyspace {
         md5::compute(self.update_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
+    fn bind_values<B: Binder>(binder: B, key: &K, variables: &V, values: &U) -> B;
 }
 
 /// Specifies helper functions for creating static update requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticUpdateRequest<K, V>: Keyspace {
+pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// Create a static update request from a keyspace with a `Update<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -119,15 +124,21 @@ pub trait GetStaticUpdateRequest<K, V>: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn update<'a>(&'a self, key: &'a K, value: &'a V) -> UpdateBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn update<'a>(
+        &'a self,
+        key: &'a K,
+        variables: &'a V,
+        values: &'a U,
+    ) -> UpdateBuilder<'a, Self, K, V, U, QueryConsistency, StaticRequest>
     where
-        Self: Update<K, V>,
+        Self: Update<K, V, U>,
     {
         UpdateBuilder {
             keyspace: PhantomData,
             statement: self.statement(),
             key,
-            value,
+            variables,
+            values,
             builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
             _marker: StaticRequest,
         }
@@ -181,16 +192,18 @@ pub trait GetStaticUpdateRequest<K, V>: Keyspace {
     fn update_query<'a>(
         &'a self,
         key: &'a K,
-        value: &'a V,
-    ) -> UpdateBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+        variables: &'a V,
+        values: &'a U,
+    ) -> UpdateBuilder<'a, Self, K, V, U, QueryConsistency, StaticRequest>
     where
-        Self: Update<K, V>,
+        Self: Update<K, V, U>,
     {
         UpdateBuilder {
             keyspace: PhantomData,
             statement: self.statement(),
             key,
-            value,
+            variables,
+            values,
             builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
             _marker: StaticRequest,
         }
@@ -244,16 +257,18 @@ pub trait GetStaticUpdateRequest<K, V>: Keyspace {
     fn update_prepared<'a>(
         &'a self,
         key: &'a K,
-        value: &'a V,
-    ) -> UpdateBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+        variables: &'a V,
+        values: &'a U,
+    ) -> UpdateBuilder<'a, Self, K, V, U, QueryConsistency, StaticRequest>
     where
-        Self: Update<K, V>,
+        Self: Update<K, V, U>,
     {
         UpdateBuilder {
             keyspace: PhantomData,
             statement: self.statement(),
             key,
-            value,
+            variables,
+            values,
             builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
             _marker: StaticRequest,
         }
@@ -284,14 +299,15 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     > {
@@ -321,13 +337,14 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_query_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     > {
@@ -335,7 +352,8 @@ pub trait GetDynamicUpdateRequest: Keyspace {
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
-            value: variables,
+            variables,
+            values: &(),
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
@@ -361,13 +379,14 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     fn update_prepared_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     > {
@@ -375,7 +394,8 @@ pub trait GetDynamicUpdateRequest: Keyspace {
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
-            value: variables,
+            variables,
+            values: &(),
             builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
@@ -403,14 +423,15 @@ where
     /// ```
     fn as_update<'a>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     > {
@@ -434,13 +455,14 @@ where
     /// ```
     fn as_update_query<'a>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     > {
@@ -451,7 +473,8 @@ where
             builder: QueryStatement::encode_statement(Query::new(), &statement),
             statement,
             key,
-            value: variables,
+            values: &(),
+            variables,
         }
     }
 
@@ -469,13 +492,14 @@ where
     /// ```
     fn as_update_prepared<'a>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> UpdateBuilder<
         'a,
         Self,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     > {
@@ -486,50 +510,72 @@ where
             builder: PreparedStatement::encode_statement(Query::new(), &statement),
             statement,
             key,
-            value: variables,
+            values: &(),
+            variables,
         }
     }
 }
 
-impl<S: Keyspace, K, V> GetStaticUpdateRequest<K, V> for S {}
+impl<S: Keyspace, K, V, U> GetStaticUpdateRequest<K, V, U> for S {}
 impl<S: Keyspace> GetDynamicUpdateRequest for S {}
 impl<S: ToStatement> AsDynamicUpdateRequest for S {}
 
-pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
+pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, U: ?Sized, Stage, T> {
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: Cow<'static, str>,
     pub(crate) key: &'a K,
-    pub(crate) value: &'a V,
+    pub(crate) variables: &'a V,
+    pub(crate) values: &'a U,
     pub(crate) builder: QueryBuilder<Stage>,
     pub(crate) _marker: T,
 }
 
-impl<'a, S: Update<K, V>, K: TokenEncoder, V> UpdateBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
-    pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, QueryValues, StaticRequest> {
+impl<'a, S: Update<K, V, U>, K: BindableToken<QueryBuilder<QueryValues>>, V, U>
+    UpdateBuilder<'a, S, K, V, U, QueryConsistency, StaticRequest>
+{
+    pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, U, QueryValues, StaticRequest> {
         UpdateBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
-            builder: S::bind_values(self.builder.consistency(consistency), &self.key, &self.value),
+            variables: self.variables,
+            values: self.values,
+            builder: S::bind_values(
+                self.builder.consistency(consistency).bind_values(),
+                &self.key,
+                &self.variables,
+                &self.values,
+            ),
         }
     }
 
-    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, U, QueryBuild, StaticRequest> {
         UpdateBuilder {
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
-            builder: S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value)
-                .timestamp(timestamp),
+            variables: self.variables,
+            values: self.values,
+            builder: S::bind_values(
+                self.builder.consistency(Consistency::Quorum).bind_values(),
+                &self.key,
+                &self.variables,
+                &self.values,
+            )
+            .timestamp(timestamp),
             _marker: self._marker,
         }
     }
 
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
-        let query = S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value).build()?;
+        let query = S::bind_values(
+            self.builder.consistency(Consistency::Quorum).bind_values(),
+            &self.key,
+            &self.variables,
+            &self.values,
+        )
+        .build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
@@ -544,8 +590,9 @@ impl<'a, S: Keyspace>
     UpdateBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
         DynamicRequest,
     >
@@ -553,9 +600,9 @@ impl<'a, S: Keyspace>
     pub fn bind_values<
         F: 'static
             + Fn(
-                Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-                &[&(dyn BindableToken + Sync)],
-                &[&(dyn ColumnEncoder + Sync)],
+                QueryBuilder<QueryValues>,
+                &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+                &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
             ) -> QueryBuilder<QueryValues>,
     >(
         self,
@@ -563,10 +610,11 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
-        ManualBoundRequest<'a>,
+        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
     > {
         UpdateBuilder {
             _marker: ManualBoundRequest {
@@ -575,7 +623,8 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            variables: self.variables,
+            values: self.values,
             builder: self.builder,
         }
     }
@@ -586,18 +635,25 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryValues,
         DynamicRequest,
     > {
-        let builder = self.builder.consistency(consistency).bind(self.value).bind(self.key);
+        let builder = self
+            .builder
+            .consistency(consistency)
+            .bind_values()
+            .bind(self.variables)
+            .bind(self.key);
         UpdateBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            variables: self.variables,
+            values: self.values,
             builder,
         }
     }
@@ -608,8 +664,9 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryBuild,
         DynamicRequest,
     > {
@@ -617,11 +674,13 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            variables: self.variables,
+            values: self.values,
             builder: self
                 .builder
                 .consistency(Consistency::Quorum)
-                .bind(self.value)
+                .bind_values()
+                .bind(self.variables)
                 .bind(self.key)
                 .timestamp(timestamp),
             _marker: self._marker,
@@ -632,7 +691,8 @@ impl<'a, S: Keyspace>
         let query = self
             .builder
             .consistency(Consistency::Quorum)
-            .bind(self.value)
+            .bind_values()
+            .bind(self.variables)
             .bind(self.key)
             .build()?;
         // create the request
@@ -649,10 +709,11 @@ impl<'a, S: Keyspace>
     UpdateBuilder<
         'a,
         S,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryConsistency,
-        ManualBoundRequest<'a>,
+        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
     >
 {
     pub fn consistency(
@@ -661,8 +722,9 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryValues,
         DynamicRequest,
     > {
@@ -671,8 +733,13 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
-            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), self.key, self.value),
+            variables: self.variables,
+            values: self.values,
+            builder: (self._marker.bind_fn)(
+                self.builder.consistency(consistency).bind_values(),
+                self.key,
+                self.variables,
+            ),
         }
     }
 
@@ -682,8 +749,9 @@ impl<'a, S: Keyspace>
     ) -> UpdateBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
         QueryBuild,
         DynamicRequest,
     > {
@@ -691,11 +759,12 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            variables: self.variables,
+            values: self.values,
             builder: (self._marker.bind_fn)(
-                Box::new(self.builder.consistency(Consistency::Quorum)),
+                self.builder.consistency(Consistency::Quorum).bind_values(),
                 self.key,
-                self.value,
+                self.variables,
             )
             .timestamp(timestamp),
             _marker: DynamicRequest,
@@ -704,9 +773,9 @@ impl<'a, S: Keyspace>
 
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = (self._marker.bind_fn)(
-            Box::new(self.builder.consistency(Consistency::Quorum)),
+            self.builder.consistency(Consistency::Quorum).bind_values(),
             self.key,
-            self.value,
+            self.variables,
         )
         .build()?;
         // create the request
@@ -719,13 +788,16 @@ impl<'a, S: Keyspace>
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> UpdateBuilder<'a, S, K, V, QueryValues, T> {
-    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: BindableToken<QueryBuilder<QueryValues>> + ?Sized, V: ?Sized, U: ?Sized, T>
+    UpdateBuilder<'a, S, K, V, U, QueryValues, T>
+{
+    pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, U, QueryBuild, T> {
         UpdateBuilder {
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            variables: self.variables,
+            values: self.values,
             builder: self.builder.timestamp(timestamp),
             _marker: self._marker,
         }
@@ -743,7 +815,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> UpdateBuilder<'a, S, K, V, Q
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> UpdateBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: BindableToken<QueryBuilder<QueryValues>> + ?Sized, V: ?Sized, U: ?Sized, T>
+    UpdateBuilder<'a, S, K, V, U, QueryBuild, T>
+{
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
         let query = self.builder.build()?;
         // create the request

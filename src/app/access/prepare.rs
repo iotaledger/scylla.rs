@@ -48,9 +48,9 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_select<K, V>(&self) -> PrepareRequest
+    fn prepare_select<K, V, O>(&self) -> PrepareRequest
     where
-        Self: Select<K, V>,
+        Self: Select<K, V, O>,
     {
         let statement = self.statement();
         PrepareRequest::new(statement)
@@ -152,9 +152,9 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_update<K, V>(&self) -> PrepareRequest
+    fn prepare_update<K, V, I>(&self) -> PrepareRequest
     where
-        Self: Update<K, V>,
+        Self: Update<K, V, I>,
     {
         let statement = self.statement();
         PrepareRequest::new(statement)
@@ -198,9 +198,9 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_delete<K, V>(&self) -> PrepareRequest
+    fn prepare_delete<K, V, D>(&self) -> PrepareRequest
     where
-        Self: Delete<K, V>,
+        Self: Delete<K, V, D>,
     {
         let statement = self.statement();
         PrepareRequest::new(statement)

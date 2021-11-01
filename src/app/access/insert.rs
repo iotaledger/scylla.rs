@@ -42,7 +42,7 @@ use super::*;
 ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
 ///     }
 ///
-///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
 ///         builder.value(key).bind(value)
 ///     }
 /// }
@@ -67,7 +67,7 @@ pub trait Insert<K, V>: Keyspace {
         md5::compute(self.insert_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K, value: &V) -> T::Return;
+    fn bind_values<B: Binder>(binder: B, key: &K, values: &V) -> B;
 }
 
 /// Specifies helper functions for creating static insert requests from a keyspace with a `Delete<K, V>` definition
@@ -106,7 +106,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
     ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
@@ -118,7 +118,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert<'a>(&'a self, key: &'a K, value: &'a V) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn insert<'a>(&'a self, key: &'a K, values: &'a V) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Insert<K, V>,
     {
@@ -126,7 +126,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
             keyspace: PhantomData,
             statement: self.statement(),
             key,
-            value,
+            values,
             builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
             _marker: StaticRequest,
         }
@@ -165,7 +165,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
     ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
@@ -180,7 +180,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     fn insert_query<'a>(
         &'a self,
         key: &'a K,
-        value: &'a V,
+        values: &'a V,
     ) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Insert<K, V>,
@@ -189,7 +189,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
             keyspace: PhantomData,
             statement: self.statement(),
             key,
-            value,
+            values: values,
             builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
             _marker: StaticRequest,
         }
@@ -228,7 +228,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
-    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, value: &MyValueType) -> T::Return {
+    ///     fn bind_values<T: Values>(builder: T, key: &MyKeyType, values: &MyValueType) -> T::Return {
     ///         builder.value(key).value(&value.value1).value(&value.value2)
     ///     }
     /// }
@@ -243,7 +243,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     fn insert_prepared<'a>(
         &'a self,
         key: &'a K,
-        value: &'a V,
+        values: &'a V,
     ) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
     where
         Self: Insert<K, V>,
@@ -252,7 +252,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
             keyspace: PhantomData,
             statement: self.statement(),
             key,
-            value,
+            values,
             builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
             _marker: StaticRequest,
         }
@@ -283,20 +283,20 @@ pub trait GetDynamicInsertRequest: Keyspace {
     fn insert_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
     ) -> InsertBuilder<
         'a,
         Self,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     > {
         match statement_type {
-            StatementType::Query => self.insert_query_with(statement, key, variables),
-            StatementType::Prepared => self.insert_prepared_with(statement, key, variables),
+            StatementType::Query => self.insert_query_with(statement, key, values),
+            StatementType::Prepared => self.insert_prepared_with(statement, key, values),
         }
     }
 
@@ -320,13 +320,13 @@ pub trait GetDynamicInsertRequest: Keyspace {
     fn insert_query_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
         'a,
         Self,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     > {
@@ -334,7 +334,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
-            value: variables,
+            values,
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
@@ -360,13 +360,13 @@ pub trait GetDynamicInsertRequest: Keyspace {
     fn insert_prepared_with<'a>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
         'a,
         Self,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     > {
@@ -374,7 +374,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
-            value: variables,
+            values,
             builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
@@ -402,20 +402,20 @@ where
     /// ```
     fn as_insert<'a>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
     ) -> InsertBuilder<
         'a,
         Self,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     > {
         match statement_type {
-            StatementType::Query => self.as_insert_query(key, variables),
-            StatementType::Prepared => self.as_insert_prepared(key, variables),
+            StatementType::Query => self.as_insert_query(key, values),
+            StatementType::Prepared => self.as_insert_prepared(key, values),
         }
     }
 
@@ -433,13 +433,13 @@ where
     /// ```
     fn as_insert_query<'a>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
         'a,
         Self,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     > {
@@ -450,7 +450,7 @@ where
             builder: QueryStatement::encode_statement(Query::new(), &statement),
             statement,
             key,
-            value: variables,
+            values,
         }
     }
 
@@ -468,13 +468,13 @@ where
     /// ```
     fn as_insert_prepared<'a>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-        variables: &'a [&(dyn ColumnEncoder + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
         'a,
         Self,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     > {
@@ -485,7 +485,7 @@ where
             builder: PreparedStatement::encode_statement(Query::new(), &statement),
             statement,
             key,
-            value: variables,
+            values,
         }
     }
 }
@@ -493,11 +493,12 @@ where
 impl<S: Keyspace, K, V> GetStaticInsertRequest<K, V> for S {}
 impl<S: Keyspace> GetDynamicInsertRequest for S {}
 impl<S: ToStatement> AsDynamicInsertRequest for S {}
+
 pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: Cow<'static, str>,
     pub(crate) key: &'a K,
-    pub(crate) value: &'a V,
+    pub(crate) values: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
     pub(crate) _marker: T,
 }
@@ -509,8 +510,12 @@ impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryCo
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
-            builder: S::bind_values(self.builder.consistency(consistency), &self.key, &self.value),
+            values: self.values,
+            builder: S::bind_values(
+                self.builder.consistency(consistency).bind_values(),
+                &self.key,
+                &self.values,
+            ),
         }
     }
 
@@ -519,15 +524,24 @@ impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryCo
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
-            builder: S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value)
-                .timestamp(timestamp),
+            values: self.values,
+            builder: S::bind_values(
+                self.builder.consistency(Consistency::Quorum).bind_values(),
+                &self.key,
+                &self.values,
+            )
+            .timestamp(timestamp),
             _marker: self._marker,
         }
     }
 
     pub fn build(self) -> anyhow::Result<InsertRequest> {
-        let query = S::bind_values(self.builder.consistency(Consistency::Quorum), &self.key, &self.value).build()?;
+        let query = S::bind_values(
+            self.builder.consistency(Consistency::Quorum).bind_values(),
+            &self.key,
+            &self.values,
+        )
+        .build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
@@ -542,8 +556,8 @@ impl<'a, S: Keyspace>
     InsertBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
     >
@@ -551,9 +565,9 @@ impl<'a, S: Keyspace>
     pub fn bind_values<
         F: 'static
             + Fn(
-                Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-                &[&(dyn BindableToken + Sync)],
-                &[&(dyn ColumnEncoder + Sync)],
+                QueryBuilder<QueryValues>,
+                &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+                &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
             ) -> QueryBuilder<QueryValues>,
     >(
         self,
@@ -561,10 +575,10 @@ impl<'a, S: Keyspace>
     ) -> InsertBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
-        ManualBoundRequest<'a>,
+        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
     > {
         InsertBuilder {
             _marker: ManualBoundRequest {
@@ -573,7 +587,7 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            values: self.values,
             builder: self.builder,
         }
     }
@@ -584,18 +598,23 @@ impl<'a, S: Keyspace>
     ) -> InsertBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryValues,
         DynamicRequest,
     > {
-        let builder = self.builder.consistency(consistency).bind(self.key).bind(self.value);
+        let builder = self
+            .builder
+            .consistency(consistency)
+            .bind_values()
+            .bind(self.key)
+            .bind(self.values);
         InsertBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            values: self.values,
             builder,
         }
     }
@@ -606,8 +625,8 @@ impl<'a, S: Keyspace>
     ) -> InsertBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryBuild,
         DynamicRequest,
     > {
@@ -615,12 +634,13 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            values: self.values,
             builder: self
                 .builder
                 .consistency(Consistency::Quorum)
+                .bind_values()
                 .bind(self.key)
-                .bind(self.value)
+                .bind(self.values)
                 .timestamp(timestamp),
             _marker: self._marker,
         }
@@ -630,8 +650,9 @@ impl<'a, S: Keyspace>
         let query = self
             .builder
             .consistency(Consistency::Quorum)
+            .bind_values()
             .bind(self.key)
-            .bind(self.value)
+            .bind(self.values)
             .build()?;
         // create the request
         Ok(CommonRequest {
@@ -647,10 +668,10 @@ impl<'a, S: Keyspace>
     InsertBuilder<
         'a,
         S,
-        [&(dyn BindableToken + Sync)],
-        [&(dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
-        ManualBoundRequest<'a>,
+        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
     >
 {
     pub fn consistency(
@@ -659,8 +680,8 @@ impl<'a, S: Keyspace>
     ) -> InsertBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryValues,
         DynamicRequest,
     > {
@@ -669,8 +690,12 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
-            builder: (self._marker.bind_fn)(Box::new(self.builder.consistency(consistency)), self.key, self.value),
+            values: self.values,
+            builder: (self._marker.bind_fn)(
+                self.builder.consistency(consistency).bind_values(),
+                self.key,
+                self.values,
+            ),
         }
     }
 
@@ -680,8 +705,8 @@ impl<'a, S: Keyspace>
     ) -> InsertBuilder<
         'a,
         S,
-        [&'a (dyn BindableToken + Sync)],
-        [&'a (dyn ColumnEncoder + Sync)],
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryBuild,
         DynamicRequest,
     > {
@@ -689,11 +714,11 @@ impl<'a, S: Keyspace>
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            values: self.values,
             builder: (self._marker.bind_fn)(
-                Box::new(self.builder.consistency(Consistency::Quorum)),
+                self.builder.consistency(Consistency::Quorum).bind_values(),
                 self.key,
-                self.value,
+                self.values,
             )
             .timestamp(timestamp),
             _marker: DynamicRequest,
@@ -702,9 +727,9 @@ impl<'a, S: Keyspace>
 
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         let query = (self._marker.bind_fn)(
-            Box::new(self.builder.consistency(Consistency::Quorum)),
+            self.builder.consistency(Consistency::Quorum).bind_values(),
             self.key,
-            self.value,
+            self.values,
         )
         .build()?;
         // create the request
@@ -717,13 +742,13 @@ impl<'a, S: Keyspace>
     }
 }
 
-impl<'a, S, K, V, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
+impl<'a, S, K: ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> InsertBuilder<'a, S, K, V, QueryBuild, T> {
         InsertBuilder {
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            value: self.value,
+            values: self.values,
             builder: self.builder.timestamp(timestamp),
             _marker: self._marker,
         }

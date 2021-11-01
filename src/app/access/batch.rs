@@ -107,7 +107,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
     pub fn execute_query<T: ToStatement>(
         self,
         statement: &T,
-        variables: &[&(dyn ColumnEncoder + Sync)],
+        variables: &[&dyn BindableValue<BatchBuilder<Type, BatchValues>>],
     ) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Keyspace,
@@ -127,7 +127,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
     pub fn execute_prepared<T: ToStatement>(
         mut self,
         statement: &T,
-        variables: &[&(dyn ColumnEncoder + Sync)],
+        variables: &[&dyn BindableValue<BatchBuilder<Type, BatchValues>>],
     ) -> BatchCollector<'a, S, Type, BatchValues>
     where
         S: Keyspace,
@@ -198,11 +198,12 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
     /// and the statement defined in the `Update` impl.
-    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update<K, V, I>(mut self, key: &K, variables: &V, values: &I) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Update<K, V> + std::fmt::Debug,
+        S: 'static + Update<K, V, I> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        I: 'static,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -213,30 +214,36 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         // this will advnace the builder as defined in the Update<K, V>
         let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
-        let builder = S::bind_values(builder, key, value);
+        let builder = S::bind_values(builder, key, variables, values);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_query<K, V, I>(self, key: &K, variables: &V, values: &I) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: Update<K, V>,
+        S: Update<K, V, I>,
     {
         // this will advnace the builder with QueryStatement
         let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
-        let builder = S::bind_values(builder, key, value);
+        let builder = S::bind_values(builder, key, variables, values);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_prepared<K, V, I>(
+        mut self,
+        key: &K,
+        variables: &V,
+        values: &I,
+    ) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Update<K, V> + std::fmt::Debug,
+        S: 'static + Update<K, V, I> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        I: 'static,
     {
         // Add PreparedId to map
         let id = self.keyspace.update_id();
@@ -245,18 +252,19 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
-        let builder = S::bind_values(builder, key, value);
+        let builder = S::bind_values(builder, key, variables, values);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
     /// and the statement defined in the `Delete` impl.
-    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete<K, V, D>(mut self, key: &K, variables: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Delete<K, V> + std::fmt::Debug,
+        S: 'static + Delete<K, V, D> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        D: 'static,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -267,30 +275,31 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         // this will advnace the builder as defined in the Delete<K, V>
         let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
-        let builder = S::bind_values(builder, key);
+        let builder = S::bind_values(builder, key, variables);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_query<K, V, D>(self, key: &K, variables: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: Delete<K, V>,
+        S: Delete<K, V, D>,
     {
         // this will advnace the builder with QueryStatement
         let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
-        let builder = S::bind_values(builder, key);
+        let builder = S::bind_values(builder, key, variables);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_prepared<K, V, D>(mut self, key: &K, variables: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Delete<K, V> + std::fmt::Debug,
+        S: 'static + Delete<K, V, D> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        D: 'static,
     {
         // Add PreparedId to map
         let id = self.keyspace.delete_id();
@@ -299,7 +308,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
-        let builder = S::bind_values(builder, key);
+        let builder = S::bind_values(builder, key, variables);
 
         Self::step(builder, self.map, self.keyspace)
     }
@@ -362,11 +371,12 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
 
     /// Append an update query using the default query type defined in the `UpdateBatch` impl
     /// and the statement defined in the `Update` impl.
-    pub fn update<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update<K, V, I>(mut self, key: &K, variables: &V, values: &I) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Update<K, V> + std::fmt::Debug,
+        S: 'static + Update<K, V, I> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        I: 'static,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -377,30 +387,36 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         // this will advnace the builder as defined in the Update<K, V>
         let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
-        let builder = S::bind_values(builder, key, value);
+        let builder = S::bind_values(builder, key, variables, values);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update_query<K, V>(self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_query<K, V, I>(self, key: &K, variables: &V, values: &I) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: Update<K, V>,
+        S: Update<K, V, I>,
     {
         // this will advnace the builder with QueryStatement
         let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
-        let builder = S::bind_values(builder, key, value);
+        let builder = S::bind_values(builder, key, variables, values);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<K, V>(mut self, key: &K, value: &V) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn update_prepared<K, V, I>(
+        mut self,
+        key: &K,
+        variables: &V,
+        values: &I,
+    ) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Update<K, V> + std::fmt::Debug,
+        S: 'static + Update<K, V, I> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        I: 'static,
     {
         // Add PreparedId to map
         let id = self.keyspace.update_id();
@@ -409,18 +425,19 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Update<K, V>
-        let builder = S::bind_values(builder, key, value);
+        let builder = S::bind_values(builder, key, variables, values);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append a delete query using the default query type defined in the `DeleteBatch` impl
     /// and the statement defined in the `Delete` impl.
-    pub fn delete<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete<K, V, D>(mut self, key: &K, variables: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Delete<K, V> + std::fmt::Debug,
+        S: 'static + Delete<K, V, D> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        D: 'static,
     {
         // Add PreparedId to map if is_prepared
         if S::QueryOrPrepared::is_prepared() {
@@ -431,30 +448,31 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         // this will advnace the builder as defined in the Delete<K, V>
         let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
-        let builder = S::bind_values(builder, key);
+        let builder = S::bind_values(builder, key, variables);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_query<K, V>(self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_query<K, V, D>(self, key: &K, variables: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: Delete<K, V>,
+        S: Delete<K, V, D>,
     {
         // this will advnace the builder with QueryStatement
         let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
-        let builder = S::bind_values(builder, key);
+        let builder = S::bind_values(builder, key, variables);
 
         Self::step(builder, self.map, self.keyspace)
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<K, V>(mut self, key: &K) -> BatchCollector<'a, S, Type, BatchValues>
+    pub fn delete_prepared<K, V, D>(mut self, key: &K, variables: &V) -> BatchCollector<'a, S, Type, BatchValues>
     where
-        S: 'static + Delete<K, V> + std::fmt::Debug,
+        S: 'static + Delete<K, V, D> + std::fmt::Debug,
         K: 'static + Clone + Send + std::fmt::Debug,
         V: 'static + Clone + Send + std::fmt::Debug,
+        D: 'static,
     {
         // Add PreparedId to map
         let id = self.keyspace.delete_id();
@@ -463,7 +481,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         // this will advnace the builder with PreparedStatement
         let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
         // bind_values of Delete<K, V>
-        let builder = S::bind_values(builder, key);
+        let builder = S::bind_values(builder, key, variables);
 
         Self::step(builder, self.map, self.keyspace)
     }

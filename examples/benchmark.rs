@@ -102,7 +102,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
         .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
     keyspace.prepare_insert::<String, i32>().get_local().await?;
-    keyspace.prepare_select::<String, i32>().get_local().await?;
+    keyspace.prepare_select::<String, (), i32>().get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
@@ -119,7 +119,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
     for i in 0..n {
         keyspace
-            .select::<i32>(&format!("Key {}", i))
+            .select::<i32>(&format!("Key {}", i), &())
             .build()?
             .worker()
             .with_handle(sender.clone())
@@ -162,19 +162,19 @@ impl Insert<String, i32> for MyKeyspace {
         format!("INSERT INTO {}.test (key, data) VALUES (?, ?)", self.name()).into()
     }
 
-    fn bind_values<T: Values>(builder: T, key: &String, value: &i32) -> T::Return {
+    fn bind_values<T: Binder>(builder: T, key: &String, value: &i32) -> T {
         builder.value(key).value(value)
     }
 }
 
-impl Select<String, i32> for MyKeyspace {
+impl Select<String, (), i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
 
     fn statement(&self) -> Cow<'static, str> {
         format!("SELECT data FROM {}.test WHERE key = ?", self.name()).into()
     }
 
-    fn bind_values<T: Values>(builder: T, key: &String) -> T::Return {
+    fn bind_values<T: Binder>(builder: T, key: &String, variables: &()) -> T {
         builder.value(key)
     }
 }

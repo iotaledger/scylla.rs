@@ -16,9 +16,9 @@ use super::{
         QUERY,
     },
     queryflags::*,
+    Binder,
     QueryOrPrepared,
     Statements,
-    Values,
 };
 use crate::cql::compression::{
     Compression,
@@ -34,16 +34,17 @@ const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
 /// ## Example
 /// ```
 /// use scylla_rs::cql::{
+///     Binder,
 ///     Consistency,
 ///     Query,
 ///     Statements,
-///     Values,
 /// };
 ///
 /// let builder = Query::new();
 /// let query = builder
 ///     .statement("statement")
 ///     .consistency(Consistency::One)
+///     .bind_values()
 ///     .value(&0)
 ///     .value(&"val2".to_string())
 ///     .build()?;
@@ -176,76 +177,18 @@ impl QueryBuilder<QueryConsistency> {
     }
 }
 
-impl Values for QueryBuilder<QueryFlags> {
-    type Return = QueryBuilder<QueryValues>;
-    /// Set the first value in the query frame.
-    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        // push value
-        value.encode(&mut self.buffer);
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
-    /// Set the value to be unset in the query frame.
-    fn unset_value(mut self) -> Self::Return {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // apply null value
-        self.buffer.extend(&BE_UNSET_BYTES_LEN);
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
-
-    /// Set the first value to be null in the query frame.
-    fn null_value(mut self) -> Self::Return {
-        // push SKIP_METADATA and VALUES query_flag to the buffer
-        self.buffer.push(SKIP_METADATA | VALUES);
-        let value_count = 1;
-        // push value_count
-        self.buffer.extend(&u16::to_be_bytes(value_count));
-        // apply null value
-        self.buffer.extend(&BE_NULL_BYTES_LEN);
-        // create query_values
-        let query_values = QueryValues {
-            query_flags: self.stage,
-            value_count,
-        };
-        QueryBuilder::<QueryValues> {
-            buffer: self.buffer,
-            stage: query_values,
-        }
-    }
-
-    fn skip_value(self) -> Self::Return
-    where
-        Self: Sized,
-    {
-        self.skip_values()
-    }
-}
-
 impl QueryBuilder<QueryFlags> {
+    /// Prepare to bind values for this query
+    pub fn bind_values(mut self) -> QueryBuilder<QueryValues> {
+        self.buffer.push(SKIP_METADATA);
+        QueryBuilder {
+            buffer: self.buffer,
+            stage: QueryValues {
+                query_flags: self.stage,
+                value_count: 0,
+            },
+        }
+    }
     /// Set the page size in the query frame, without any value.
     pub fn page_size(mut self, page_size: i32) -> QueryBuilder<QueryPagingState> {
         // push SKIP_METADATA and page_size query_flag to the buffer
@@ -311,16 +254,6 @@ impl QueryBuilder<QueryFlags> {
             stage: query_build,
         }
     }
-    pub(crate) fn skip_values(mut self) -> QueryBuilder<QueryValues> {
-        self.buffer.push(SKIP_METADATA);
-        QueryBuilder {
-            buffer: self.buffer,
-            stage: QueryValues {
-                query_flags: self.stage,
-                value_count: 0,
-            },
-        }
-    }
     /// Build a query frame with an assigned compression type, without any value.
     pub fn build(mut self) -> anyhow::Result<Query> {
         // apply compression flag(if any to the header)
@@ -333,10 +266,13 @@ impl QueryBuilder<QueryFlags> {
         Ok(Query(self.buffer))
     }
 }
-impl Values for QueryBuilder<QueryValues> {
-    type Return = QueryBuilder<QueryValues>;
+impl Binder for QueryBuilder<QueryValues> {
     /// Set the next value in the query frame.
-    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return {
+    fn value<V: ColumnEncoder + Sync>(mut self, value: V) -> Self {
+        if self.stage.value_count == 0 {
+            self.buffer[self.stage.query_flags.index] |= VALUES;
+            self.buffer.extend(&u16::to_be_bytes(1));
+        }
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -344,7 +280,11 @@ impl Values for QueryBuilder<QueryValues> {
         self
     }
     /// Set the value to be unset in the query frame.
-    fn unset_value(mut self) -> Self::Return {
+    fn unset_value(mut self) -> Self {
+        if self.stage.value_count == 0 {
+            self.buffer[self.stage.query_flags.index] |= VALUES;
+            self.buffer.extend(&u16::to_be_bytes(1));
+        }
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
@@ -353,18 +293,15 @@ impl Values for QueryBuilder<QueryValues> {
     }
 
     /// Set the value to be null in the query frame.
-    fn null_value(mut self) -> Self::Return {
+    fn null_value(mut self) -> Self {
+        if self.stage.value_count == 0 {
+            self.buffer[self.stage.query_flags.index] |= VALUES;
+            self.buffer.extend(&u16::to_be_bytes(1));
+        }
         // increase the value_count
         self.stage.value_count += 1;
         // apply value
         self.buffer.extend(&BE_NULL_BYTES_LEN);
-        self
-    }
-
-    fn skip_value(self) -> Self::Return
-    where
-        Self: Sized,
-    {
         self
     }
 }
@@ -639,10 +576,11 @@ mod tests {
         let Query(_payload) = Query::new()
             .statement("INSERT_TX_QUERY")
             .consistency(Consistency::One)
+            .bind_values()
             .value(&"HASH_VALUE")
             .value(&"PAYLOAD_VALUE")
             .value(&"ADDRESS_VALUE")
-            .value::<i64>(&0) // tx-value as i64
+            .value(&0_i64) // tx-value as i64
             .value(&"OBSOLETE_TAG_VALUE")
             .value(&SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()) // junk timestamp
             .value(&0) // current-index

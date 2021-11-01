@@ -32,14 +32,6 @@ use super::{
     Worker,
     WorkerError,
 };
-pub use crate::cql::{
-    query::StatementType,
-    Bindable,
-    Consistency,
-    PreparedStatement,
-    QueryStatement,
-    Values,
-};
 use crate::{
     app::{
         ring::{
@@ -49,8 +41,12 @@ use crate::{
         stage::reporter::ReporterEvent,
     },
     cql::{
+        query::StatementType,
+        Bindable,
+        Binder,
+        Consistency,
         Decoder,
-        DynValues,
+        PreparedStatement,
         Query,
         QueryBuild,
         QueryBuilder,
@@ -58,12 +54,12 @@ use crate::{
         QueryOrPrepared,
         QueryPagingState,
         QuerySerialConsistency,
+        QueryStatement,
         QueryValues,
         RowsDecoder,
         VoidDecoder,
     },
     prelude::{
-        ColumnEncoder,
         IntoRespondingWorker,
         ReporterHandle,
         RetryableWorker,
@@ -124,9 +120,13 @@ pub use update::{
     UpdateRequest,
 };
 
-/// A token that is bindable as a column
-pub trait BindableToken: TokenEncoder + ColumnEncoder {}
-impl<T: TokenEncoder + ColumnEncoder> BindableToken for T {}
+/// A bindable value
+pub trait BindableValue<B: Binder>: Bindable<B> + Sync {}
+impl<B: Binder, T: Bindable<B> + Sync> BindableValue<B> for T {}
+
+/// A bindable value that can be used to create a token
+pub trait BindableToken<B: Binder>: TokenEncoder + BindableValue<B> {}
+impl<B: Binder, T: TokenEncoder + BindableValue<B>> BindableToken<B> for T {}
 
 /// The possible request types
 #[allow(missing_docs)]
@@ -149,18 +149,18 @@ pub trait ToStatement: DynClone + Debug + Send + Sync {
 }
 dyn_clone::clone_trait_object!(ToStatement);
 
-struct UpdateStatement<S: Update<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Update<K, V>, K, V> UpdateStatement<S, K, V> {
+struct UpdateStatement<S: Update<K, V, U>, K, V, U>(S, PhantomData<fn(K, V, U) -> (K, V, U)>);
+impl<S: Update<K, V, U>, K, V, U> UpdateStatement<S, K, V, U> {
     fn new(keyspace: &S) -> Self {
         Self(keyspace.clone(), PhantomData)
     }
 }
-impl<S: Update<K, V>, K, V> Clone for UpdateStatement<S, K, V> {
+impl<S: Update<K, V, U>, K, V, U> Clone for UpdateStatement<S, K, V, U> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
-impl<S: Update<K, V> + Debug, K, V> Debug for UpdateStatement<S, K, V> {
+impl<S: Update<K, V, U> + Debug, K, V, U> Debug for UpdateStatement<S, K, V, U> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("UpdateStatement").field(&self.0).finish()
     }
@@ -181,42 +181,42 @@ impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
         f.debug_tuple("InsertStatement").field(&self.0).finish()
     }
 }
-struct DeleteStatement<S: Delete<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Delete<K, V>, K, V> DeleteStatement<S, K, V> {
+struct DeleteStatement<S: Delete<K, V, D>, K, V, D>(S, PhantomData<fn(K, V, D) -> (K, V, D)>);
+impl<S: Delete<K, V, D>, K, V, D> DeleteStatement<S, K, V, D> {
     fn new(keyspace: &S) -> Self {
         Self(keyspace.clone(), PhantomData)
     }
 }
-impl<S: Delete<K, V>, K, V> Clone for DeleteStatement<S, K, V> {
+impl<S: Delete<K, V, D>, K, V, D> Clone for DeleteStatement<S, K, V, D> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
-impl<S: Delete<K, V> + Debug, K, V> Debug for DeleteStatement<S, K, V> {
+impl<S: Delete<K, V, D> + Debug, K, V, D> Debug for DeleteStatement<S, K, V, D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("DeleteStatement").field(&self.0).finish()
     }
 }
 
-struct SelectStatement<S: Select<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Select<K, V>, K, V> SelectStatement<S, K, V> {
+struct SelectStatement<S: Select<K, V, O>, K, V, O>(S, PhantomData<fn(K, V, O) -> (K, V, O)>);
+impl<S: Select<K, V, O>, K, V, O> SelectStatement<S, K, V, O> {
     #[allow(unused)]
     fn new(keyspace: &S) -> Self {
         Self(keyspace.clone(), PhantomData)
     }
 }
-impl<S: Select<K, V>, K, V> Clone for SelectStatement<S, K, V> {
+impl<S: Select<K, V, O>, K, V, O> Clone for SelectStatement<S, K, V, O> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
-impl<S: Select<K, V> + Debug, K, V> Debug for SelectStatement<S, K, V> {
+impl<S: Select<K, V, O> + Debug, K, V, O> Debug for SelectStatement<S, K, V, O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("SelectStatement").field(&self.0).finish()
     }
 }
 
-impl<S: Update<K, V> + Debug, K, V> ToStatement for UpdateStatement<S, K, V> {
+impl<S: Update<K, V, U> + Debug, K, V, U> ToStatement for UpdateStatement<S, K, V, U> {
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
     }
@@ -228,13 +228,13 @@ impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
     }
 }
 
-impl<S: Delete<K, V> + Debug, K, V> ToStatement for DeleteStatement<S, K, V> {
+impl<S: Delete<K, V, D> + Debug, K, V, D> ToStatement for DeleteStatement<S, K, V, D> {
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
     }
 }
 
-impl<S: Select<K, V> + Debug, K, V> ToStatement for SelectStatement<S, K, V> {
+impl<S: Select<K, V, O> + Debug, K, V, O> ToStatement for SelectStatement<S, K, V, O> {
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
     }
@@ -257,14 +257,8 @@ pub struct DynamicRequest;
 /// Marker for static requests
 pub struct StaticRequest;
 /// Marker for requests that need to use a manually defined bind fn
-pub struct ManualBoundRequest<'a> {
-    pub(crate) bind_fn: Box<
-        dyn Fn(
-            Box<dyn DynValues<Return = QueryBuilder<QueryValues>>>,
-            &'a [&(dyn BindableToken + Sync)],
-            &'a [&(dyn ColumnEncoder + Sync)],
-        ) -> QueryBuilder<QueryValues>,
-    >,
+pub struct ManualBoundRequest<'a, B: Binder> {
+    pub(crate) bind_fn: Box<dyn Fn(B, &'a [&dyn BindableToken<B>], &'a [&dyn BindableValue<B>]) -> B>,
 }
 
 /// Errors which can be returned from a sent request
@@ -393,16 +387,16 @@ impl Request for CommonRequest {
 /// Defines two helper methods to specify statement / id
 #[allow(missing_docs)]
 pub trait GetStatementIdExt {
-    fn select_statement<K, V>(&self) -> Cow<'static, str>
+    fn select_statement<K, V, O>(&self) -> Cow<'static, str>
     where
-        Self: Select<K, V>,
+        Self: Select<K, V, O>,
     {
         self.statement()
     }
 
-    fn select_id<K, V>(&self) -> [u8; 16]
+    fn select_id<K, V, O>(&self) -> [u8; 16]
     where
-        Self: Select<K, V>,
+        Self: Select<K, V, O>,
     {
         self.id()
     }
@@ -421,30 +415,30 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn update_statement<K, V>(&self) -> Cow<'static, str>
+    fn update_statement<K, V, U>(&self) -> Cow<'static, str>
     where
-        Self: Update<K, V>,
+        Self: Update<K, V, U>,
     {
         self.statement()
     }
 
-    fn update_id<K, V>(&self) -> [u8; 16]
+    fn update_id<K, V, U>(&self) -> [u8; 16]
     where
-        Self: Update<K, V>,
+        Self: Update<K, V, U>,
     {
         self.id()
     }
 
-    fn delete_statement<K, V>(&self) -> Cow<'static, str>
+    fn delete_statement<K, V, D>(&self) -> Cow<'static, str>
     where
-        Self: Delete<K, V>,
+        Self: Delete<K, V, D>,
     {
         self.statement()
     }
 
-    fn delete_id<K, V>(&self) -> [u8; 16]
+    fn delete_id<K, V, D>(&self) -> [u8; 16]
     where
-        Self: Delete<K, V>,
+        Self: Delete<K, V, D>,
     {
         self.id()
     }
@@ -533,7 +527,7 @@ impl Marker for DecodeVoid {
 #[derive(Clone)]
 pub struct DecodeResult<T> {
     inner: T,
-    request_type: RequestType,
+    pub request_type: RequestType,
 }
 impl<T> DecodeResult<T> {
     pub(crate) fn new(inner: T, request_type: RequestType) -> Self {
@@ -601,24 +595,25 @@ pub mod tests {
         }
     }
 
-    impl Select<u32, f32> for MyKeyspace {
+    impl Select<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             "SELECT col1 FROM keyspace.table WHERE key = ?".into()
         }
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
-            builder.value(key)
+
+        fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
+            binder.value(key)
         }
     }
 
-    impl Select<u32, i32> for MyKeyspace {
+    impl Select<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = QueryStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
-            builder.value(key)
+        fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
+            binder.value(key)
         }
     }
 
@@ -628,52 +623,55 @@ pub mod tests {
             format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
-            builder.value(key).value(value).value(value)
+        fn bind_values<B: Binder>(binder: B, key: &u32, values: &f32) -> B {
+            binder.value(key).value(values).value(values)
         }
     }
 
-    impl Update<u32, f32> for MyKeyspace {
+    impl Update<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
         }
-        fn bind_values<T: Values>(builder: T, key: &u32, value: &f32) -> T::Return {
-            builder.value(value).value(value).value(key)
+
+        fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &(), values: &f32) -> B {
+            binder.value(values).value(values).value(key)
         }
     }
 
-    impl Delete<u32, f32> for MyKeyspace {
+    impl Delete<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             "DELETE FROM keyspace.table WHERE key = ?".into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
-            builder.value(key).value(key)
+        fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
+            binder.value(key).value(key)
         }
     }
 
-    impl Delete<u32, i32> for MyKeyspace {
+    impl Delete<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
         fn statement(&self) -> Cow<'static, str> {
             format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
         }
 
-        fn bind_values<T: Values>(builder: T, key: &u32) -> T::Return {
-            builder.value(key)
+        fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
+            binder.value(key)
         }
     }
 
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let res: Result<DecodeResult<DecodeRows<f32>>, RequestError> = keyspace
+        let res = keyspace
             .select_with::<f32>(
                 "SELECT col1 FROM keyspace.table WHERE key = ?",
-                &[&3],
+                &[&3, &"str"],
+                &[],
                 StatementType::Query,
             )
+            .bind_values(|binder, keys, values| binder.bind(keys).bind(values))
             .build()
             .unwrap()
             .worker()
@@ -681,18 +679,18 @@ pub mod tests {
             .send_local();
         assert!(res.is_err());
         let res = "SELECT col1 FROM keyspace.table WHERE key = ?"
-            .as_select_prepared::<f32>(&[&3])
+            .as_select_prepared::<f32>(&[&3], &[])
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
         let res = keyspace
-            .select_prepared::<f32>(&3u32)
+            .select_prepared::<f32>(&3, &())
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let req2 = keyspace.select::<i32>(&3).page_size(500).build().unwrap();
+        let req2 = keyspace.select::<i32>(&3, &()).page_size(500).build().unwrap();
         let _res = req2.clone().send_local();
     }
 
@@ -709,7 +707,7 @@ pub mod tests {
                 &[&8.0, &"hello"],
                 StatementType::Query,
             )
-            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
+            //.bind_values(|binder, keys, values| binder.bind(keys).bind(values))
             .build()
             .unwrap()
             .get_local_blocking()
@@ -717,7 +715,7 @@ pub mod tests {
 
         "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
             .as_insert_query(&[&3], &[&8.0, &"hello"])
-            .bind_values(|builder, keys, values| builder.bind(keys).bind(values))
+            //.bind_values(|binder, keys, values| binder.bind(keys).bind(values))
             .build()
             .unwrap()
             .send_local()
@@ -727,7 +725,7 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.update(&3, &8.0).build().unwrap();
+        let req = keyspace.update(&3, &(), &8.0).build().unwrap();
 
         let _res = req.send_local();
     }
@@ -736,7 +734,7 @@ pub mod tests {
     fn test_delete() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
         let req = keyspace
-            .delete::<f32>(&3)
+            .delete::<f32>(&3, &())
             .consistency(Consistency::All)
             .build()
             .unwrap();
@@ -752,9 +750,9 @@ pub mod tests {
             .batch()
             .logged() // or .batch_type(BatchTypeLogged)
             .insert(&3, &9.0)
-            .update_query(&3, &8.0)
+            .update_query(&3, &(), &8.0)
             .insert_prepared(&3, &8.0)
-            .delete_prepared::<_, f32>(&3)
+            .delete_prepared::<_, _, f32>(&3, &())
             .build()
             .unwrap()
             .compute_token(&3);

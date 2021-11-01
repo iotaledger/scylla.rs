@@ -44,7 +44,7 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Select<K, V>: Keyspace {
+pub trait Select<K, V, O>: Keyspace {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
     type QueryOrPrepared: QueryOrPrepared;
 
@@ -58,12 +58,12 @@ pub trait Select<K, V>: Keyspace {
         md5::compute(self.select_statement().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<T: Values>(builder: T, key: &K) -> T::Return;
+    fn bind_values<B: Binder>(binder: B, key: &K, variables: &V) -> B;
 }
 
 /// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
 
-pub trait GetStaticSelectRequest<K>: Keyspace {
+pub trait GetStaticSelectRequest<K, V>: Keyspace {
     /// Create a static select request from a keyspace with a `Select<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -105,15 +105,20 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn select<'a, O>(
+        &'a self,
+        key: &'a K,
+        variables: &'a V,
+    ) -> SelectBuilder<'a, Self, K, V, O, QueryConsistency, StaticRequest>
     where
-        Self: Select<K, V>,
+        Self: Select<K, V, O>,
     {
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: StaticRequest,
             keyspace: PhantomData,
             statement: self.statement(),
             key,
+            variables,
             builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
         }
     }
@@ -158,15 +163,20 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_query<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn select_query<'a, O>(
+        &'a self,
+        key: &'a K,
+        variables: &'a V,
+    ) -> SelectBuilder<'a, Self, K, V, O, QueryConsistency, StaticRequest>
     where
-        Self: Select<K, V>,
+        Self: Select<K, V, O>,
     {
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: StaticRequest,
             keyspace: PhantomData,
             statement: self.statement(),
             key,
+            variables,
             builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
         }
     }
@@ -211,15 +221,20 @@ pub trait GetStaticSelectRequest<K>: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_prepared<'a, V>(&'a self, key: &'a K) -> SelectBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn select_prepared<'a, O>(
+        &'a self,
+        key: &'a K,
+        variables: &'a V,
+    ) -> SelectBuilder<'a, Self, K, V, O, QueryConsistency, StaticRequest>
     where
-        Self: Select<K, V>,
+        Self: Select<K, V, O>,
     {
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: StaticRequest,
             keyspace: PhantomData,
             statement: self.statement(),
             key,
+            variables,
             builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
         }
     }
@@ -245,15 +260,24 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_with<'a, V>(
+    fn select_with<'a, O>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
         match statement_type {
-            StatementType::Query => self.select_query_with(statement, key),
-            StatementType::Prepared => self.select_prepared_with(statement, key),
+            StatementType::Query => self.select_query_with(statement, key, variables),
+            StatementType::Prepared => self.select_prepared_with(statement, key, variables),
         }
     }
 
@@ -270,16 +294,26 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_query_with<'a, V>(
+    fn select_query_with<'a, O>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: DynamicRequest,
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
+            variables,
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
@@ -297,16 +331,26 @@ pub trait GetDynamicSelectRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_prepared_with<'a, V>(
+    fn select_prepared_with<'a, O>(
         &'a self,
         statement: &str,
-        key: &'a [&(dyn BindableToken + Sync)],
-    ) -> SelectBuilder<'a, Self, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: DynamicRequest,
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
+            variables,
             builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
@@ -331,14 +375,23 @@ where
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn as_select<'a, V>(
+    fn as_select<'a, O>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
-    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
         match statement_type {
-            StatementType::Query => self.as_select_query(key),
-            StatementType::Prepared => self.as_select_prepared(key),
+            StatementType::Query => self.as_select_query(key, variables),
+            StatementType::Prepared => self.as_select_prepared(key, variables),
         }
     }
 
@@ -354,17 +407,27 @@ where
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn as_select_query<'a, V>(
+    fn as_select_query<'a, O>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
         let statement = self.to_statement();
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: DynamicRequest,
             keyspace: PhantomData,
             builder: QueryStatement::encode_statement(Query::new(), &statement),
             statement,
             key,
+            variables,
         }
     }
 
@@ -380,78 +443,117 @@ where
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn as_select_prepared<'a, V>(
+    fn as_select_prepared<'a, O>(
         &self,
-        key: &'a [&(dyn BindableToken + Sync)],
-    ) -> SelectBuilder<'a, Self, [&'a (dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
         let statement = self.to_statement();
         SelectBuilder {
-            _marker: PhantomData,
+            _marker: DynamicRequest,
             keyspace: PhantomData,
             builder: PreparedStatement::encode_statement(Query::new(), &statement),
             statement,
             key,
+            variables,
         }
     }
 }
 
-impl<S: Keyspace, K> GetStaticSelectRequest<K> for S {}
+impl<S: Keyspace, K, V> GetStaticSelectRequest<K, V> for S {}
 impl<S: Keyspace> GetDynamicSelectRequest for S {}
 impl<S: ToStatement> AsDynamicSelectRequest for S {}
 
-pub struct SelectBuilder<'a, S, K: ?Sized, V, Stage, T> {
-    keyspace: PhantomData<fn(S) -> S>,
-    statement: Cow<'static, str>,
-    key: &'a K,
-    builder: QueryBuilder<Stage>,
-    _marker: PhantomData<fn(V, T) -> (V, T)>,
+pub struct SelectBuilder<'a, S, K: ?Sized, V: ?Sized, O, Stage, T> {
+    pub(crate) keyspace: PhantomData<fn(S, O) -> (S, O)>,
+    pub(crate) statement: Cow<'static, str>,
+    pub(crate) key: &'a K,
+    pub(crate) variables: &'a V,
+    pub(crate) builder: QueryBuilder<Stage>,
+    pub(crate) _marker: T,
 }
 
-impl<'a, S: Select<K, V>, K: TokenEncoder, V> SelectBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
-    pub fn consistency(self, consistency: Consistency) -> SelectBuilder<'a, S, K, V, QueryValues, StaticRequest> {
+impl<'a, S: Select<K, V, O>, K: TokenEncoder, V, O> SelectBuilder<'a, S, K, V, O, QueryConsistency, StaticRequest> {
+    pub fn consistency(self, consistency: Consistency) -> SelectBuilder<'a, S, K, V, O, QueryValues, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: S::bind_values(self.builder.consistency(consistency), &self.key),
+            variables: self.variables,
+            builder: S::bind_values(
+                self.builder.consistency(consistency).bind_values(),
+                &self.key,
+                &self.variables,
+            ),
         }
     }
 
-    pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, QueryPagingState, StaticRequest> {
+    pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, O, QueryPagingState, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: S::bind_values(self.builder.consistency(Consistency::One), &self.key).page_size(page_size),
+            variables: self.variables,
+            builder: S::bind_values(
+                self.builder.consistency(Consistency::One).bind_values(),
+                &self.key,
+                &self.variables,
+            )
+            .page_size(page_size),
         }
     }
     /// Set the paging state.
     pub fn paging_state(
         self,
         paging_state: &Option<Vec<u8>>,
-    ) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, StaticRequest> {
+    ) -> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: S::bind_values(self.builder.consistency(Consistency::One), &self.key).paging_state(paging_state),
+            variables: self.variables,
+            builder: S::bind_values(
+                self.builder.consistency(Consistency::One).bind_values(),
+                &self.key,
+                &self.variables,
+            )
+            .paging_state(paging_state),
         }
     }
-    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
-            builder: S::bind_values(self.builder.consistency(Consistency::One), &self.key).timestamp(timestamp),
+            variables: self.variables,
+            builder: S::bind_values(
+                self.builder.consistency(Consistency::One).bind_values(),
+                &self.key,
+                &self.variables,
+            )
+            .timestamp(timestamp),
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let query = S::bind_values(self.builder.consistency(Consistency::One), &self.key).build()?;
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
+        let query = S::bind_values(
+            self.builder.consistency(Consistency::One).bind_values(),
+            &self.key,
+            &self.variables,
+        )
+        .build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
@@ -462,17 +564,72 @@ impl<'a, S: Select<K, V>, K: TokenEncoder, V> SelectBuilder<'a, S, K, V, QueryCo
     }
 }
 
-impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn BindableToken + Sync)], V, QueryConsistency, DynamicRequest> {
+impl<'a, S: Keyspace, O>
+    SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    >
+{
+    pub fn bind_values<
+        F: 'static
+            + Fn(
+                QueryBuilder<QueryValues>,
+                &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+                &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+            ) -> QueryBuilder<QueryValues>,
+    >(
+        self,
+        bind_fn: F,
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
+    > {
+        SelectBuilder {
+            _marker: ManualBoundRequest {
+                bind_fn: Box::new(bind_fn),
+            },
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            variables: self.variables,
+            builder: self.builder,
+        }
+    }
+
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryValues, DynamicRequest> {
-        let builder = self.builder.consistency(consistency).bind(self.key);
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryValues,
+        DynamicRequest,
+    > {
+        let builder = self
+            .builder
+            .consistency(consistency)
+            .bind_values()
+            .bind(self.key)
+            .bind(self.variables);
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder,
         }
     }
@@ -480,16 +637,27 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn BindableToken + Sync)], V, 
     pub fn page_size(
         self,
         page_size: i32,
-    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryPagingState, DynamicRequest> {
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryPagingState,
+        DynamicRequest,
+    > {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self
                 .builder
                 .consistency(Consistency::One)
+                .bind_values()
                 .bind(self.key)
+                .bind(self.variables)
                 .page_size(page_size),
         }
     }
@@ -497,38 +665,66 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn BindableToken + Sync)], V, 
     pub fn paging_state(
         self,
         paging_state: &Option<Vec<u8>>,
-    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QuerySerialConsistency, DynamicRequest> {
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QuerySerialConsistency,
+        DynamicRequest,
+    > {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self
                 .builder
                 .consistency(Consistency::One)
+                .bind_values()
                 .bind(self.key)
+                .bind(self.variables)
                 .paging_state(paging_state),
         }
     }
     pub fn timestamp(
         self,
         timestamp: i64,
-    ) -> SelectBuilder<'a, S, [&'a (dyn BindableToken + Sync)], V, QueryBuild, DynamicRequest> {
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryBuild,
+        DynamicRequest,
+    > {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self
                 .builder
                 .consistency(Consistency::One)
+                .bind_values()
                 .bind(self.key)
+                .bind(self.variables)
                 .timestamp(timestamp),
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
-        let query = self.builder.consistency(Consistency::One).bind(self.key).build()?;
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
+        let query = self
+            .builder
+            .consistency(Consistency::One)
+            .bind_values()
+            .bind(self.key)
+            .bind(self.variables)
+            .build()?;
         // create the request
         Ok(CommonRequest {
             token: self.key.token(),
@@ -539,38 +735,179 @@ impl<'a, S: Keyspace, V> SelectBuilder<'a, S, [&(dyn BindableToken + Sync)], V, 
     }
 }
 
-impl<'a, S, K, V, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
-    pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
+impl<'a, S: Keyspace, O>
+    SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
+    >
+{
+    pub fn consistency(
+        self,
+        consistency: Consistency,
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryValues,
+        DynamicRequest,
+    > {
+        SelectBuilder {
+            _marker: DynamicRequest,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            variables: self.variables,
+            builder: (self._marker.bind_fn)(
+                self.builder.consistency(consistency).bind_values(),
+                self.key,
+                self.variables,
+            ),
+        }
+    }
+
+    pub fn page_size(
+        self,
+        page_size: i32,
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryPagingState,
+        DynamicRequest,
+    > {
+        SelectBuilder {
+            _marker: DynamicRequest,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            variables: self.variables,
+            builder: (self._marker.bind_fn)(
+                self.builder.consistency(Consistency::One).bind_values(),
+                self.key,
+                self.variables,
+            )
+            .page_size(page_size),
+        }
+    }
+    /// Set the paging state.
+    pub fn paging_state(
+        self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QuerySerialConsistency,
+        DynamicRequest,
+    > {
+        SelectBuilder {
+            _marker: DynamicRequest,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            variables: self.variables,
+            builder: (self._marker.bind_fn)(
+                self.builder.consistency(Consistency::One).bind_values(),
+                self.key,
+                self.variables,
+            )
+            .paging_state(paging_state),
+        }
+    }
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> SelectBuilder<
+        'a,
+        S,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryBuild,
+        DynamicRequest,
+    > {
+        SelectBuilder {
+            _marker: DynamicRequest,
+            keyspace: self.keyspace,
+            statement: self.statement,
+            key: self.key,
+            variables: self.variables,
+            builder: (self._marker.bind_fn)(
+                self.builder.consistency(Consistency::One).bind_values(),
+                self.key,
+                self.variables,
+            )
+            .timestamp(timestamp),
+        }
+    }
+
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
+        let query = self
+            .builder
+            .consistency(Consistency::One)
+            .bind_values()
+            .bind(self.key)
+            .bind(self.variables)
+            .build()?;
+        // create the request
+        Ok(CommonRequest {
+            token: self.key.token(),
+            payload: query.into(),
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+
+impl<'a, S, K: ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QueryValues, T> {
+    pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, O, QueryPagingState, T> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self.builder.page_size(page_size),
         }
     }
-    pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+    pub fn paging_state(
+        self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self.builder.paging_state(paging_state),
         }
     }
-    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self.builder.timestamp(timestamp),
         }
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryValues, T> {
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O: RowsDecoder, T> SelectBuilder<'a, S, K, V, O, QueryValues, T> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
@@ -582,8 +919,8 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: RowsDecoder, T> SelectBuilder<'a, S, K,
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V: RowsDecoder, T> SelectBuilder<'a, S, K, V, QueryBuild, T> {
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O: RowsDecoder, T> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
@@ -595,28 +932,33 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: RowsDecoder, T> SelectBuilder<'a, S, K,
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V, T> SelectBuilder<'a, S, K, V, QueryPagingState, T> {
-    pub fn paging_state(self, paging_state: &Option<Vec<u8>>) -> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QueryPagingState, T> {
+    pub fn paging_state(
+        self,
+        paging_state: &Option<Vec<u8>>,
+    ) -> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self.builder.paging_state(paging_state),
         }
     }
 
-    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self.builder.timestamp(timestamp),
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
@@ -628,18 +970,19 @@ impl<'a, S, K: TokenEncoder + ?Sized, V, T> SelectBuilder<'a, S, K, V, QueryPagi
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V, T> SelectBuilder<'a, S, K, V, QuerySerialConsistency, T> {
-    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, QueryBuild, T> {
+impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, T> {
+    pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
+            variables: self.variables,
             builder: self.builder.timestamp(timestamp),
         }
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<V>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
@@ -652,12 +995,12 @@ impl<'a, S, K: TokenEncoder + ?Sized, V, T> SelectBuilder<'a, S, K, V, QuerySeri
 }
 
 /// A request to select a record which can be sent to the ring
-pub struct SelectRequest<V> {
+pub struct SelectRequest<O> {
     inner: CommonRequest,
-    _marker: PhantomData<fn(V) -> V>,
+    _marker: PhantomData<fn(O) -> O>,
 }
 
-impl<V> From<CommonRequest> for SelectRequest<V> {
+impl<O> From<CommonRequest> for SelectRequest<O> {
     fn from(inner: CommonRequest) -> Self {
         SelectRequest {
             inner,
@@ -666,7 +1009,7 @@ impl<V> From<CommonRequest> for SelectRequest<V> {
     }
 }
 
-impl<V> Deref for SelectRequest<V> {
+impl<O> Deref for SelectRequest<O> {
     type Target = CommonRequest;
 
     fn deref(&self) -> &Self::Target {
@@ -674,19 +1017,19 @@ impl<V> Deref for SelectRequest<V> {
     }
 }
 
-impl<V> DerefMut for SelectRequest<V> {
+impl<O> DerefMut for SelectRequest<O> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<V> Debug for SelectRequest<V> {
+impl<O> Debug for SelectRequest<O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectRequest").field("inner", &self.inner).finish()
     }
 }
 
-impl<V> Clone for SelectRequest<V> {
+impl<O> Clone for SelectRequest<O> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -695,7 +1038,7 @@ impl<V> Clone for SelectRequest<V> {
     }
 }
 
-impl<V: 'static> Request for SelectRequest<V> {
+impl<O: 'static> Request for SelectRequest<O> {
     fn token(&self) -> i64 {
         self.inner.token()
     }
@@ -709,19 +1052,19 @@ impl<V: 'static> Request for SelectRequest<V> {
     }
 }
 
-impl<V> SelectRequest<V> {
+impl<O> SelectRequest<O> {
     /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
     /// decoder in order to decode the response inside handle_response method.
-    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<V>> {
+    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<O>> {
         DecodeResult::select()
     }
 }
 
-impl<V> SendRequestExt for SelectRequest<V>
+impl<O> SendRequestExt for SelectRequest<O>
 where
-    V: 'static + Send + RowsDecoder + Debug,
+    O: 'static + Send + RowsDecoder + Debug,
 {
-    type Marker = DecodeRows<V>;
+    type Marker = DecodeRows<O>;
     type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Select;
 

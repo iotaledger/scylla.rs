@@ -13,8 +13,8 @@ use super::{
         BE_UNSET_BYTES_LEN,
     },
     opcode::BATCH,
+    Binder,
     Statements,
-    Values,
     MD5_BE_LENGTH,
 };
 use crate::cql::compression::{
@@ -244,11 +244,9 @@ impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchStatementOrId
     }
 }
 
-impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
-    type Return = BatchBuilder<Type, BatchValues>;
-
+impl<Type: Copy + Into<u8>> Binder for BatchBuilder<Type, BatchValues> {
     /// Set the value in the Batch frame.
-    fn value<V: ColumnEncoder + ?Sized>(mut self, value: &V) -> Self::Return
+    fn value<V: ColumnEncoder + Sync>(mut self, value: V) -> Self
     where
         Self: Sized,
     {
@@ -258,7 +256,7 @@ impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
     }
 
     /// Set the value to be unset in the Batch frame.
-    fn unset_value(mut self) -> Self::Return
+    fn unset_value(mut self) -> Self
     where
         Self: Sized,
     {
@@ -268,19 +266,12 @@ impl<Type: Copy + Into<u8>> Values for BatchBuilder<Type, BatchValues> {
     }
 
     /// Set the value to be null in the Batch frame.
-    fn null_value(mut self) -> Self::Return
+    fn null_value(mut self) -> Self
     where
         Self: Sized,
     {
         self.buffer.extend(&BE_NULL_BYTES_LEN);
         self.stage.value_count += 1;
-        self
-    }
-
-    fn skip_value(self) -> Self::Return
-    where
-        Self: Sized,
-    {
         self
     }
 }

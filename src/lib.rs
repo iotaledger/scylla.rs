@@ -18,6 +18,7 @@ pub mod prelude {
         },
         cql::{
             Batch,
+            Binder,
             ColumnDecoder,
             ColumnEncoder,
             ColumnValue,
@@ -34,7 +35,6 @@ pub mod prelude {
             RowsDecoder,
             Statements,
             TokenEncoder,
-            Values,
             VoidDecoder,
         },
     };

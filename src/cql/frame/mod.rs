@@ -64,6 +64,15 @@ pub use query::{
 };
 pub use rows::*;
 pub use std::convert::TryInto;
+use std::{
+    collections::HashMap,
+    io::Cursor,
+};
+
+use self::encoder::{
+    Null,
+    Unset,
+};
 
 /// Big Endian 16-length, used for MD5 ID
 const MD5_BE_LENGTH: [u8; 2] = [0, 16];
@@ -86,126 +95,164 @@ pub trait Statements {
     fn id(self, id: &[u8; 16]) -> Self::Return;
 }
 
-/// Defines shared functionality for frames that can receive statement values
-pub trait Values {
-    /// The return type after applying a value
-    type Return: Values<Return = Self::Return>;
+/// Defines how values are bound to the frame
+pub trait Binder {
     /// Add a single value
-    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Self::Return
+    fn value<V: ColumnEncoder + Sync>(self, value: V) -> Self
     where
         Self: Sized;
     /// Add a slice of values
-    fn bind<V: Bindable + ?Sized>(self, values: &V) -> Self::Return
+    fn bind<V: Bindable<Self> + Sync>(self, values: V) -> Self
     where
         Self: Sized,
     {
         values.bind(self)
     }
-
     /// Unset value
-    fn unset_value(self) -> Self::Return
+    fn unset_value(self) -> Self
     where
         Self: Sized;
     /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> Self::Return
+    fn null_value(self) -> Self
     where
         Self: Sized;
 
     /// Skip binding a value
-    fn skip_value(self) -> Self::Return
-    where
-        Self: Sized;
-}
-
-/// Defines dynamic versions of `Values` functions
-pub trait DynValues: Values {
-    /// Add a single dynamic value
-    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return;
-    /// Unset value dynamically
-    fn dyn_unset_value(self: Box<Self>) -> Self::Return;
-    /// Set Null value dynamically, note: for write queries this will create tombstone for V;
-    fn dyn_null_value(self: Box<Self>) -> Self::Return;
-    /// Skip binding a value dynamically
-    fn dyn_skip_value(self: Box<Self>) -> Self::Return;
-}
-impl<T> DynValues for T
-where
-    T: Values,
-{
-    fn dyn_value(self: Box<Self>, value: &dyn ColumnEncoder) -> Self::Return {
-        (*self).value(value)
-    }
-
-    fn dyn_unset_value(self: Box<Self>) -> Self::Return {
-        (*self).unset_value()
-    }
-
-    fn dyn_null_value(self: Box<Self>) -> Self::Return {
-        (*self).null_value()
-    }
-
-    fn dyn_skip_value(self: Box<Self>) -> Self::Return {
-        (*self).skip_value()
-    }
-}
-
-impl<T: DynValues + ?Sized> Values for Box<T> {
-    type Return = T::Return;
-
-    fn value<V: ColumnEncoder + ?Sized>(self, value: &V) -> Self::Return
+    fn skip_value(self) -> Self
     where
         Self: Sized,
     {
-        T::dyn_value(self, &value)
-    }
-
-    fn unset_value(self) -> Self::Return
-    where
-        Self: Sized,
-    {
-        T::dyn_unset_value(self)
-    }
-
-    fn null_value(self) -> Self::Return
-    where
-        Self: Sized,
-    {
-        T::dyn_null_value(self)
-    }
-
-    fn skip_value(self) -> Self::Return
-    where
-        Self: Sized,
-    {
-        T::dyn_skip_value(self)
+        self
     }
 }
 
 /// Defines a query bindable value
-pub trait Bindable {
+pub trait Bindable<B: Binder> {
     /// Bind the value using the provided binder
-    fn bind<V: Values>(&self, binder: V) -> V::Return;
+    fn bind(&self, binder: B) -> B;
 }
 
-impl<T: ColumnEncoder> Bindable for T {
-    fn bind<V: Values>(&self, binder: V) -> V::Return {
+macro_rules! impl_token_col_encoder {
+    ($($t:ty),*) => {
+        $(
+            impl<B: Binder> Bindable<B> for $t {
+                fn bind(&self, binder: B) -> B {
+                    binder.value(self)
+                }
+            }
+        )*
+    };
+}
+
+impl_token_col_encoder!(
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
+    bool,
+    String,
+    str,
+    Cursor<Vec<u8>>,
+    Unset,
+    Null
+);
+
+impl<B: Binder, T: ColumnEncoder + Sync> Bindable<B> for Vec<T> {
+    fn bind(&self, binder: B) -> B {
         binder.value(self)
     }
 }
 
-impl<T: Bindable> Bindable for [T] {
-    fn bind<V: Values>(&self, binder: V) -> V::Return {
-        match self.len() {
-            0 => binder.skip_value(),
-            1 => binder.bind(self.first().unwrap()),
-            _ => {
-                let mut iter = self.iter();
-                let mut builder = binder.bind(iter.next().unwrap());
-                for v in iter {
-                    builder = builder.bind(v);
-                }
-                builder
-            }
-        }
+impl<B: Binder, K: ColumnEncoder + Sync, V: ColumnEncoder + Sync> Bindable<B> for HashMap<K, V> {
+    fn bind(&self, binder: B) -> B {
+        binder.value(self)
     }
 }
+
+impl<B: Binder, T: ColumnEncoder + Sync> Bindable<B> for Option<T> {
+    fn bind(&self, binder: B) -> B {
+        binder.value(self)
+    }
+}
+
+impl<B: Binder, T: Bindable<B> + ?Sized> Bindable<B> for &T {
+    fn bind(&self, binder: B) -> B {
+        (*self).bind(binder)
+    }
+}
+
+impl<B: Binder> Bindable<B> for () {
+    fn bind(&self, binder: B) -> B {
+        binder.skip_value()
+    }
+}
+
+impl<B: Binder, T: Bindable<B> + Sync> Bindable<B> for [T] {
+    fn bind(&self, mut binder: B) -> B {
+        for v in self.iter() {
+            binder = binder.bind(v);
+        }
+        binder
+    }
+}
+
+macro_rules! impl_tuple_bind {
+    ($(($t:tt, $n:tt)),*) => {
+        impl<B: Binder, $($t: Bindable<B> + Sync),*> Bindable<B> for ($(&$t),*,) {
+            fn bind(&self, binder: B) -> B {
+                binder$(.bind(self.$n))*
+            }
+        }
+    };
+}
+
+impl_tuple_bind!((T0, 0));
+impl_tuple_bind!((T0, 0), (T1, 1));
+impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2));
+impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3));
+impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4));
+impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4), (T5, 5));
+impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4), (T5, 5), (T6, 6));
+impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4), (T5, 5), (T6, 6), (T7, 7));
+impl_tuple_bind!(
+    (T0, 0),
+    (T1, 1),
+    (T2, 2),
+    (T3, 3),
+    (T4, 4),
+    (T5, 5),
+    (T6, 6),
+    (T7, 7),
+    (T8, 8)
+);
+impl_tuple_bind!(
+    (T0, 0),
+    (T1, 1),
+    (T2, 2),
+    (T3, 3),
+    (T4, 4),
+    (T5, 5),
+    (T6, 6),
+    (T7, 7),
+    (T8, 8),
+    (T9, 9)
+);
+impl_tuple_bind!(
+    (T0, 0),
+    (T1, 1),
+    (T2, 2),
+    (T3, 3),
+    (T4, 4),
+    (T5, 5),
+    (T6, 6),
+    (T7, 7),
+    (T8, 8),
+    (T9, 9),
+    (T10, 10)
+);

@@ -28,9 +28,9 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     fn execute<'a>(
         &self,
         statement: &str,
-        variables: &'a [&'a (dyn ColumnEncoder + Sync)],
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         match statement_type {
             StatementType::Query => self.execute_query(statement, variables),
             StatementType::Prepared => self.execute_prepared(statement, variables),
@@ -59,8 +59,8 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     fn execute_query<'a>(
         &self,
         statement: &str,
-        variables: &'a [&'a (dyn ColumnEncoder + Sync)],
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         ExecuteBuilder {
             statement: statement.to_owned().into(),
             variables,
@@ -90,8 +90,8 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     fn execute_prepared<'a>(
         &self,
         statement: &str,
-        variables: &'a [&'a (dyn ColumnEncoder + Sync)],
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         ExecuteBuilder {
             statement: statement.to_owned().into(),
             variables,
@@ -122,9 +122,9 @@ where
     /// ```
     fn as_execute<'a>(
         &self,
-        variables: &'a [&'a (dyn ColumnEncoder + Sync)],
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         match statement_type {
             StatementType::Query => self.as_execute_query(variables),
             StatementType::Prepared => self.as_execute_prepared(variables),
@@ -147,8 +147,8 @@ where
     /// ```
     fn as_execute_query<'a>(
         &self,
-        variables: &'a [&'a (dyn ColumnEncoder + Sync)],
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         let statement = self.to_statement();
         ExecuteBuilder {
             builder: QueryStatement::encode_statement(Query::new(), &statement),
@@ -173,8 +173,8 @@ where
     /// ```
     fn as_execute_prepared<'a>(
         &self,
-        variables: &'a [&'a (dyn ColumnEncoder + Sync)],
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         let statement = self.to_statement();
         ExecuteBuilder {
             builder: PreparedStatement::encode_statement(Query::new(), &statement),
@@ -193,12 +193,12 @@ pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
     pub(crate) builder: QueryBuilder<Stage>,
 }
 
-impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> {
+impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
     pub fn consistency(
         self,
         consistency: Consistency,
-    ) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryValues> {
-        let builder = self.builder.consistency(consistency).bind(self.variables);
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryValues> {
+        let builder = self.builder.consistency(consistency).bind_values().bind(self.variables);
         ExecuteBuilder {
             statement: self.statement,
             variables: self.variables,
@@ -206,13 +206,17 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> 
         }
     }
 
-    pub fn timestamp(self, timestamp: i64) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryBuild> {
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
         ExecuteBuilder {
             statement: self.statement,
             variables: self.variables,
             builder: self
                 .builder
                 .consistency(Consistency::Quorum)
+                .bind_values()
                 .bind(self.variables)
                 .timestamp(timestamp),
         }
@@ -222,6 +226,7 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> 
         let query = self
             .builder
             .consistency(Consistency::Quorum)
+            .bind_values()
             .bind(self.variables)
             .build()?;
         // create the request
@@ -234,8 +239,11 @@ impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryConsistency> 
     }
 }
 
-impl<'a> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryValues> {
-    pub fn timestamp(self, timestamp: i64) -> ExecuteBuilder<'a, [&'a (dyn ColumnEncoder + Sync)], QueryBuild> {
+impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryValues> {
+    pub fn timestamp(
+        self,
+        timestamp: i64,
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
         ExecuteBuilder {
             statement: self.statement,
             variables: self.variables,

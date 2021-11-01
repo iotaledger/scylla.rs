@@ -368,7 +368,56 @@ pub trait TokenEncoder {
     }
 }
 
-impl<T: ColumnEncoder> TokenEncoder for T {
+macro_rules! impl_token_col_encoder {
+    ($($t:ty),*) => {
+        $(
+            impl TokenEncoder for $t {
+                fn encode_token(&self) -> TokenEncodeChain {
+                    TokenEncodeChain {
+                        len: 1,
+                        buffer: Some(self.encode_new()[2..].into()),
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_token_col_encoder!(
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
+    bool,
+    String,
+    str,
+    Cursor<Vec<u8>>,
+    Unset,
+    Null
+);
+
+impl<T: TokenEncoder + ?Sized> TokenEncoder for &T {
+    fn encode_token(&self) -> TokenEncodeChain {
+        T::encode_token(*self)
+    }
+}
+
+impl<T: ColumnEncoder> TokenEncoder for Vec<T> {
+    fn encode_token(&self) -> TokenEncodeChain {
+        TokenEncodeChain {
+            len: 1,
+            buffer: Some(self.encode_new()[2..].into()),
+        }
+    }
+}
+
+impl<K: ColumnEncoder, V: ColumnEncoder> TokenEncoder for HashMap<K, V> {
     fn encode_token(&self) -> TokenEncodeChain {
         TokenEncodeChain {
             len: 1,
