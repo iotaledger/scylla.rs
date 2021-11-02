@@ -193,7 +193,7 @@ impl ColumnEncoder for String {
         buffer.extend(self.bytes());
     }
 }
-impl ColumnEncoder for &str {
+impl ColumnEncoder for str {
     fn encode(&self, buffer: &mut Vec<u8>) {
         buffer.extend(&i32::to_be_bytes(self.len() as i32));
         buffer.extend(self.bytes());
@@ -300,6 +300,15 @@ pub struct TokenEncodeChain {
     buffer: Option<Vec<u8>>,
 }
 
+impl<T: ColumnEncoder + ?Sized> From<&T> for TokenEncodeChain {
+    fn from(t: &T) -> Self {
+        TokenEncodeChain {
+            len: 1,
+            buffer: Some(t.encode_new()[2..].into()),
+        }
+    }
+}
+
 impl TokenEncodeChain {
     /// Chain a new value
     pub fn chain<T: TokenEncoder + ?Sized>(mut self, other: &T) -> Self
@@ -373,10 +382,7 @@ macro_rules! impl_token_col_encoder {
         $(
             impl TokenEncoder for $t {
                 fn encode_token(&self) -> TokenEncodeChain {
-                    TokenEncodeChain {
-                        len: 1,
-                        buffer: Some(self.encode_new()[2..].into()),
-                    }
+                    self.into()
                 }
             }
         )*
