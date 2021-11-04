@@ -1,0 +1,79 @@
+[package]
+name = "scylla-rs"
+version = "0.2.0"
+authors = ["IOTA Stiftung"]
+edition = "2018"
+license-file = "LICENSE"
+homepage = "https://www.iota.org"
+repository = "https://github.com/iotaledger/scylla.rs"
+description = "An async ScyllaDB driver built on an actor-model framework"
+keywords = ["iota", "scylla", "cassandra", "database", "driver"]
+exclude = [".github/**/*"]
+
+[dependencies]
+# CQL
+lz4 = "1.23"
+snap = "1.0"
+port_scanner = "0.1"
+tokio = { version = "1.12", features = ["io-util", "net"] }
+anyhow = "1.0"
+log = "0.4"
+thiserror = "1.0"
+num-derive = "0.3"
+num-traits = "0.2"
+md5 = "0.7"
+scylla-macros = { path = "../scylla-macros" }
+
+# App
+#backstage = { version = "0.1", optional = true }
+backstage = { git = "https://github.com/iotaledger/backstage", default-features = false, branch = "stable", optional = true, features = ["backserver"] }
+async-trait = { version = "0.1", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+tokio-tungstenite = { version = "0.15", optional = true }
+futures = { version = "0.3", optional = true }
+futures-util = { version = "0.3", optional = true }
+rand = { version = "0.8", optional = true }
+url = { version = "2.2", optional = true }
+num_cpus = { version = "1.13", optional = true }
+dyn-clone = { version = "1.0", optional = true }
+
+[dev-dependencies]
+env_logger = "0.9"
+tokio = { version = "1.12", features = ["macros", "rt-multi-thread", "signal", "net", "io-util"] }
+scylla = "0.2"
+
+[[example]]
+name = "scylla"
+path = "examples/scylla.rs"
+
+[[example]]
+name = "ws_scylla"
+path = "examples/ws_scylla.rs"
+required-features = ["backstage/backserver"]
+
+[[example]]
+name = "benchmark"
+path = "examples/benchmark.rs"
+
+[[example]]
+name = "compare"
+path = "examples/compare.rs"
+
+[features]
+default = ["app"]
+app = [
+    "backstage",
+    "backstage/prefabs",
+    "backstage/tungstenite",
+    "async-trait",
+    "serde",
+    "serde_json",
+    "tokio-tungstenite",
+    "futures",
+    "futures-util",
+    "rand",
+    "url",
+    "num_cpus",
+    "dyn-clone"
+]

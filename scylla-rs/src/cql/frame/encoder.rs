@@ -414,21 +414,21 @@ impl<T: TokenEncoder + ?Sized> TokenEncoder for &T {
     }
 }
 
+impl<T: ColumnEncoder> TokenEncoder for Option<T> {
+    fn encode_token(&self) -> TokenEncodeChain {
+        self.into()
+    }
+}
+
 impl<T: ColumnEncoder> TokenEncoder for Vec<T> {
     fn encode_token(&self) -> TokenEncodeChain {
-        TokenEncodeChain {
-            len: 1,
-            buffer: Some(self.encode_new()[2..].into()),
-        }
+        self.into()
     }
 }
 
 impl<K: ColumnEncoder, V: ColumnEncoder> TokenEncoder for HashMap<K, V> {
     fn encode_token(&self) -> TokenEncodeChain {
-        TokenEncodeChain {
-            len: 1,
-            buffer: Some(self.encode_new()[2..].into()),
-        }
+        self.into()
     }
 }
 
@@ -440,4 +440,39 @@ impl<T: TokenEncoder> TokenEncoder for [T] {
         }
         token_chain
     }
+}
+
+use super::{
+    ColumnDecoder,
+    ColumnValue,
+    Row,
+};
+use scylla_macros::{
+    Column,
+    ColumnDecoder,
+    ColumnEncoder,
+    Row,
+    TokenEncoder,
+};
+#[derive(ColumnEncoder, ColumnDecoder)]
+struct MyStruct(u8, f32, #[decode(String)] Option<String>);
+
+impl std::fmt::Display for MyStruct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+#[derive(Row)]
+enum MyEnum {
+    A(u8, u16),
+    B(f32),
+    C { s: MyStruct, o: u32 },
+}
+
+#[derive(Row)]
+struct TokenStruct {
+    a: u8,
+    b: f32,
+    c: Option<String>,
 }
