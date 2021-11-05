@@ -304,15 +304,43 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
+    /// Send this request and worker to a specific reporter, without waiting for a response
+    fn send_to_reporter_with_worker<W: 'static + RetryableWorker<Self>>(
+        self,
+        reporter: &ReporterHandle,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        worker.send_to_reporter(reporter)?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
     /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_local(self.token(), self.payload(), self.worker())?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
+    /// Send this request and worker to the local datacenter, without waiting for a response
+    fn send_local_with_worker<W: 'static + Worker>(
+        self,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_local(self.token(), self.payload(), worker)?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
     /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_global(self.token(), self.payload(), self.worker())?;
+        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+    }
+
+    /// Send this request and worker to a global datacenter, without waiting for a response
+    fn send_global_with_worker<W: 'static + Worker>(
+        self,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_global(self.token(), self.payload(), worker)?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
@@ -325,12 +353,35 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self.worker().get_local().await
     }
 
+    /// Send this request to the local datacenter and await the response asynchronously
+    async fn get_local_with_worker<W: 'static + RetryableWorker<Self>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        worker.get_local().await
+    }
+
     /// Send this request to the local datacenter and await the response synchronously
     fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
     {
         self.worker().get_local_blocking()
+    }
+
+    /// Send this request to the local datacenter and await the response synchronously
+    fn get_local_blocking_with_worker<W: 'static + RetryableWorker<Self>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        worker.get_local_blocking()
     }
 
     /// Send this request to a global datacenter and await the response asynchronously
@@ -342,12 +393,35 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self.worker().get_global().await
     }
 
+    /// Send this request to a global datacenter and await the response asynchronously
+    async fn get_global_with_worker<W: 'static + RetryableWorker<Self>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        worker.get_global().await
+    }
+
     /// Send this request to a global datacenter and await the response synchronously
     fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
     {
         self.worker().get_global_blocking()
+    }
+
+    /// Send this request to a global datacenter and await the response synchronously
+    fn get_global_blocking_with_worker<W: 'static + RetryableWorker<Self>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+    {
+        worker.get_global_blocking()
     }
 }
 
