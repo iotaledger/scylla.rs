@@ -35,7 +35,7 @@ use super::{
 pub use crate::{
     app::{
         ring::{
-            Ring,
+            shared::SharedRing,
             RingSendError,
         },
         stage::reporter::ReporterEvent,
@@ -146,6 +146,8 @@ pub enum RequestType {
 pub trait ToStatement: DynClone + Debug + Send + Sync {
     /// Get the statement from this type
     fn to_statement(&self) -> Cow<'static, str>;
+    /// Get the keyspace name from this type
+    fn keyspace(&self) -> Cow<'static, str>;
 }
 dyn_clone::clone_trait_object!(ToStatement);
 
@@ -220,11 +222,17 @@ impl<S: Update<K, V, U> + Debug, K, V, U> ToStatement for UpdateStatement<S, K, 
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
     }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
+    }
 }
 
 impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
     }
 }
 
@@ -232,11 +240,17 @@ impl<S: Delete<K, V, D> + Debug, K, V, D> ToStatement for DeleteStatement<S, K, 
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
     }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
+    }
 }
 
 impl<S: Select<K, V, O> + Debug, K, V, O> ToStatement for SelectStatement<S, K, V, O> {
     fn to_statement(&self) -> Cow<'static, str> {
         self.0.statement()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
     }
 }
 
@@ -244,11 +258,19 @@ impl ToStatement for String {
     fn to_statement(&self) -> Cow<'static, str> {
         self.clone().into()
     }
+    fn keyspace(&self) -> Cow<'static, str> {
+        // Todo parse the keyspace from the cql statement or default to empty string
+        String::new().into()
+    }
 }
 
 impl ToStatement for &str {
     fn to_statement(&self) -> Cow<'static, str> {
         self.to_string().into()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        // Todo parse the keyspace from the cql statement or default to empty string
+        String::new().into()
     }
 }
 
@@ -283,6 +305,9 @@ pub trait Request {
 
     /// Get the request payload
     fn payload(&self) -> Vec<u8>;
+
+    /// get the keyspace of the request
+    fn keyspace(&self) -> String;
 }
 
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
@@ -316,7 +341,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 
     /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(self.token(), self.payload(), self.worker())?;
+        send_local(&self.keyspace(), self.token(), self.payload(), self.worker())?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
@@ -325,13 +350,12 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(self.token(), self.payload(), worker)?;
+        send_local(&self.keyspace(), self.token(), self.payload(), worker)?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
-
     /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(self.token(), self.payload(), self.worker())?;
+        send_global(&self.keyspace(), self.token(), self.payload(), self.worker())?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
@@ -340,10 +364,9 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(self.token(), self.payload(), worker)?;
+        send_global(&self.keyspace(), self.token(), self.payload(), worker)?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
-
     /// Send this request to the local datacenter and await the response asynchronously
     async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
@@ -428,6 +451,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 /// A common request type which contains only the bare minimum information needed
 #[derive(Debug, Clone)]
 pub struct CommonRequest {
+    pub(crate) keyspace_name: String,
     pub(crate) token: i64,
     pub(crate) payload: Vec<u8>,
     pub(crate) statement: Cow<'static, str>,
@@ -435,8 +459,9 @@ pub struct CommonRequest {
 
 impl CommonRequest {
     #[allow(missing_docs)]
-    pub fn new(statement: &str, payload: Vec<u8>) -> Self {
+    pub fn new<T: Into<String>>(keyspace_name: T, statement: &str, payload: Vec<u8>) -> Self {
         Self {
+            keyspace_name: keyspace_name.into(),
             token: 0,
             payload,
             statement: statement.to_string().into(),
@@ -455,6 +480,9 @@ impl Request for CommonRequest {
 
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
+    }
+    fn keyspace(&self) -> String {
+        self.keyspace_name.to_owned().clone().into()
     }
 }
 
@@ -548,6 +576,7 @@ pub struct DecodeVoid;
 
 impl DecodeVoid {
     /// Decode a result payload using the `VoidDecoder` impl
+    #[inline]
     pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
         VoidDecoder::try_decode_void(bytes.try_into()?)
     }
@@ -618,17 +647,19 @@ impl<V> DecodeResult<DecodeRows<V>> {
 }
 
 /// Send a local request to the Ring
-pub fn send_local(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
+#[inline]
+pub fn send_local(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
-    Ring::send_local_random_replica(token, request)
+    SharedRing::send_local_random_replica(keyspace, token, request)
 }
 
 /// Send a global request to the Ring
-pub fn send_global(token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
+#[inline]
+pub fn send_global(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
-    Ring::send_global_random_replica(token, request)
+    SharedRing::send_global_random_replica(keyspace, token, request)
 }
 
 impl<T> Deref for DecodeResult<T> {
@@ -849,7 +880,7 @@ pub mod tests {
                     .expect("Invalid SCYLLA_NODE env, use this format '127.0.0.1:19042' ")
             },
         );
-        let runtime = Runtime::new(None, Scylla::new("datacenter1", num_cpus::get(), 2, Default::default()))
+        let runtime = Runtime::new(None, Scylla::default())
             .await
             .expect("Runtime failed to start!");
         let cluster_handle = runtime
@@ -858,7 +889,7 @@ pub mod tests {
             .await
             .expect("Failed to acquire cluster handle!");
         cluster_handle.add_node(node).await.expect("Failed to add node!");
-        cluster_handle.build_ring(1).await.expect("Failed to build ring!");
+        cluster_handle.build_ring().await.expect("Failed to build ring!");
         backstage::spawn_task("adding node task", async move {
             "scylla_example"
                 .insert_query_with(

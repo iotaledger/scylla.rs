@@ -29,19 +29,15 @@ async fn main() {
     let mut timings = combinations.map(|(n, r)| (n, r, 0u128)).collect::<Vec<_>>();
 
     for (n, r, t) in timings.iter_mut() {
-        let runtime = Runtime::new(
-            None,
-            Scylla::new("datacenter1", num_cpus::get(), *r, Default::default()),
-        )
-        .await
-        .expect("Runtime failed to start!");
-        let cluster_handle = runtime
-            .handle()
-            .cluster_handle()
-            .await
-            .expect("Failed to acquire cluster handle!");
-        cluster_handle.add_node(node).await.expect("Failed to add node!");
-        cluster_handle.build_ring(1).await.expect("Failed to build ring!");
+        let mut scylla = Scylla::new("datacenter1", *r, Default::default());
+        scylla.insert_node(node);
+        scylla.insert_keyspace(KeyspaceConfig {
+            name: "scylla_example".into(),
+            data_centers: maplit::hashmap! {
+                "datacenter1".to_string() => DatacenterConfig {replication_factor: 1}
+            },
+        });
+        let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
         match run_benchmark(*n).await {
             Ok(time) => {
                 *t = time;
@@ -174,7 +170,7 @@ impl Select<String, (), i32> for MyKeyspace {
         format!("SELECT data FROM {}.test WHERE key = ?", self.name()).into()
     }
 
-    fn bind_values<T: Binder>(builder: T, key: &String, variables: &()) -> T {
+    fn bind_values<T: Binder>(builder: T, key: &String, _variables: &()) -> T {
         builder.value(key)
     }
 }

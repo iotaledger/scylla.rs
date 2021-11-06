@@ -144,6 +144,7 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     {
         UpdateBuilder {
             keyspace: PhantomData,
+            keyspace_name: self.name(),
             statement: self.statement(),
             key,
             variables,
@@ -217,6 +218,7 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
         Self: Update<K, V, U>,
     {
         UpdateBuilder {
+            keyspace_name: self.name(),
             keyspace: PhantomData,
             statement: self.statement(),
             key,
@@ -291,6 +293,7 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
         Self: Update<K, V, U>,
     {
         UpdateBuilder {
+            keyspace_name: self.name(),
             keyspace: PhantomData,
             statement: self.statement(),
             key,
@@ -376,6 +379,7 @@ pub trait GetDynamicUpdateRequest: Keyspace {
         DynamicRequest,
     > {
         UpdateBuilder {
+            keyspace_name: self.name(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -418,6 +422,8 @@ pub trait GetDynamicUpdateRequest: Keyspace {
         DynamicRequest,
     > {
         UpdateBuilder {
+            keyspace_name: self.name(),
+
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -495,6 +501,7 @@ where
     > {
         let statement = self.to_statement();
         UpdateBuilder {
+            keyspace_name: self.keyspace().clone().into(),
             _marker: DynamicRequest,
             keyspace: PhantomData,
             builder: QueryStatement::encode_statement(Query::new(), &statement),
@@ -532,6 +539,7 @@ where
     > {
         let statement = self.to_statement();
         UpdateBuilder {
+            keyspace_name: self.keyspace().clone().into(),
             _marker: DynamicRequest,
             keyspace: PhantomData,
             builder: PreparedStatement::encode_statement(Query::new(), &statement),
@@ -548,6 +556,7 @@ impl<S: Keyspace> GetDynamicUpdateRequest for S {}
 impl<S: ToStatement> AsDynamicUpdateRequest for S {}
 
 pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, U: ?Sized, Stage, T> {
+    pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: Cow<'static, str>,
     pub(crate) key: &'a K,
@@ -561,6 +570,7 @@ impl<'a, S: Update<K, V, U>, K: TokenEncoder, V, U> UpdateBuilder<'a, S, K, V, U
     pub fn consistency(self, consistency: Consistency) -> UpdateBuilder<'a, S, K, V, U, QueryValues, StaticRequest> {
         UpdateBuilder {
             _marker: self._marker,
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -577,6 +587,7 @@ impl<'a, S: Update<K, V, U>, K: TokenEncoder, V, U> UpdateBuilder<'a, S, K, V, U
 
     pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, U, QueryBuild, StaticRequest> {
         UpdateBuilder {
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -603,6 +614,7 @@ impl<'a, S: Update<K, V, U>, K: TokenEncoder, V, U> UpdateBuilder<'a, S, K, V, U
         .build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
@@ -645,6 +657,7 @@ impl<'a, S: Keyspace>
             _marker: ManualBoundRequest {
                 bind_fn: Box::new(bind_fn),
             },
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -674,6 +687,7 @@ impl<'a, S: Keyspace>
             .bind(self.key);
         UpdateBuilder {
             _marker: self._marker,
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -696,6 +710,7 @@ impl<'a, S: Keyspace>
         DynamicRequest,
     > {
         UpdateBuilder {
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -722,6 +737,7 @@ impl<'a, S: Keyspace>
             .build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
@@ -755,6 +771,7 @@ impl<'a, S: Keyspace>
     > {
         UpdateBuilder {
             _marker: DynamicRequest,
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -781,6 +798,7 @@ impl<'a, S: Keyspace>
         DynamicRequest,
     > {
         UpdateBuilder {
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -805,6 +823,7 @@ impl<'a, S: Keyspace>
         .build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
@@ -816,6 +835,7 @@ impl<'a, S: Keyspace>
 impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, U: ?Sized, T> UpdateBuilder<'a, S, K, V, U, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> UpdateBuilder<'a, S, K, V, U, QueryBuild, T> {
         UpdateBuilder {
+            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -830,6 +850,7 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, U: ?Sized, T> UpdateBuilder<'a,
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
@@ -843,6 +864,7 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, U: ?Sized, T> UpdateBuilder<'a,
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
             statement: self.statement,
@@ -886,6 +908,9 @@ impl Request for UpdateRequest {
 
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
+    }
+    fn keyspace(&self) -> String {
+        self.0.keyspace()
     }
 }
 

@@ -33,7 +33,7 @@ async fn ws_client() {
     let add_node_json = serde_json::to_string(&add_node_event).expect("Failed to serialize Add Node event!");
     let request = Interface::new(actor_path.clone(), Event::Call(add_node_json.into()));
     stream.send(request.to_message()).await.unwrap();
-    let build_ring_event = Topology::BuildRing(1);
+    let build_ring_event = Topology::BuildRing;
     let build_ring_json = serde_json::to_string(&build_ring_event).expect("Failed to serialize Build Node event!");
     let request = Interface::new(actor_path.clone(), Event::Call(build_ring_json.into()));
     stream.send(request.to_message()).await.unwrap();

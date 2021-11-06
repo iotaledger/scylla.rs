@@ -19,18 +19,70 @@ use backstage::core::{
     UnboundedChannel,
     UnboundedHandle,
 };
+use maplit::hashmap;
 use serde::{
     Deserialize,
     Serialize,
 };
+use std::{
+    collections::{
+        HashMap,
+        HashSet,
+    },
+    net::SocketAddr,
+};
+/// Scylla handle
+pub type ScyllaHandle = UnboundedHandle<ScyllaEvent>;
+/// Type alias for datacenter names
+pub type DatacenterName = String;
+/// Type alias for scylla keysapce names
+pub type KeyspaceName = String;
+
+/// Configuration for a scylla datacenter
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct DatacenterConfig {
+    /// The scylla replication factor for this datacenter
+    pub replication_factor: u8,
+}
+
+impl Default for KeyspaceConfig {
+    fn default() -> Self {
+        Self {
+            name: "permanode".to_string(),
+            data_centers: hashmap! {
+                "datacenter1".to_string() => DatacenterConfig {
+                    replication_factor: 2,
+                },
+            },
+        }
+    }
+}
+
+impl std::hash::Hash for KeyspaceConfig {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        self.name.hash(hasher)
+    }
+}
+
+/// Configuration for a scylla keyspace
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct KeyspaceConfig {
+    /// The name of the keyspace
+    pub name: KeyspaceName,
+    /// Datacenters configured for this keyspace, keyed by name
+    pub data_centers: HashMap<DatacenterName, DatacenterConfig>,
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 /// Application state
 pub struct Scylla {
     /// The local data center from the scylla driver perspective
     pub local_dc: String,
-    /// The thread count (workers threads in tokio term)
-    pub thread_count: usize,
+    /// The initial scylla nodes
+    pub nodes: HashSet<SocketAddr>,
+    /// Keyspace definition for this cluster, keyed by the network
+    /// they will pull data from
+    pub keyspaces: HashSet<KeyspaceConfig>,
     /// Reporter count per stage
     pub reporter_count: u8,
     /// Optional buffer size used by the stage's connection
@@ -47,7 +99,8 @@ impl Default for Scylla {
     fn default() -> Self {
         Self {
             local_dc: "datacenter1".to_string(),
-            thread_count: num_cpus::get(),
+            nodes: HashSet::new(),
+            keyspaces: HashSet::new(),
             reporter_count: 2,
             buffer_size: None,
             recv_buffer_size: None,
@@ -58,22 +111,34 @@ impl Default for Scylla {
 }
 
 impl Scylla {
-    /// Create new Scylla instance
-    pub fn new<T: Into<String>>(
-        local_datacenter: T,
-        thread_count: usize,
-        reporter_count: u8,
-        password_auth: PasswordAuth,
-    ) -> Self {
+    /// Create new Scylla instance with empty nodes and keyspaces
+    pub fn new<T: Into<String>>(local_datacenter: T, reporter_count: u8, password_auth: PasswordAuth) -> Self {
         Self {
             local_dc: local_datacenter.into(),
-            thread_count,
+            nodes: HashSet::new(),
+            keyspaces: HashSet::new(),
             reporter_count,
             buffer_size: None,
             recv_buffer_size: None,
             send_buffer_size: None,
             authenticator: password_auth,
         }
+    }
+    pub fn insert_node(&mut self, node: SocketAddr) -> &mut Self {
+        self.nodes.insert(node);
+        self
+    }
+    pub fn remove_node(&mut self, node: &SocketAddr) -> &mut Self {
+        self.nodes.remove(&node);
+        self
+    }
+    pub fn insert_keyspace(&mut self, keyspace: KeyspaceConfig) -> &mut Self {
+        self.keyspaces.insert(keyspace);
+        self
+    }
+    pub fn remove_keyspace(&mut self, keyspace: &str) -> &mut Self {
+        self.keyspaces.retain(|k| k.name != keyspace);
+        self
     }
 }
 
@@ -86,6 +151,8 @@ pub enum ScyllaEvent {
     #[eol]
     /// Used by scylla children to push their service
     Microservice(ScopeId, Service),
+    /// Update state
+    UpdateState(Scylla),
     /// Shutdown signal
     #[shutdown]
     Shutdown,
@@ -106,13 +173,19 @@ where
         rt.add_resource(self.clone()).await;
         let cluster = Cluster::new();
         let cluster_handle = rt.start("cluster".to_string(), cluster).await?;
-        rt.update_status(ServiceStatus::Idle).await;
+        if rt.microservices_all(|ms| ms.is_idle()) {
+            rt.update_status(ServiceStatus::Idle).await;
+        }
         Ok(cluster_handle)
     }
     async fn run(&mut self, rt: &mut Rt<Self, S>, cluster_handle: Self::Data) -> ActorResult<()> {
         log::info!("Scylla is {}", rt.service().status());
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
+                ScyllaEvent::UpdateState(new_state) => {
+                    *self = new_state;
+                    rt.publish(self.clone()).await;
+                }
                 ScyllaEvent::GetClusterHandle(oneshot) => {
                     oneshot.send(cluster_handle.clone());
                 }

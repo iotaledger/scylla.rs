@@ -14,24 +14,13 @@ use backstage::core::UnboundedHandle;
 use rand::{
     distributions::Uniform,
     prelude::ThreadRng,
-    thread_rng,
     Rng,
 };
 use std::{
-    cell::RefCell,
     collections::HashMap,
     i64::{
         MAX,
         MIN,
-    },
-    sync::{
-        atomic::{
-            AtomicPtr,
-            AtomicU32,
-            Ordering,
-        },
-        Arc,
-        Weak,
     },
 };
 // types
@@ -62,243 +51,12 @@ pub type GlobalRing = (
     Registry,
     Vcell,
 );
-/// The atomic `GlobalRing`.
-pub type AtomicRing = AtomicPtr<Weak<GlobalRing>>;
-/// The reference counting pointer for `GlobalRing`.
-pub type ArcRing = Arc<GlobalRing>;
-/// The weak pointer for `GlobalRing`.
-pub type WeakRing = Weak<GlobalRing>;
 
-/// The Ring structure used to handle the access to ScyllaDB ring.
-pub struct Ring {
-    /// Version of the Ring
-    pub version: u32,
-    /// Most recent weak global ring
-    pub weak: Option<Weak<GlobalRing>>,
-    /// Registry which holds all scylla reporters
-    pub registry: Registry,
-    /// Root of ring (binary tree)
-    pub root: Vcell,
-    /// Uniform to sample reporter_id up to reporter_count == 255
-    pub uniform: Uniform<u8>,
-    /// Rng used by uniform to sample random number
-    pub rng: ThreadRng,
-    /// DataCenter (NOTE: the very first is the local datacenter)
-    pub dcs: Vec<DC>,
-    /// Uniform to pick random datacenter (used by send_global strategy)
-    pub uniform_dcs: Uniform<usize>,
-    /// Uniform to pick random replication refactor
-    pub uniform_rf: Uniform<usize>,
-}
-
-static mut VERSION: AtomicU32 = AtomicU32::new(0);
-static mut GLOBAL_RING: Option<AtomicRing> = None;
-
-thread_local! {
-    static RING: RefCell<Ring> = {
-        let rng = thread_rng();
-        let uniform: Uniform<u8> = Uniform::new(0,1);
-        let registry: Registry = HashMap::new();
-        let root: Vcell = DeadEnd::initial_vnode();
-        let version = 0;
-        let weak = None;
-        let dcs = vec!["".to_string()];
-        let uniform_dcs: Uniform<usize> = Uniform::new(0,dcs.len());
-        let uniform_rf: Uniform<usize> = Uniform::new(0,1);
-        RefCell::new(Ring{
-            version,
-            weak,
-            registry,
-            root,
-            uniform,
-            rng,
-            uniform_dcs,
-            uniform_rf,
-            dcs
-        })
-    };
-}
-
-#[allow(unused)]
-impl Ring {
-    /// Send request to a given data_center with the given replica_index and token.
-    pub fn send(
-        data_center: &str,
-        replica_index: usize,
-        token: Token,
-        request: ReporterEvent,
-    ) -> Result<(), RingSendError> {
-        RING.with(|local| {
-            local
-                .borrow_mut()
-                .sending()
-                .global(data_center, replica_index, token, request)
-        })
-    }
-    /// Send request to the first local datacenter with the given replica_index and token.
-    pub fn send_local(replica_index: usize, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
-        RING.with(|local| local.borrow_mut().sending().local(replica_index, token, request))
-    }
-    /// Send request to the first local datacenter with the given token and a random replica.
-    pub fn send_local_random_replica(token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
-        RING.with(|local| local.borrow_mut().sending().local_random_replica(token, request))
-    }
-    /// Send request to the global datacenter with the given token and a random replica.
-    pub fn send_global_random_replica(token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
-        RING.with(|local| local.borrow_mut().sending().global_random_replica(token, request))
-    }
-    /// Rebuild the Ring the most up to date version
-    pub fn rebuild() {
-        RING.with(|local| {
-            let mut ring = local.borrow_mut();
-            unsafe {
-                if VERSION.load(Ordering::Relaxed) != ring.version {
-                    // load weak and upgrade to arc if strong_count > 0;
-                    if let Some(mut arc) = {
-                        let global_ring = GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap();
-                        Weak::upgrade(global_ring)
-                    } {
-                        let new_weak = Arc::downgrade(&arc);
-                        let (dcs, uniform_dcs, uniform_rf, uniform, version, registry, root) = Arc::make_mut(&mut arc);
-                        // update the local ring
-                        ring.dcs = dcs.clone();
-                        ring.uniform_dcs = *uniform_dcs;
-                        ring.uniform_rf = *uniform_rf;
-                        ring.uniform = *uniform;
-                        ring.version = *version;
-                        ring.registry = registry.clone();
-                        ring.root = root.clone();
-                        ring.weak.replace(new_weak);
-                    };
-                }
-            }
-        });
-    }
-    fn sending(&mut self) -> &mut Self {
-        unsafe {
-            if VERSION.load(Ordering::Relaxed) != self.version {
-                // load weak and upgrade to arc if strong_count > 0;
-                if let Some(mut arc) =
-                    Weak::upgrade(GLOBAL_RING.as_ref().unwrap().load(Ordering::Relaxed).as_ref().unwrap())
-                {
-                    let new_weak = Arc::downgrade(&arc);
-                    let (dcs, uniform_dcs, uniform_rf, uniform, version, registry, root) = Arc::make_mut(&mut arc);
-                    // update the local ring
-                    self.dcs = dcs.clone();
-                    self.uniform_dcs = *uniform_dcs;
-                    self.uniform_rf = *uniform_rf;
-                    self.uniform = *uniform;
-                    self.version = *version;
-                    self.registry = registry.clone();
-                    self.root = root.clone();
-                    self.weak.replace(new_weak);
-                };
-            }
-        }
-        self
-    }
-    /// Return the current ring version
-    pub(crate) fn version() -> u32 {
-        unsafe { super::ring::VERSION.load(Ordering::Relaxed) }
-    }
-    fn global(
-        &mut self,
-        data_center: &str,
-        replica_index: usize,
-        token: Token,
-        request: ReporterEvent,
-    ) -> Result<(), RingSendError> {
-        // send request.
-        self.root.as_mut().search(token).send(
-            data_center,
-            replica_index,
-            token,
-            request,
-            &mut self.registry,
-            &mut self.rng,
-            self.uniform,
-        )
-    }
-    fn local(&mut self, replica_index: usize, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
-        // send request.
-        self.root.as_mut().search(token).send(
-            &self.dcs[0],
-            replica_index,
-            token,
-            request,
-            &mut self.registry,
-            &mut self.rng,
-            self.uniform,
-        )
-    }
-    fn local_random_replica(&mut self, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
-        // send request.
-        self.root.as_mut().search(token).send(
-            &self.dcs[0],
-            self.rng.sample(self.uniform_rf),
-            token,
-            request,
-            &mut self.registry,
-            &mut self.rng,
-            self.uniform,
-        )
-    }
-    fn global_random_replica(&mut self, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
-        // send request.
-        self.root.as_mut().search(token).send(
-            &self.dcs[self.rng.sample(self.uniform_dcs)],
-            self.rng.sample(self.uniform_rf),
-            token,
-            request,
-            &mut self.registry,
-            &mut self.rng,
-            self.uniform,
-        )
-    }
-    fn initialize_ring(version: u32, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
-        // create empty Registry
-        let registry: Registry = HashMap::new();
-        // create initial vnode
-        let root = DeadEnd::initial_vnode();
-        // pack Into globlal ring tuple
-        let global_ring: GlobalRing = (
-            vec!["".to_string()], // dcs
-            Uniform::new(0, 1),
-            Uniform::new(0, 1),
-            Uniform::new(0, 1),
-            version,
-            registry,
-            root,
-        );
-        // create Arc ring
-        let arc_ring = Arc::new(global_ring);
-        // downgrade to weak
-        let weak_ring = Arc::downgrade(&arc_ring);
-        // create atomicptr
-        let boxed = Box::new(weak_ring);
-        let raw_box = Box::into_raw(boxed);
-        let atomic_ptr = AtomicPtr::new(raw_box);
-        if rebuild {
-            let old_weak = unsafe {
-                let old_weak = GLOBAL_RING.as_mut().unwrap().swap(raw_box, Ordering::Relaxed);
-                VERSION.store(version, Ordering::Relaxed);
-                old_weak
-            };
-            (arc_ring, Some(unsafe { Box::from_raw(old_weak) }))
-        } else {
-            unsafe {
-                GLOBAL_RING = Some(atomic_ptr);
-                VERSION.store(version, Ordering::Relaxed);
-            }
-            (arc_ring, None)
-        }
-    }
-}
 trait SmartId {
     fn send_reporter(
-        &mut self,
+        &self,
         token: Token,
-        registry: &mut Registry,
+        registry: &Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
@@ -306,10 +64,11 @@ trait SmartId {
 }
 
 impl SmartId for Replica {
+    #[inline]
     fn send_reporter(
-        &mut self,
+        &self,
         token: Token,
-        registry: &mut Registry,
+        registry: &Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
         request: ReporterEvent,
@@ -318,9 +77,9 @@ impl SmartId for Replica {
         let mut key = self.0;
         key.set_port((((((token as i128 + MIN as i128) as u64) << self.1) as u128 * self.2 as u128) >> 64) as u16);
         registry
-            .get_mut(&key)
+            .get(&key)
             .unwrap()
-            .get_mut(&rng.sample(uniform))
+            .get(&rng.sample(uniform))
             .unwrap()
             .send(request)
             .map_err(|e| RingSendError::SendError(e))
@@ -367,12 +126,12 @@ impl Into<ReporterEvent> for RingSendError {
 pub trait Endpoints: EndpointsClone + Send + Sync + std::fmt::Debug {
     /// Send the request through the endpoints.
     fn send(
-        &mut self,
+        &self,
         data_center: &str,
         replica_index: usize,
         token: Token,
         request: ReporterEvent,
-        registry: &mut Registry,
+        registry: &Registry,
         rng: &mut ThreadRng,
         uniform: Uniform<u8>,
     ) -> anyhow::Result<(), RingSendError>;
@@ -400,54 +159,40 @@ impl Clone for Box<dyn Endpoints> {
 }
 
 impl Endpoints for Replicas {
+    #[inline]
     fn send(
-        &mut self,
+        &self,
         data_center: &str,
         replica_index: usize,
         token: Token,
         request: ReporterEvent,
-        mut registry: &mut Registry,
-        mut rng: &mut ThreadRng,
+        registry: &Registry,
+        rng: &mut ThreadRng,
         uniform: Uniform<u8>,
     ) -> anyhow::Result<(), RingSendError> {
-        let replicas = self
-            .get_mut(data_center)
-            .expect(&format!("No replica for datacenter {}", data_center));
-        if let Some(replica) = replicas.get_mut(replica_index) {
-            replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
-        } else {
-            if replicas.len() != 0 {
-                // send to a random node
-                let rf = Uniform::new(0, replicas.len());
-                let mut replica = replicas[rng.sample(rf)];
-                replica.send_reporter(token, &mut registry, &mut rng, uniform, request)
+        if let Some(replicas) = self.get(data_center) {
+            if let Some(replica) = replicas.get(replica_index) {
+                replica.send_reporter(token, registry, rng, uniform, request)
             } else {
-                Err(RingSendError::NoReplica(request))
+                if replicas.len() != 0 {
+                    // send to a random node
+                    let rf = Uniform::new(0, replicas.len());
+                    let replica = replicas[rng.sample(rf)];
+                    replica.send_reporter(token, registry, rng, uniform, request)
+                } else {
+                    Err(RingSendError::NoReplica(request))
+                }
             }
+        } else {
+            Err(RingSendError::NoReplica(request))
         }
-    }
-}
-impl Endpoints for Option<Replicas> {
-    // this method will be invoked when we store Replicas as None.
-    // used for initial ring to simulate the reporter and respond to worker(self) with NoRing error
-    fn send(
-        &mut self,
-        _: &str,
-        _: usize,
-        _: Token,
-        request: ReporterEvent,
-        _: &mut Registry,
-        _: &mut ThreadRng,
-        _uniform: Uniform<u8>,
-    ) -> anyhow::Result<(), RingSendError> {
-        Err(RingSendError::NoRing(request))
     }
 }
 
 /// Search the endpoint of the virtual node.
 pub trait Vnode: VnodeClone + Sync + Send + std::fmt::Debug {
     /// Search the endpoints by the given token.
-    fn search(&mut self, token: Token) -> &mut Box<dyn Endpoints>;
+    fn search(&self, token: Token) -> &Box<dyn Endpoints>;
 }
 
 /// Clone the virtual node.
@@ -472,9 +217,10 @@ impl Clone for Box<dyn Vnode> {
 }
 
 impl Vnode for Mild {
-    fn search(&mut self, token: Token) -> &mut Box<dyn Endpoints> {
+    #[inline]
+    fn search(&self, token: Token) -> &Box<dyn Endpoints> {
         if token > self.left && token <= self.right {
-            &mut self.replicas
+            &self.replicas
         } else if token <= self.left {
             // proceed binary search; shift left.
             self.left_child.search(token)
@@ -486,9 +232,10 @@ impl Vnode for Mild {
 }
 
 impl Vnode for LeftMild {
-    fn search(&mut self, token: Token) -> &mut Box<dyn Endpoints> {
+    #[inline]
+    fn search(&self, token: Token) -> &Box<dyn Endpoints> {
         if token > self.left && token <= self.right {
-            &mut self.replicas
+            &self.replicas
         } else {
             // proceed binary search; shift left
             self.left_child.search(token)
@@ -497,8 +244,9 @@ impl Vnode for LeftMild {
 }
 
 impl Vnode for DeadEnd {
-    fn search(&mut self, _token: Token) -> &mut Box<dyn Endpoints> {
-        &mut self.replicas
+    #[inline]
+    fn search(&self, _token: Token) -> &Box<dyn Endpoints> {
+        &self.replicas
     }
 }
 
@@ -510,13 +258,6 @@ struct DeadEnd {
     replicas: Box<dyn Endpoints>,
 }
 
-impl DeadEnd {
-    fn initial_vnode() -> Vcell {
-        Box::new(DeadEnd {
-            replicas: Box::new(None),
-        })
-    }
-}
 // this struct represent the mild possible vnode(..)
 // condition: token > left, and token <= right
 #[derive(Clone, Debug)]
@@ -571,6 +312,8 @@ fn compute_vnode(chain: &[(Token, Token, Replicas)]) -> Vcell {
     }
 }
 
+#[allow(unused)]
+#[inline]
 fn walk_clockwise(starting_index: usize, end_index: usize, vnodes: &[VnodeTuple], replicas: &mut Replicas) {
     for vnode in vnodes.iter().take(end_index).skip(starting_index) {
         // fetch replica
@@ -591,144 +334,13 @@ fn walk_clockwise(starting_index: usize, end_index: usize, vnodes: &[VnodeTuple]
     }
 }
 
-/// Build the ScyllaDB ring
-pub fn build_ring(
-    dcs: &mut Vec<DC>,
-    nodes: &Nodes,
-    registry: Registry,
-    reporter_count: u8,
-    uniform_rf: usize,
-    version: u32,
-) -> (Arc<GlobalRing>, Box<Weak<GlobalRing>>) {
-    // complete tokens-range
-    let mut tokens: Tokens = Vec::new();
-    // iter nodes
-    for NodeInfo {
-        tokens: node_tokens,
-        address,
-        data_center,
-        msb,
-        shard_count,
-        ..
-    } in nodes.values()
-    {
-        // we generate the tokens li
-        for token in node_tokens {
-            let node_token = (*token, address.clone(), data_center.clone(), *msb, *shard_count);
-            tokens.push(node_token)
-        }
-    }
-    // sort_unstable_by token
-    tokens.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    // create vnodes tuple from tokens
-    let mut vnodes = Vec::new();
-    let mut recent_left = MIN;
-    for (right, node_id, dc, msb, shard_count) in &tokens {
-        // create vnode tuple (starting from min)
-        let vnode = (recent_left, *right, *node_id, dc.clone(), *msb, *shard_count);
-        // push to vnodes
-        vnodes.push(vnode);
-        // update recent_left to right
-        recent_left = *right;
-    }
-    // the check bellow is only to make sure if scylla-node didn't already
-    // randmoly didn't gen the MIN token by luck.
-    // confirm if the vnode_min is not already exist in our token range
-    if vnodes.first().unwrap().1 == MIN {
-        // remove it, otherwise the first vnode will be(MIN, MIN, ..) and invalidate vnode conditions
-        vnodes.remove(0);
-    };
-    // we don't forget to add max vnode to our token range only if not already presented,
-    // the check bellow is only to make sure if scylla-node didn't already
-    // randmoly gen the MAX token by luck.
-    // the MAX to our last vnode(the largest token )
-    let last_vnode = vnodes.last().unwrap();
-    // confirm if the vnode max is not present in our token-range
-    if last_vnode.1 != MAX {
-        let max_vnode = (
-            recent_left,
-            MAX,
-            last_vnode.2,
-            last_vnode.3.clone(),
-            last_vnode.4,
-            last_vnode.5,
-        );
-        // now push it
-        vnodes.push(max_vnode);
-    }
-    // compute_ring
-    let root_vnode = compute_ring(&vnodes, dcs);
-    // create arc_ring
-    let arc_ring = Arc::new((
-        dcs.clone(),
-        Uniform::new(0, dcs.len()),
-        Uniform::new(0, uniform_rf),
-        Uniform::new(0, reporter_count),
-        version,
-        registry,
-        root_vnode,
-    ));
-    // downgrade to weak_ring
-    let weak_ring = Arc::downgrade(&arc_ring);
-    let boxed = Box::new(weak_ring);
-    let raw_box = Box::into_raw(boxed);
-    // update the global ring
-    let old_weak = unsafe {
-        // swap
-        let old_weak = GLOBAL_RING.as_mut().unwrap().swap(raw_box, Ordering::Relaxed);
-        // update version with new one.// this must be atomic and safe because it's u8.
-        VERSION.store(version, Ordering::Relaxed);
-        old_weak
-    };
-
-    // return new arc_ring, weak_ring
-    (arc_ring, unsafe { Box::from_raw(old_weak) })
-}
-
-fn compute_ring(vnodes: &[VnodeTuple], dcs: &mut Vec<DC>) -> Vcell {
-    // compute chain (vnodes with replicas)
-    let chain = compute_chain(vnodes);
-    // clear dcs except the local_dc which is located at the header
-    dcs.truncate(1);
-    // collect data centers
-    for dc in chain.first().as_ref().unwrap().2.keys() {
-        // push rest dcs
-        if dc != &dcs[0] {
-            dcs.push(dc.to_string())
-        }
-    }
-    // compute balanced binary tree
-    compute_vnode(&chain)
-}
-
-fn compute_chain(vnodes: &[VnodeTuple]) -> Vec<(Token, Token, Replicas)> {
-    // compute all possible replicas in advance for each vnode in vnodes
-    // prepare ring chain
-    let mut chain = Vec::new();
-    for (starting_index, (left, right, _, _, _, _)) in vnodes.iter().enumerate() {
-        let mut replicas: Replicas = HashMap::new();
-        // first walk clockwise phase (start..end)
-        walk_clockwise(starting_index, vnodes.len(), &vnodes, &mut replicas);
-        // second walk clockwise phase (0..start)
-        walk_clockwise(0, starting_index, &vnodes, &mut replicas);
-        // create vnode
-        chain.push((*left, *right, replicas));
-    }
-    chain
-}
-
-/// Initialize the ScyllaDB ring.
-pub fn initialize_ring(version: u32, rebuild: bool) -> (ArcRing, Option<Box<Weak<GlobalRing>>>) {
-    Ring::initialize_ring(version, rebuild)
-}
-
 #[test]
 fn generate_and_compute_fake_ring() {
     use std::net::{
         IpAddr,
         Ipv4Addr,
     };
-    let mut rng = thread_rng();
+    let mut rng = rand::thread_rng();
     let uniform = Uniform::new(MIN, MAX);
     // create test token_range vector // the token range should be fetched from scylla node.
     let mut tokens: Vec<(Token, SocketAddr, DC)> = Vec::new();
@@ -792,3 +404,12 @@ fn generate_and_compute_fake_ring() {
     // and it will be mild where both of its childern are deadends.
     let _root = compute_vnode(&chain);
 }
+
+/// Mod impl the shared ring
+pub mod shared;
+
+pub use shared::{
+    ReplicationFactor,
+    ReplicationInfo,
+    SharedRing,
+};

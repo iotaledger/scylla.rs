@@ -53,7 +53,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
         Self: Select<K, V, O>,
     {
         let statement = self.statement();
-        PrepareRequest::new(statement)
+        let keyspace = self.name().into();
+        PrepareRequest::new(keyspace, statement)
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -103,7 +104,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
         Self: Insert<K, V>,
     {
         let statement = self.statement();
-        PrepareRequest::new(statement)
+        let keyspace = self.name().into();
+        PrepareRequest::new(keyspace, statement)
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -162,7 +164,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
         Self: Update<K, V, I>,
     {
         let statement = self.statement();
-        PrepareRequest::new(statement)
+        let keyspace = self.name().into();
+        PrepareRequest::new(keyspace, statement)
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -208,7 +211,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
         Self: Delete<K, V, D>,
     {
         let statement = self.statement();
-        PrepareRequest::new(statement)
+        let keyspace = self.name().into();
+        PrepareRequest::new(keyspace, statement)
     }
 }
 
@@ -227,7 +231,7 @@ pub trait GetDynamicPrepareRequest: Keyspace {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn prepare_with(&self, statement: &str) -> PrepareRequest {
-        PrepareRequest::new(statement.to_string().into())
+        PrepareRequest::new(self.name().into(), statement.to_string().into())
     }
 }
 
@@ -248,7 +252,8 @@ pub trait AsDynamicPrepareRequest: ToStatement {
     /// ```
     fn prepare(&self) -> PrepareRequest {
         let statement = self.to_statement();
-        PrepareRequest::new(statement)
+        let keyspace_name = self.keyspace();
+        PrepareRequest::new(keyspace_name, statement)
     }
 }
 
@@ -259,13 +264,15 @@ impl<S: ToStatement> AsDynamicPrepareRequest for S {}
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
+    pub(crate) keyspace_name: Cow<'static, str>,
     pub(crate) statement: Cow<'static, str>,
     pub(crate) token: i64,
 }
 
 impl PrepareRequest {
-    fn new(statement: Cow<'static, str>) -> Self {
+    fn new(keyspace: Cow<'static, str>, statement: Cow<'static, str>) -> Self {
         PrepareRequest {
+            keyspace_name: keyspace,
             statement,
             token: rand::random(),
         }
@@ -283,6 +290,9 @@ impl Request for PrepareRequest {
 
     fn payload(&self) -> Vec<u8> {
         Prepare::new().statement(&self.statement).build().unwrap().0
+    }
+    fn keyspace(&self) -> String {
+        self.keyspace_name.clone().into()
     }
 }
 

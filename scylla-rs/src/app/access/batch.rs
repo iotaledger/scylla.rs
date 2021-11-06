@@ -512,6 +512,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
+            keyspace_name: self.keyspace.name(),
             token: rand::random(),
             map: self.map,
             payload: self.builder.consistency(Consistency::Quorum).build()?.0.into(),
@@ -531,6 +532,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchFl
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
+            keyspace_name: self.keyspace.name(),
             token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
@@ -546,6 +548,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchTi
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
+            keyspace_name: self.keyspace.name(),
             token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
@@ -557,6 +560,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchBu
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
+            keyspace_name: self.keyspace.name(),
             token: rand::random(),
             map: self.map,
             payload: self.builder.build()?.0.into(),
@@ -594,6 +598,7 @@ impl<S: Keyspace + Clone> Batchable for S {}
 /// batch so that the associated statements can be re-prepared if necessary.
 #[derive(Clone, Debug)]
 pub struct BatchRequest {
+    keyspace_name: String,
     token: i64,
     payload: Vec<u8>,
     map: HashMap<[u8; 16], Box<dyn ToStatement>>,
@@ -610,6 +615,9 @@ impl Request for BatchRequest {
 
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
+    }
+    fn keyspace(&self) -> String {
+        self.keyspace_name.clone().into()
     }
 }
 

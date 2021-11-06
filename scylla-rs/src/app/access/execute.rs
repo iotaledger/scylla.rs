@@ -62,6 +62,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         ExecuteBuilder {
+            keyspace_name: self.name().into(),
             statement: statement.to_owned().into(),
             variables,
             builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
@@ -93,6 +94,7 @@ pub trait GetDynamicExecuteRequest: Keyspace {
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         ExecuteBuilder {
+            keyspace_name: self.name().into(),
             statement: statement.to_owned().into(),
             variables,
             builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
@@ -151,6 +153,7 @@ where
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         let statement = self.to_statement();
         ExecuteBuilder {
+            keyspace_name: self.keyspace(),
             builder: QueryStatement::encode_statement(Query::new(), &statement),
             statement,
             variables,
@@ -177,6 +180,7 @@ where
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
         let statement = self.to_statement();
         ExecuteBuilder {
+            keyspace_name: self.keyspace(),
             builder: PreparedStatement::encode_statement(Query::new(), &statement),
             statement,
             variables,
@@ -188,6 +192,7 @@ impl<S: Keyspace> GetDynamicExecuteRequest for S {}
 impl<S: ToStatement> AsDynamicExecuteRequest for S {}
 
 pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
+    pub(crate) keyspace_name: Cow<'static, str>,
     pub(crate) statement: Cow<'static, str>,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -200,6 +205,7 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryValues> {
         let builder = self.builder.consistency(consistency).bind_values().bind(self.variables);
         ExecuteBuilder {
+            keyspace_name: self.keyspace_name,
             statement: self.statement,
             variables: self.variables,
             builder,
@@ -211,6 +217,7 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
         timestamp: i64,
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
         ExecuteBuilder {
+            keyspace_name: self.keyspace_name,
             statement: self.statement,
             variables: self.variables,
             builder: self
@@ -231,6 +238,7 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
             .build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name.into(),
             token: rand::random(),
             payload: query.into(),
             statement: self.statement,
@@ -245,6 +253,7 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
         timestamp: i64,
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
         ExecuteBuilder {
+            keyspace_name: self.keyspace_name,
             statement: self.statement,
             variables: self.variables,
             builder: self.builder.timestamp(timestamp),
@@ -255,6 +264,7 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name.into(),
             token: rand::random(),
             payload: query.into(),
             statement: self.statement,
@@ -268,6 +278,7 @@ impl<'a, V: ?Sized> ExecuteBuilder<'a, V, QueryBuild> {
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
+            keyspace_name: self.keyspace_name.into(),
             token: rand::random(),
             payload: query.into(),
             statement: self.statement,
@@ -311,6 +322,9 @@ impl Request for ExecuteRequest {
 
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
+    }
+    fn keyspace(&self) -> String {
+        self.0.keyspace()
     }
 }
 

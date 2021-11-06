@@ -3,20 +3,22 @@
 
 use super::{
     node::Node,
+    KeyspaceConfig,
     Scylla,
+    ScyllaEvent,
+    ScyllaHandle,
 };
 use crate::{
     app::ring::{
-        build_ring,
-        initialize_ring,
-        ArcRing,
         Registry,
-        Ring,
-        WeakRing,
+        ReplicationInfo,
+        SharedRing,
     },
     cql::CqlBuilder,
 };
+use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 use async_trait::async_trait;
 use backstage::{
@@ -34,7 +36,6 @@ use backstage::{
         Shutdown,
         ShutdownEvent,
         StreamExt,
-        SupHandle,
         UnboundedChannel,
         UnboundedHandle,
     },
@@ -44,23 +45,19 @@ use backstage::{
         Responder,
     },
 };
-use std::collections::HashSet;
 
 use std::{
     collections::HashMap,
     convert::TryFrom,
     net::SocketAddr,
-    sync::Arc,
 };
-use tokio::sync::RwLock;
+
 pub(crate) type Nodes = HashMap<SocketAddr, NodeInfo>;
 
 /// Cluster state
 pub struct Cluster {
     nodes: Nodes,
-    version: u32,
-    arc_ring: Option<ArcRing>,
-    weak_rings: Vec<Box<WeakRing>>,
+    keyspaces: HashMap<String, ReplicationInfo>,
 }
 
 /// Cluster Event type
@@ -89,8 +86,12 @@ pub enum Topology {
     AddNode(SocketAddr),
     /// Used by Scylla/dashboard to remove/disconnect from existing scylla node in the cluster
     RemoveNode(SocketAddr),
+    /// Upsert keyspace
+    UpsertKeyspace(KeyspaceConfig),
+    /// Remove keyspace by its name
+    RemoveKeyspace(String),
     /// Used by Scylla/dashboard to build new ring and expose the recent cluster topology
-    BuildRing(u8),
+    BuildRing,
 }
 
 /// Topology responder
@@ -128,15 +129,8 @@ impl Cluster {
     /// Create new cluster with empty state
     pub fn new() -> Self {
         let nodes = HashMap::new();
-        let version = Ring::version();
-        // initialize global_ring
-        let (arc_ring, _none) = initialize_ring(version, false);
-        Self {
-            nodes,
-            version,
-            arc_ring: Some(arc_ring),
-            weak_rings: Vec::new(),
-        }
+        let keyspaces = HashMap::new();
+        Self { nodes, keyspaces }
     }
 }
 
@@ -159,13 +153,10 @@ pub struct NodeInfo {
 
 /// The Cluster actor lifecycle implementation
 #[async_trait]
-impl<S> Actor<S> for Cluster
-where
-    S: SupHandle<Self>,
-{
+impl Actor<ScyllaHandle> for Cluster {
     type Data = (Scylla, Arc<RwLock<Registry>>);
     type Channel = UnboundedChannel<ClusterEvent>;
-    async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
+    async fn init(&mut self, rt: &mut Rt<Self, ScyllaHandle>) -> ActorResult<Self::Data> {
         log::info!("Cluster is {}", rt.service().status());
         // add empty registry as resource
         let reporters_registry = Arc::new(RwLock::new(Registry::new()));
@@ -179,14 +170,34 @@ where
             .ok_or_else(|| ActorError::exit_msg("cluster unables to lookup for scylla as config"))?;
         // add route to enable configuring the cluster topology over the ws
         rt.add_route::<(JsonMessage, Responder)>().await.ok();
-        // cluster always starts with null nodes, therefore its status is IDLE from service perspective
-        rt.update_status(ServiceStatus::Idle).await;
+        let node_iter = scylla.nodes.iter();
+        for address in node_iter {
+            self.start_node(rt, address.clone(), &scylla).await?;
+        }
+        let keyspaces = scylla.keyspaces.iter();
+        for super::KeyspaceConfig { name, data_centers } in keyspaces {
+            let mut info = ReplicationInfo::empty();
+            for (dc_name, dc_config) in data_centers {
+                info.upsert(dc_name, dc_config.replication_factor as usize);
+            }
+            self.keyspaces.insert(name.clone(), info);
+        }
+        if self.nodes.is_empty() {
+            rt.update_status(ServiceStatus::Idle).await;
+        } else {
+            SharedRing::new(
+                &scylla.local_dc,
+                reporters_registry.read().await.clone(),
+                self.keyspaces.clone(),
+                scylla.reporter_count,
+                &self.nodes,
+            )
+            .commit();
+        }
         Ok((scylla, reporters_registry))
     }
-    async fn run(&mut self, rt: &mut Rt<Self, S>, (scylla, registry): Self::Data) -> ActorResult<()> {
+    async fn run(&mut self, rt: &mut Rt<Self, ScyllaHandle>, (mut scylla, registry): Self::Data) -> ActorResult<()> {
         log::info!("Cluster is {}", rt.service().status());
-        let mut data_center = vec![scylla.local_dc.clone()];
-        let mut recent_uniform_rf = 0;
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
                 ClusterEvent::Topology(topology, mut responder_opt) => {
@@ -201,6 +212,20 @@ where
                         continue;
                     }
                     match topology {
+                        Topology::UpsertKeyspace(keyspace_config) => {
+                            let name = keyspace_config.name.clone();
+                            let data_centers = keyspace_config.data_centers.iter();
+                            let mut info = ReplicationInfo::empty();
+                            for (dc_name, dc_config) in data_centers {
+                                info.upsert(dc_name, dc_config.replication_factor as usize);
+                            }
+                            self.keyspaces.insert(name, info);
+                            scylla.insert_keyspace(keyspace_config);
+                        }
+                        Topology::RemoveKeyspace(name) => {
+                            self.keyspaces.remove(&name);
+                            scylla.remove_keyspace(&name);
+                        }
                         Topology::AddNode(address) => {
                             if self.nodes.contains_key(&address) {
                                 if let Some(responder) = responder_opt.take() {
@@ -246,7 +271,8 @@ where
                                                     tokens,
                                                 };
                                                 // add node_info to nodes
-                                                self.nodes.insert(address, node_info);
+                                                self.nodes.insert(address.clone(), node_info);
+                                                scylla.nodes.insert(address);
                                                 log::info!("Added {} node!", address);
                                                 if let Some(responder) = responder_opt.take() {
                                                     rt.update_status(ServiceStatus::Maintenance).await;
@@ -258,12 +284,7 @@ where
                                                     if !rt.service().is_maintenance() {
                                                         let maybe_unstable_registry = registry.read().await.clone();
                                                         log::warn!("Rebuilding healthy ring");
-                                                        self.build_healthy_ring(
-                                                            maybe_unstable_registry,
-                                                            &scylla,
-                                                            &mut data_center,
-                                                            recent_uniform_rf,
-                                                        );
+                                                        self.build_healthy_ring(maybe_unstable_registry, &scylla);
                                                         self.update_service_status(rt).await;
                                                     } // else the admin supposed to rebuild the ring
                                                 }
@@ -317,6 +338,7 @@ where
                                     // Await till it gets shutdown, it forces sync shutdown
                                     join_handle.await.ok();
                                     self.nodes.remove(&address);
+                                    scylla.nodes.remove(&address);
                                     log::info!("Removed {} node!", address);
                                     let ok_response: Result<_, TopologyErr> = Ok(Topology::RemoveNode(address));
                                     responder.reply(ok_response).await.ok();
@@ -331,28 +353,14 @@ where
                                 responder.reply(error_response).await.ok();
                             };
                         }
-                        Topology::BuildRing(uniform_rf) => {
+                        Topology::BuildRing => {
                             let responder = responder_opt
                                 .take()
                                 .ok_or_else(|| ActorError::exit_msg("cannot build ring without responder"))?;
-
-                            if self.nodes.len() < uniform_rf as usize {
-                                let error_response: Result<Topology, _> =
-                                    Err(TopologyErr::new(format!("Cannot build ring with replication factor greater than the total number of existing nodes")));
-                                responder.reply(error_response).await.ok();
-                                continue;
-                            }
-                            // do cleanup on weaks
-                            self.cleanup(scylla.thread_count);
                             // re/build
                             let status_change;
                             if self.nodes.is_empty() {
-                                let version = self.new_version();
-                                let (new_arc_ring, old_weak_ring) = initialize_ring(version, true);
-                                self.arc_ring.replace(new_arc_ring);
-                                if let Some(old_weak_ring) = old_weak_ring {
-                                    self.weak_rings.push(old_weak_ring);
-                                }
+                                SharedRing::drop();
                                 status_change = ServiceStatus::Idle;
                             } else {
                                 let registry_snapshot = registry.read().await.clone();
@@ -377,29 +385,25 @@ where
                                     }
                                     continue;
                                 }
-                                let version = self.new_version();
-                                let (new_arc_ring, old_weak_ring) = build_ring(
-                                    &mut data_center,
-                                    &self.nodes,
+                                SharedRing::new(
+                                    &scylla.local_dc,
                                     registry_snapshot,
+                                    self.keyspaces.clone(),
                                     scylla.reporter_count,
-                                    uniform_rf as usize,
-                                    version,
-                                );
-                                // replace self.arc_ring
-                                self.arc_ring.replace(new_arc_ring);
-                                // push weak to weak_rings
-                                self.weak_rings.push(old_weak_ring);
+                                    &self.nodes,
+                                )
+                                .commit();
                                 status_change = ServiceStatus::Running;
                             }
-                            Ring::rebuild();
+                            rt.supervisor_handle()
+                                .send(ScyllaEvent::UpdateState(scylla.clone()))
+                                .ok();
                             if rt.service().status() != &status_change {
                                 log::info!("Cluster is {}", status_change);
                             }
                             rt.update_status(status_change).await;
-                            let ok_response: Result<_, TopologyErr> = Ok(Topology::BuildRing(uniform_rf));
+                            let ok_response: Result<_, TopologyErr> = Ok(Topology::BuildRing);
                             responder.reply(ok_response).await.ok();
-                            recent_uniform_rf = uniform_rf;
                         }
                     }
                 }
@@ -419,12 +423,7 @@ where
                         if !rt.service().is_stopping() && self.nodes.contains_key(&address) {
                             {
                                 let maybe_unstable_registry = registry.read().await.clone();
-                                self.build_healthy_ring(
-                                    maybe_unstable_registry,
-                                    &scylla,
-                                    &mut data_center,
-                                    recent_uniform_rf,
-                                );
+                                self.build_healthy_ring(maybe_unstable_registry, &scylla);
                             }
                             if let Err(ActorError {
                                 source: _,
@@ -449,19 +448,9 @@ where
                 }
                 ClusterEvent::Shutdown => {
                     log::warn!("Cluster is Stopping");
-                    self.cleanup(scylla.thread_count);
                     // stop all the children/nodes
                     rt.stop().await;
-                    // build empty ring to enable other threads to build empty ring(eventually)
-                    let version = self.new_version();
-                    let (new_arc_ring, old_weak_ring) = initialize_ring(version, true);
-                    self.arc_ring.replace(new_arc_ring);
-                    if let Some(old_weak_ring) = old_weak_ring {
-                        self.weak_rings.push(old_weak_ring);
-                    }
-                    Ring::rebuild();
-                    // redo self cleanup on weaks
-                    self.cleanup(scylla.thread_count);
+                    SharedRing::drop();
                     if rt.microservices_stopped() {
                         rt.inbox_mut().close();
                     }
@@ -484,21 +473,45 @@ impl TryFrom<(JsonMessage, Responder)> for ClusterEvent {
 }
 
 impl Cluster {
-    fn cleanup(&mut self, thread_count: usize) {
-        // total_weak_count = thread_count + 1(the global weak)
-        // so we clear all old weaks once weak_count > thread_count
-        if let Some(arc_ring) = self.arc_ring.as_ref() {
-            let weak_count = std::sync::Arc::weak_count(arc_ring);
-            if weak_count > thread_count {
-                self.weak_rings.clear();
+    async fn start_node(
+        &mut self,
+        rt: &mut Rt<Self, ScyllaHandle>,
+        address: SocketAddr,
+        scylla: &Scylla,
+    ) -> ActorResult<()> {
+        // to spawn node we first make sure it's online
+        let mut cqlconn = CqlBuilder::new()
+            .address(address)
+            .tokens()
+            .recv_buffer_size(scylla.recv_buffer_size)
+            .send_buffer_size(scylla.send_buffer_size)
+            .authenticator(scylla.authenticator.clone())
+            .build()
+            .await
+            .map_err(|e| ActorError::aborted(e))?;
+        log::info!("Successfully connected to node {}!", address);
+        let shard_count = cqlconn.shard_count();
+        if let (Some(dc), Some(tokens)) = (cqlconn.take_dc(), cqlconn.take_tokens()) {
+            // create node
+            let node = Node::new(address.clone(), shard_count as usize);
+            let h = rt.start(address.to_string(), node).await?;
+            // create nodeinfo
+            let node_info = NodeInfo {
+                scope_id: h.scope_id(),
+                address: address.clone(),
+                msb: cqlconn.msb(),
+                shard_count,
+                data_center: dc,
+                tokens,
             };
+            // add node_info to nodes
+            self.nodes.insert(address, node_info);
+            log::info!("Added {} node!", address);
         } else {
-            log::error!("Cleanup failed!")
+            log::error!("Failed to retrieve data from CQL Connection!");
+            return Err(ActorError::exit_msg("Failed to retrieve data from CQL Connection!"));
         }
-    }
-    fn new_version(&mut self) -> u32 {
-        self.version = self.version.wrapping_add(1);
-        self.version
+        Ok(())
     }
     fn restart_node(my_handle: UnboundedHandle<ClusterEvent>, address: SocketAddr) {
         let restart_node_task = async move {
@@ -510,7 +523,7 @@ impl Cluster {
         };
         backstage::spawn_task(&format!("cluster restarting {} node", address), restart_node_task);
     }
-    async fn update_service_status<S: SupHandle<Self>>(&self, rt: &mut Rt<Self, S>) {
+    async fn update_service_status(&self, rt: &mut Rt<Self, ScyllaHandle>) {
         if self.nodes.iter().all(|(_address, node_info)| {
             if let Some(ms_node) = rt.service().microservices().get(&node_info.scope_id) {
                 ms_node.is_running()
@@ -537,13 +550,7 @@ impl Cluster {
             }
         }
     }
-    fn build_healthy_ring(
-        &mut self,
-        mut registry: Registry,
-        scylla: &Scylla,
-        data_center: &mut Vec<String>,
-        uniform_rf: u8,
-    ) {
+    fn build_healthy_ring(&mut self, mut registry: Registry, scylla: &Scylla) {
         // check if all nodes do have entries for their stages in the registry
         let mut healthy_nodes: HashMap<SocketAddr, NodeInfo> = HashMap::new();
         self.nodes.iter().for_each(|(addr, info)| {
@@ -564,36 +571,25 @@ impl Cluster {
                 log::warn!("Removing unhealthy {} node from the Ring", addr);
             }
         });
-        // do cleanup on weaks
-        self.cleanup(scylla.thread_count);
-        let version = self.new_version();
+
         if healthy_nodes.is_empty() {
-            let (new_arc_ring, old_weak_ring) = initialize_ring(version, true);
-            self.arc_ring.replace(new_arc_ring);
-            if let Some(old_weak_ring) = old_weak_ring {
-                self.weak_rings.push(old_weak_ring);
-            }
+            SharedRing::drop();
             log::warn!("Enforcing healthy empty Ring");
         } else {
-            let (new_arc_ring, old_weak_ring) = build_ring(
-                data_center,
-                &self.nodes,
+            SharedRing::new(
+                &scylla.local_dc,
                 registry,
+                self.keyspaces.clone(),
                 scylla.reporter_count,
-                uniform_rf as usize,
-                version,
-            );
-            // replace self.arc_ring
-            self.arc_ring.replace(new_arc_ring);
-            // push weak to weak_rings
-            self.weak_rings.push(old_weak_ring);
+                &self.nodes,
+            )
+            .commit();
             if self.nodes.len() != healthy_nodes.len() {
                 log::warn!("Enforcing healthy Ring with only {} healthy nodes", healthy_nodes.len());
             } else {
                 log::info!("Building stable Ring with {} nodes", self.nodes.len());
             }
         }
-        Ring::rebuild();
     }
 }
 
@@ -605,8 +601,12 @@ pub trait ClusterHandleExt {
     async fn add_node(&self, node: SocketAddr) -> TopologyResponse;
     /// Remove scylla node from the cluster
     async fn remove_node(&self, address: SocketAddr) -> TopologyResponse;
+    /// Upsert (insert or update) keyspace
+    async fn upsert_keyspace(&self, keyspace_config: KeyspaceConfig) -> TopologyResponse;
+    /// remove keyspace
+    async fn remove_keyspace(&self, keyspace_name: &str) -> TopologyResponse;
     /// Build ring with uniform replication factor
-    async fn build_ring(&self, uniform_replication_factor: u8) -> TopologyResponse;
+    async fn build_ring(&self) -> TopologyResponse;
 }
 
 #[async_trait]
@@ -620,6 +620,44 @@ impl ClusterHandleExt for UnboundedHandle<ClusterEvent> {
             TopologyErr::new(format!(
                 "Unable to add {} node, error: closed oneshot receiver",
                 address
+            ))
+        })?
+    }
+    async fn upsert_keyspace(&self, keyspace_config: KeyspaceConfig) -> TopologyResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let event = ClusterEvent::Topology(
+            Topology::UpsertKeyspace(keyspace_config.clone()),
+            Some(TopologyResponder::OneShot(tx)),
+        );
+        self.send(event).map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to upsert/add keyspace {:?}, error: closed cluster handle",
+                keyspace_config
+            ))
+        })?;
+        rx.await.map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to upsert/add keyspace {:?}, error: closed oneshot receiver",
+                keyspace_config
+            ))
+        })?
+    }
+    async fn remove_keyspace(&self, keyspace_name: &str) -> TopologyResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let event = ClusterEvent::Topology(
+            Topology::RemoveKeyspace(keyspace_name.into()),
+            Some(TopologyResponder::OneShot(tx)),
+        );
+        self.send(event).map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to remove keyspace {}, error: closed cluster handle",
+                keyspace_name
+            ))
+        })?;
+        rx.await.map_err(|_| {
+            TopologyErr::new(format!(
+                "Unable to remove keyspace {}, error: closed oneshot receiver",
+                keyspace_name
             ))
         })?
     }
@@ -639,12 +677,9 @@ impl ClusterHandleExt for UnboundedHandle<ClusterEvent> {
             ))
         })?
     }
-    async fn build_ring(&self, uniform_replication_factor: u8) -> TopologyResponse {
+    async fn build_ring(&self) -> TopologyResponse {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let event = ClusterEvent::Topology(
-            Topology::BuildRing(uniform_replication_factor),
-            Some(TopologyResponder::OneShot(tx)),
-        );
+        let event = ClusterEvent::Topology(Topology::BuildRing, Some(TopologyResponder::OneShot(tx)));
         self.send(event)
             .map_err(|_| TopologyErr::new(format!("Unable to build ring, error: closed cluster handle")))?;
         rx.await

@@ -6,18 +6,12 @@ use scylla_rs::prelude::*;
 
 #[tokio::main]
 async fn main() {
+    std::env::set_var("RUST_LOG", "info");
     env_logger::init();
-    let scylla = Scylla::default();
+    let mut scylla = Scylla::default();
+    // note: you can use the handle to add the node later
+    scylla.insert_node(example_scylla_node());
     let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
-    let cluster_handle = runtime
-        .cluster_handle()
-        .await
-        .expect("Failed to acquire cluster handle!");
-    cluster_handle
-        .add_node(example_scylla_node())
-        .await
-        .expect("Failed to add node!");
-    cluster_handle.build_ring(1).await.expect("Failed to build ring!");
     runtime
         .block_on()
         .await

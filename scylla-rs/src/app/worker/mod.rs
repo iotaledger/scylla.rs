@@ -100,7 +100,13 @@ pub trait RetryableWorker<R>: Worker {
         if self.retries() > 0 {
             *self.retries_mut() -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
-            send_global(self.request().token(), self.request().payload(), self).ok();
+            send_global(
+                &self.request().keyspace(),
+                self.request().token(),
+                self.request().payload(),
+                self,
+            )
+            .ok();
             Ok(())
         } else {
             Err(self)
@@ -127,7 +133,12 @@ pub trait RetryableWorker<R>: Worker {
         Self: 'static + Sized,
         R: SendRequestExt,
     {
-        send_local(self.request().token(), self.request().payload(), self)?;
+        send_local(
+            &self.request().keyspace(),
+            self.request().token(),
+            self.request().payload(),
+            self,
+        )?;
         Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
 
@@ -137,7 +148,12 @@ pub trait RetryableWorker<R>: Worker {
         Self: 'static + Sized,
         R: SendRequestExt,
     {
-        send_global(self.request().token(), self.request().payload(), self)?;
+        send_global(
+            &self.request().keyspace(),
+            self.request().token(),
+            self.request().payload(),
+            self,
+        )?;
         Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
     }
 
@@ -256,8 +272,11 @@ where
     R: Request,
 {
     let statement = worker.request().statement();
+    let keyspace_name = worker.request().keyspace();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    PrepareWorker::new(id, statement).send_to_reporter(reporter).ok();
+    PrepareWorker::new(&keyspace_name, id, statement)
+        .send_to_reporter(reporter)
+        .ok();
     let payload = worker.request().payload();
     let retry_request = ReporterEvent::Request { worker, payload };
     reporter.send(retry_request).ok();
