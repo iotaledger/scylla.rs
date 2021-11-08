@@ -11,8 +11,9 @@ async fn main() {
     let mut scylla = Scylla::default();
     // note: you can use the handle to add the node later
     scylla.insert_node(example_scylla_node());
-    let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
-    runtime
+    Runtime::new(None, scylla)
+        .await
+        .expect("Runtime failed to start!")
         .block_on()
         .await
         .expect("Runtime failed to shutdown gracefully!")
