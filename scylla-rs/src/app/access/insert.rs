@@ -832,7 +832,7 @@ impl Request for InsertRequest {
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        self.0.statement()
+        Request::statement(&self.0)
     }
 
     fn payload(&self) -> Vec<u8> {
@@ -850,5 +850,41 @@ impl SendRequestExt for InsertRequest {
 
     fn worker(self) -> Box<Self::Worker> {
         BasicRetryWorker::new(self)
+    }
+}
+
+pub struct Ttl<'a, V> {
+    pub v: &'a V,
+    pub ttl: Option<std::time::Duration>,
+}
+
+/// Extend any value to be inserted with ttl
+pub trait TimeToLive {
+    /// Cast the type with ttl
+    fn with_ttl<T: Into<Option<std::time::Duration>>>(&self, ttl: T) -> Ttl<Self>
+    where
+        Self: Sized;
+}
+
+impl<T> TimeToLive for T {
+    fn with_ttl<TT: Into<Option<std::time::Duration>>>(&self, ttl: TT) -> Ttl<Self> {
+        Ttl {
+            v: &self,
+            ttl: ttl.into(),
+        }
+    }
+}
+
+// auto ttl implementation
+impl<'a, T, K, V> Insert<K, Ttl<'a, V>> for T
+where
+    T: Insert<K, V>,
+{
+    type QueryOrPrepared = T::QueryOrPrepared;
+    fn statement(&self) -> std::borrow::Cow<'static, str> {
+        format!("{} USING TTL ?", T::statement(self)).into()
+    }
+    fn bind_values<B: Binder>(builder: B, key: &K, Ttl { v, ttl }: &Ttl<V>) -> B {
+        T::bind_values(builder, key, v).value(ttl.and_then(|ttl| Some(ttl.as_secs() as u32)))
     }
 }

@@ -1091,7 +1091,7 @@ impl<O: 'static> Request for SelectRequest<O> {
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        self.inner.statement()
+        Request::statement(&self.inner)
     }
 
     fn payload(&self) -> Vec<u8> {

@@ -903,7 +903,7 @@ impl Request for UpdateRequest {
     }
 
     fn statement(&self) -> &Cow<'static, str> {
-        self.0.statement()
+        Request::statement(&self.0)
     }
 
     fn payload(&self) -> Vec<u8> {

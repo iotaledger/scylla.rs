@@ -86,6 +86,8 @@ pub use insert::{
     GetStaticInsertRequest,
     Insert,
     InsertRequest,
+    TimeToLive,
+    Ttl,
 };
 pub use keyspace::Keyspace;
 pub use prepare::{

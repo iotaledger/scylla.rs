@@ -49,8 +49,12 @@ async fn main() {
             Err(e) => error!("{}", e),
         }
     }
+    drop_keyspace(None).await.expect("Failed to drop keyspace");
     runtime.handle().shutdown().await;
-
+    runtime
+        .block_on()
+        .await
+        .expect("Runtime failed to shutdown gracefully!");
     let session = Arc::new(SessionBuilder::new().known_node_addr(node).build().await.unwrap());
 
     for (n, t, _) in timings.iter_mut() {
@@ -62,6 +66,7 @@ async fn main() {
             Err(e) => error!("{}", e),
         }
     }
+    drop_keyspace(Some(node)).await.expect("Failed to drop keyspace");
     info!("Timings:");
     info!("{:8} | {:^25} | {:^25} |", "", "scylla", "scylla-rs");
     info!("{:8} | {:-<25} | {:-<25} |", "", "", "");
@@ -308,6 +313,32 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32) -> anyhow::Result<
     let time = start.elapsed().unwrap().as_nanos();
     info!("Finished benchmark. Total time: {} ms", time / 1000000);
     Ok(time)
+}
+
+async fn drop_keyspace(node: Option<SocketAddr>) -> anyhow::Result<()> {
+    if let Some(node) = node {
+        let mut scylla = Scylla::default();
+        scylla.insert_node(node);
+        let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
+        MyKeyspace::new()
+            .execute_query("DROP KEYSPACE {{keyspace}}", &[])
+            .consistency(Consistency::All)
+            .build()?
+            .get_local()
+            .await
+            .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
+        runtime.handle().shutdown().await;
+        runtime.block_on().await?;
+    } else {
+        MyKeyspace::new()
+            .execute_query("DROP KEYSPACE {{keyspace}}", &[])
+            .consistency(Consistency::All)
+            .build()?
+            .get_local()
+            .await
+            .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
+    }
+    Ok(())
 }
 
 #[derive(Default, Clone, Debug)]

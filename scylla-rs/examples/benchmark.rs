@@ -51,6 +51,7 @@ async fn main() {
             .await
             .expect("Runtime failed to shutdown gracefully!");
     }
+    drop_keyspace(node).await.expect("Failed to drop keyspace");
     info!("Timings:");
     info!("{:8}{:8}{:8}", "N", "R", "Time (ms)");
     for (n, r, t) in timings.iter() {
@@ -131,6 +132,22 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     let time = start.elapsed().unwrap().as_nanos();
     info!("Finished benchmark. Total time: {} ms", time / 1000000);
     Ok(time)
+}
+
+async fn drop_keyspace(node: SocketAddr) -> anyhow::Result<()> {
+    let mut scylla = Scylla::default();
+    scylla.insert_node(node);
+    let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
+    MyKeyspace::new()
+        .execute_query("DROP KEYSPACE {{keyspace}}", &[])
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
+    runtime.handle().shutdown().await;
+    runtime.block_on().await?;
+    Ok(())
 }
 
 #[derive(Default, Clone, Debug)]
