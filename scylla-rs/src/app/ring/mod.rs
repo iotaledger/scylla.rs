@@ -23,7 +23,6 @@ use std::{
         MIN,
     },
 };
-// types
 /// The token of Ring.
 pub type Token = i64;
 /// The tokens of shards.
@@ -41,16 +40,6 @@ type Replica = (SocketAddr, Msb, ShardCount);
 type Vcell = Box<dyn Vnode>;
 /// The registry of `SocketAddr` to its reporters.
 pub type Registry = HashMap<SocketAddr, HashMap<u8, UnboundedHandle<ReporterEvent>>>;
-/// The global ring  of ScyllaDB.
-pub type GlobalRing = (
-    Vec<DC>,
-    Uniform<usize>,
-    Uniform<usize>,
-    Uniform<u8>,
-    u32,
-    Registry,
-    Vcell,
-);
 
 trait SmartId {
     fn send_reporter(
@@ -278,7 +267,6 @@ struct LeftMild {
     replicas: Box<dyn Endpoints>,
 }
 
-// Ring Builder Work in progress
 fn compute_vnode(chain: &[(Token, Token, Replicas)]) -> Vcell {
     let index = chain.len() / 2;
     let (left, right) = chain.split_at(index);
@@ -310,99 +298,6 @@ fn compute_vnode(chain: &[(Token, Token, Replicas)]) -> Vcell {
             replicas: Box::new(vnode.2.to_owned()),
         })
     }
-}
-
-#[allow(unused)]
-#[inline]
-fn walk_clockwise(starting_index: usize, end_index: usize, vnodes: &[VnodeTuple], replicas: &mut Replicas) {
-    for vnode in vnodes.iter().take(end_index).skip(starting_index) {
-        // fetch replica
-        let (_, _, node_id, dc, msb, shard_count) = &vnode;
-        let replica: Replica = (*node_id, *msb, *shard_count);
-        // now push it to Replicas
-        match replicas.get_mut(dc) {
-            Some(vec_replicas_in_dc) => {
-                if !vec_replicas_in_dc.contains(&replica) {
-                    vec_replicas_in_dc.push(replica)
-                }
-            }
-            None => {
-                let vec_replicas_in_dc = vec![replica];
-                replicas.insert(dc.clone(), vec_replicas_in_dc);
-            }
-        }
-    }
-}
-
-#[test]
-fn generate_and_compute_fake_ring() {
-    use std::net::{
-        IpAddr,
-        Ipv4Addr,
-    };
-    let mut rng = rand::thread_rng();
-    let uniform = Uniform::new(MIN, MAX);
-    // create test token_range vector // the token range should be fetched from scylla node.
-    let mut tokens: Vec<(Token, SocketAddr, DC)> = Vec::new();
-    // 4 us nodes ids
-    let us_node_id_1: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
-    let us_node_id_2: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 0);
-    let us_node_id_3: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 0);
-    let us_node_id_4: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 4)), 0);
-    // 3 eu nodes ids
-    let eu_node_id_1: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 1)), 0);
-    let eu_node_id_2: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 2)), 0);
-    let eu_node_id_3: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(128, 0, 0, 3)), 0);
-    let us = "US".to_string();
-    let eu = "EU".to_string();
-    for _ in 0..256 {
-        // 4 nodes in US Datacenter
-        tokens.push((rng.sample(uniform), us_node_id_1, us.clone()));
-        tokens.push((rng.sample(uniform), us_node_id_2, us.clone()));
-        tokens.push((rng.sample(uniform), us_node_id_3, us.clone()));
-        tokens.push((rng.sample(uniform), us_node_id_4, us.clone()));
-        // 3 nodes in EU Datacenter
-        tokens.push((rng.sample(uniform), eu_node_id_1, eu.clone()));
-        tokens.push((rng.sample(uniform), eu_node_id_2, eu.clone()));
-        tokens.push((rng.sample(uniform), eu_node_id_3, eu.clone()));
-    }
-    // sort tokens by token
-    tokens.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    // compute replicas for each vnode
-    let mut vnodes = Vec::new();
-    let mut recent_left = MIN;
-    for (right, node_id, dc) in &tokens {
-        // create vnode(starting from min)
-        let vnode = (recent_left, *right, *node_id, dc.clone(), 12, 8); // fake msb/shardcount
-                                                                        // push to vnodes
-        vnodes.push(vnode);
-        // update recent_left to right
-        recent_left = *right;
-    }
-    // we don't forget to add max vnode to our token range
-    let (_, recent_node_id, recent_dc) = tokens.last().unwrap();
-    let max_vnode = (recent_left, MAX, *recent_node_id, recent_dc.clone(), 12, 8); //
-    vnodes.push(max_vnode);
-    // compute all possible replicas in advance for each vnode in vnodes
-    // prepare ring chain
-    let mut chain = Vec::new();
-    let mut starting_index = 0;
-    for (left, right, _, _, _, _) in &vnodes {
-        let mut replicas: Replicas = HashMap::new();
-        // first walk clockwise phase (start..end)
-        walk_clockwise(starting_index, vnodes.len(), &vnodes, &mut replicas);
-        // second walk clockwise phase (0..start)
-        walk_clockwise(0, starting_index, &vnodes, &mut replicas);
-        // update starting_index
-        starting_index += 1;
-        // create vnode
-        chain.push((*left, *right, replicas));
-    }
-    // build computed binary search tree from chain
-    // we start spliting from the root which is chain.len()/2
-    // for example if chain length is 3 then the root vnode is at 3/2 = 1
-    // and it will be mild where both of its childern are deadends.
-    let _root = compute_vnode(&chain);
 }
 
 /// Mod impl the shared ring
