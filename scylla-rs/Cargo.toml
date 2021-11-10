@@ -22,9 +22,14 @@ thiserror = "1.0"
 num-derive = "0.3"
 num-traits = "0.2"
 md5 = "0.7"
-scylla-macros = { path = "../scylla-macros" }
+scylla-rs-macros = { path = "../scylla-macros" }
 arc-swap = "1.4.0"
 maplit = "1.0.2"
+uuid = "0.8"
+regex = "1.5"
+hex = "0.4"
+derive_builder = "0.10"
+lazy_static = "1.4"
 
 # App
 #backstage = { version = "0.1", optional = true }

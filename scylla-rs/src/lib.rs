@@ -6,6 +6,8 @@ pub use cql::*;
 #[cfg(feature = "app")]
 pub mod app;
 
+pub mod parser;
+
 #[cfg(feature = "app")]
 pub mod prelude {
     pub use super::{
