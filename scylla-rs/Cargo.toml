@@ -30,6 +30,7 @@ regex = "1.5"
 hex = "0.4"
 derive_builder = "0.10"
 lazy_static = "1.4"
+chrono = { version = "0.4", default-features = false }
 
 # App
 #backstage = { version = "0.1", optional = true }

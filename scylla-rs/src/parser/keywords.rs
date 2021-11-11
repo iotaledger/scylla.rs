@@ -1,17 +1,8 @@
-use std::{
-    fmt::Display,
-    str::FromStr,
-};
+use std::{fmt::Display, str::FromStr};
 
-use super::{
-    Alphanumeric,
-    Parse,
-    Peek,
-    StatementStream,
-    Token,
-};
+use super::{Alphanumeric, Parse, Peek, StatementStream};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Keyword {
     ADD,
     AGGREGATE,
@@ -59,7 +50,6 @@ pub enum Keyword {
     FUNCTION,
     FUNCTIONS,
     GRANT,
-    GROUP,
     IF,
     IN,
     INDEX,
@@ -146,9 +136,9 @@ macro_rules! keyword {
             type Output = $t;
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 let this = stringify!($t);
-                if let Ok(token) = s.parse_from::<Token>() {
-                    if token != this {
-                        anyhow::bail!("Expected keyword {}, found {}", this, token)
+                if let Some(token) = s.nextn(this.len()) {
+                    if token.as_str() != this {
+                        anyhow::bail!("Expected keyword '{}', found '{}'", this, token)
                     }
                 }
                 Ok($t)
@@ -157,7 +147,16 @@ macro_rules! keyword {
         impl Peek for $t {
             fn peek(mut s: StatementStream<'_>) -> bool {
                 let this = stringify!($t);
-                s.parse_from::<Token>().ok().map(|s| s.as_str()) == Some(this)
+                for (s1, s2) in this.chars().zip(std::iter::repeat_with(|| s.next())) {
+                    if let Some(s2) = s2 {
+                        if s1 != s2 {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+                true
             }
         }
     };
@@ -180,7 +179,9 @@ keyword!(BIGINT);
 keyword!(BLOB);
 keyword!(BOOLEAN);
 keyword!(BY);
+keyword!(BYPASS);
 keyword!(CALLED);
+keyword!(CACHE);
 keyword!(CAST);
 keyword!(CLUSTERING);
 keyword!(COLUMNFAMILY);
@@ -201,6 +202,7 @@ keyword!(DROP);
 keyword!(ENTRIES);
 keyword!(EXECUTE);
 keyword!(EXISTS);
+keyword!(FALSE);
 keyword!(FILTERING);
 keyword!(FINALFUNC);
 keyword!(FLOAT);
@@ -267,6 +269,7 @@ keyword!(SUPERUSER);
 keyword!(TABLE);
 keyword!(TEXT);
 keyword!(TIME);
+keyword!(TIMEOUT);
 keyword!(TIMESTAMP);
 keyword!(TIMEUUID);
 keyword!(TINYINT);
@@ -276,6 +279,7 @@ keyword!(TRIGGER);
 keyword!(TRUNCATE);
 keyword!(TTL);
 keyword!(TUPLE);
+keyword!(TRUE);
 keyword!(TYPE);
 keyword!(UNLOGGED);
 keyword!(UPDATE);
@@ -343,7 +347,6 @@ impl Display for Keyword {
                 Keyword::FUNCTION => "FUNCTION",
                 Keyword::FUNCTIONS => "FUNCTIONS",
                 Keyword::GRANT => "GRANT",
-                Keyword::GROUP => "GROUP",
                 Keyword::IF => "IF",
                 Keyword::IN => "IN",
                 Keyword::INDEX => "INDEX",
@@ -477,7 +480,6 @@ impl FromStr for Keyword {
             "FUNCTION" => Keyword::FUNCTION,
             "FUNCTIONS" => Keyword::FUNCTIONS,
             "GRANT" => Keyword::GRANT,
-            "GROUP" => Keyword::GROUP,
             "IF" => Keyword::IF,
             "IN" => Keyword::IN,
             "INDEX" => Keyword::INDEX,
@@ -570,7 +572,7 @@ impl Parse for Keyword {
 }
 
 impl Peek for Keyword {
-    fn peek(s: StatementStream<'_>) -> bool {
+    fn peek(mut s: StatementStream<'_>) -> bool {
         if let Ok(token) = s.parse_from::<Alphanumeric>() {
             Keyword::from_str(&token).is_ok()
         } else {
@@ -587,13 +589,13 @@ macro_rules! punctuation {
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 let c = s.parse::<char>()?;
                 if c != $c {
-                    anyhow::bail!("Expected {}, found {}", $c, c);
+                    anyhow::bail!("Expected '{}', found '{}'", $c, c);
                 }
                 Ok($t)
             }
         }
         impl Peek for $t {
-            fn peek(s: StatementStream<'_>) -> bool {
+            fn peek(mut s: StatementStream<'_>) -> bool {
                 s.peek() == Some($c)
             }
         }
@@ -613,6 +615,7 @@ punctuation!(RightAngle, '>');
 punctuation!(Equals, '=');
 punctuation!(Plus, '+');
 punctuation!(Minus, '-');
+punctuation!(Dash, '-');
 punctuation!(Star, '*');
 punctuation!(Slash, '/');
 punctuation!(Percent, '%');
@@ -621,4 +624,5 @@ punctuation!(Exclamation, '!');
 punctuation!(Question, '?');
 punctuation!(Colon, ':');
 punctuation!(Dot, '.');
-punctuation!(Quote, '"');
+punctuation!(SingleQuote, '\'');
+punctuation!(DoubleQuote, '"');

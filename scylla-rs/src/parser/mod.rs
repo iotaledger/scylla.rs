@@ -1,5 +1,4 @@
-use std::str::FromStr;
-
+use std::marker::PhantomData;
 use uuid::Uuid;
 
 mod statements;
@@ -26,23 +25,54 @@ impl<'a> StatementStream<'a> {
         }
     }
 
+    pub fn remaining(&self) -> usize {
+        self.cursor.clone().count()
+    }
+
+    pub fn nremaining(&self, n: usize) -> bool {
+        let mut cursor = self.cursor.clone();
+        for _ in 0..n {
+            if cursor.next().is_none() {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn peek(&mut self) -> Option<char> {
         self.cursor.peek().map(|c| *c)
     }
 
-    pub fn peekn(&mut self, n: usize) -> Option<char> {
+    pub fn peekn(&mut self, n: usize) -> Option<String> {
         let mut cursor = self.cursor.clone();
-        for _ in 0..n - 1 {
-            cursor.next();
+        let mut res = String::new();
+        for _ in 0..n {
+            if let Some(next) = cursor.next() {
+                res.push(next);
+            } else {
+                return None;
+            }
         }
-        cursor.next()
+        Some(res)
     }
 
     pub fn next(&mut self) -> Option<char> {
         self.cursor.next()
     }
 
-    fn ignore_empty(&mut self) {
+    pub fn nextn(&mut self, n: usize) -> Option<String> {
+        if self.nremaining(n) {
+            let mut res = String::new();
+            for _ in 0..n {
+                res.push(self.next().unwrap());
+            }
+            Some(res)
+        } else {
+            None
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
         while let Some(c) = self.cursor.peek() {
             if c.is_whitespace() {
                 self.cursor.next();
@@ -55,46 +85,34 @@ impl<'a> StatementStream<'a> {
 
     pub fn check<P: Peek>(&self) -> bool {
         let mut this = self.clone();
-        this.ignore_empty();
+        this.skip_whitespace();
         P::peek(this)
     }
 
     pub fn parse_if<P: Peek + Parse<Output = P>>(&mut self) -> Option<anyhow::Result<P>> {
-        let mut this = self.clone();
-        this.ignore_empty();
         self.parse::<Option<P>>().transpose()
     }
 
     pub fn parse_from_if<P: Peek + Parse>(&mut self) -> Option<anyhow::Result<P::Output>> {
-        let mut this = self.clone();
-        this.ignore_empty();
         self.parse_from::<Option<P>>().transpose()
     }
 
     pub fn parse<P: Parse<Output = P>>(&mut self) -> anyhow::Result<P> {
-        self.ignore_empty();
+        self.skip_whitespace();
         P::parse(self)
     }
 
     pub fn parse_from<P: Parse>(&mut self) -> anyhow::Result<P::Output> {
-        self.ignore_empty();
+        self.skip_whitespace();
         P::parse(self)
     }
 }
 
-mod test {
-    #[test]
-    fn test_parse_select() {
-        let mut stream = super::StatementStream::new(
-            "SELECT time, value
-            FROM events
-            WHERE event_type = 'myEvent'
-              AND time > '2011-02-03'
-              AND time <= '2012-01-01'",
-        );
-        while let Ok(token) = stream.parse::<super::SelectStatement>() {
-            println!("{:?}", token);
-        }
+impl<'a> Iterator for StatementStream<'a> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next()
     }
 }
 
@@ -105,7 +123,7 @@ pub trait Peek {
 macro_rules! peek_parse_tuple {
     ($($t:ident),+) => {
         impl<$($t: Peek + Parse),+> Peek for ($($t),+,) {
-            fn peek(s: StatementStream<'_>) -> bool {
+            fn peek(mut s: StatementStream<'_>) -> bool {
                 $(
                     if s.parse_from_if::<$t>().is_none() {
                         return false;
@@ -145,9 +163,42 @@ pub trait Parse {
 impl Parse for char {
     type Output = char;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        s.cursor.next().ok_or_else(|| anyhow::anyhow!("End of statement!"))
+        match s.next() {
+            Some(c) => Ok(c),
+            None => Err(anyhow::anyhow!("End of statement!")),
+        }
     }
 }
+
+macro_rules! peek_parse_number {
+    ($n:ident, $t:ident) => {
+        impl Parse for $n {
+            type Output = $n;
+            fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+                s.parse_from::<$t>()?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid {}!", std::any::type_name::<$n>()))
+            }
+        }
+
+        impl Peek for $n {
+            fn peek(mut s: StatementStream<'_>) -> bool {
+                s.parse::<Self>().is_ok()
+            }
+        }
+    };
+}
+
+peek_parse_number!(i8, SignedNumber);
+peek_parse_number!(i16, SignedNumber);
+peek_parse_number!(i32, SignedNumber);
+peek_parse_number!(i64, SignedNumber);
+peek_parse_number!(u8, Number);
+peek_parse_number!(u16, Number);
+peek_parse_number!(u32, Number);
+peek_parse_number!(u64, Number);
+peek_parse_number!(f32, Float);
+peek_parse_number!(f64, Float);
 
 impl<T: Peek> Peek for Option<T> {
     fn peek(s: StatementStream<'_>) -> bool {
@@ -166,22 +217,96 @@ impl<T: Parse + Peek> Parse for Option<T> {
     }
 }
 
-impl<T: Parse> Parse for Vec<T> {
+pub struct List<T, Delim>(PhantomData<fn(T, Delim) -> (T, Delim)>);
+impl<T: Parse, Delim: Parse + Peek> Parse for List<T, Delim> {
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        let res = vec![s.parse_from::<T>()?];
-        while s.parse_from_if::<Comma>().is_some() {
+        let mut res = vec![s.parse_from::<T>()?];
+        while s.parse_from_if::<Delim>().is_some() {
             res.push(s.parse_from::<T>()?);
         }
         Ok(res)
     }
 }
+impl<T: Parse, Delim: Parse + Peek> Peek for List<T, Delim> {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<Self>().is_ok()
+    }
+}
 
-pub struct Token(String);
+pub struct Nothing;
+impl Parse for Nothing {
+    type Output = Nothing;
+    fn parse(_: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(Nothing)
+    }
+}
+impl Peek for Nothing {
+    fn peek(_: StatementStream<'_>) -> bool {
+        true
+    }
+}
+
+pub struct Whitespace;
+impl Parse for Whitespace {
+    type Output = Whitespace;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        while let Some(c) = s.peek() {
+            if c.is_whitespace() {
+                s.next();
+            } else {
+                break;
+            }
+        }
+        Ok(Whitespace)
+    }
+}
+impl Peek for Whitespace {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.peek().map(|c| c.is_whitespace()).unwrap_or(false)
+    }
+}
+
+impl Parse for String {
+    type Output = String;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        let mut dollars = false;
+        if s.peek() == Some('\'') {
+            s.next();
+        } else if s.peekn(2).map(|s| s.as_str() == "$$").unwrap_or(false) {
+            dollars = true;
+            s.nextn(2);
+        } else {
+            return Err(anyhow::anyhow!("Expected opening quote!"));
+        }
+        while let Some(c) = s.next() {
+            if dollars && c == '$' && s.peek().map(|c| c == '$').unwrap_or(false) {
+                s.next();
+                return Ok(res);
+            } else if !dollars && c == '\'' {
+                return Ok(res);
+            } else {
+                res.push(c);
+            }
+        }
+        if res.is_empty() {
+            anyhow::bail!("End of statement!")
+        }
+        Ok(res)
+    }
+}
+impl Peek for String {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse::<Self>().is_ok()
+    }
+}
+
+pub struct Token;
 impl Parse for Token {
     type Output = String;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        let res = String::new();
+        let mut res = String::new();
         while let Some(c) = s.next() {
             if c.is_whitespace() {
                 break;
@@ -196,19 +321,70 @@ impl Parse for Token {
     }
 }
 impl Peek for Token {
-    fn peek(s: StatementStream<'_>) -> bool {
+    fn peek(mut s: StatementStream<'_>) -> bool {
         s.peek().is_some()
     }
 }
 
-pub struct Alphanumeric(String);
+pub struct Alpha;
+impl Parse for Alpha {
+    type Output = String;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        while let Some(c) = s.peek() {
+            if c.is_alphabetic() {
+                res.push(c);
+                s.next();
+            } else {
+                break;
+            }
+        }
+        if res.is_empty() {
+            anyhow::bail!("End of statement!")
+        }
+        Ok(res)
+    }
+}
+impl Peek for Alpha {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<Alpha>().is_ok()
+    }
+}
+
+pub struct Hex;
+impl Parse for Hex {
+    type Output = Vec<u8>;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        while let Some(c) = s.peek() {
+            if c.is_alphanumeric() {
+                res.push(c);
+                s.next();
+            } else {
+                break;
+            }
+        }
+        if res.is_empty() {
+            anyhow::bail!("End of statement!")
+        }
+        Ok(hex::decode(res)?)
+    }
+}
+impl Peek for Hex {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<Hex>().is_ok()
+    }
+}
+
+pub struct Alphanumeric;
 impl Parse for Alphanumeric {
     type Output = String;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        let res = String::new();
-        while let Some(c) = s.next() {
+        let mut res = String::new();
+        while let Some(c) = s.peek() {
             if c.is_alphanumeric() {
                 res.push(c);
+                s.next();
             } else {
                 break;
             }
@@ -220,8 +396,131 @@ impl Parse for Alphanumeric {
     }
 }
 impl Peek for Alphanumeric {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.peek().map(|c| c.is_alphanumeric()).unwrap_or(false)
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<Alphanumeric>().is_ok()
+    }
+}
+
+pub struct Number;
+impl Parse for Number {
+    type Output = String;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        while let Some(c) = s.peek() {
+            if c.is_numeric() {
+                res.push(c);
+                s.next();
+            } else {
+                break;
+            }
+        }
+        if res.is_empty() {
+            anyhow::bail!("End of statement!")
+        }
+        Ok(res)
+    }
+}
+impl Peek for Number {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<Number>().is_ok()
+    }
+}
+
+pub struct SignedNumber;
+impl Parse for SignedNumber {
+    type Output = String;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        let mut has_negative = false;
+        while let Some(c) = s.peek() {
+            if c.is_numeric() {
+                res.push(c);
+                s.next();
+            } else if c == '-' {
+                if has_negative || !res.is_empty() {
+                    anyhow::bail!("Invalid number: Improper negative sign")
+                } else {
+                    has_negative = true;
+                    res.push(c);
+                    s.next();
+                }
+            } else {
+                break;
+            }
+        }
+        if res.is_empty() {
+            anyhow::bail!("End of statement!")
+        }
+        Ok(res)
+    }
+}
+impl Peek for SignedNumber {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<SignedNumber>().is_ok()
+    }
+}
+
+pub struct Float;
+impl Parse for Float {
+    type Output = String;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        let mut has_dot = false;
+        let mut has_negative = false;
+        let mut has_e = false;
+        while let Some(c) = s.peek() {
+            if c.is_numeric() {
+                res.push(c);
+                s.next();
+            } else if c == '-' {
+                if has_negative || !res.is_empty() {
+                    anyhow::bail!("Invalid float: Improper negative sign")
+                } else {
+                    has_negative = true;
+                    res.push(c);
+                    s.next();
+                }
+            } else if c == '.' {
+                if has_dot {
+                    anyhow::bail!("Invalid float: Too many decimal points")
+                } else {
+                    has_dot = true;
+                    res.push(c);
+                    s.next();
+                }
+            } else if c == 'e' || c == 'E' {
+                if has_e {
+                    anyhow::bail!("Invalid float: Too many scientific notations")
+                } else {
+                    if res.is_empty() {
+                        anyhow::bail!("Invalid float: Missing number before scientific notation")
+                    }
+                    res.push(c);
+                    s.next();
+                    has_e = true;
+                    if let Some(next) = s.next() {
+                        if next == '-' || next == '+' || next.is_numeric() {
+                            res.push(next);
+                        } else {
+                            anyhow::bail!("Invalid float: Invalid scientific notation")
+                        }
+                    } else {
+                        anyhow::bail!("Invalid float: Missing scientific notation value")
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        if res.is_empty() {
+            anyhow::bail!("End of statement!")
+        }
+        Ok(res)
+    }
+}
+impl Peek for Float {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse_from::<Float>().is_ok()
     }
 }
 
@@ -249,55 +548,8 @@ parse_peek_group!(Parens, LeftParen, RightParen);
 parse_peek_group!(Brackets, LeftBracket, RightBracket);
 parse_peek_group!(Braces, LeftBrace, RightBrace);
 parse_peek_group!(Angles, LeftAngle, RightAngle);
-
-#[derive(Copy, Clone, Debug)]
-pub enum ArithmeticOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum Operator {
-    Equal,
-    NotEqual,
-    GreaterThan,
-    GreaterThanOrEqual,
-    LessThan,
-    LessThanOrEqual,
-    In,
-    Contains,
-    ContainsKey,
-}
-
-impl Parse for Operator {
-    type Output = Operator;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(res) = s.parse_if::<(Keyword, Option<Keyword>)>() {
-            let (first, second) = res?;
-            Ok(match (first, second) {
-                (Keyword::IN, _) => Operator::In,
-                (Keyword::CONTAINS, _) => Operator::Contains,
-                (Keyword::CONTAINS, Some(Keyword::KEY)) => Operator::ContainsKey,
-                _ => anyhow::bail!("Invalid keyword operator!"),
-            })
-        } else if let (Some(first), second) = (s.next(), s.peek()) {
-            match (first, second) {
-                ('=', _) => Ok(Operator::Equal),
-                ('!', Some('=')) => Ok(Operator::NotEqual),
-                ('>', Some('=')) => Ok(Operator::GreaterThanOrEqual),
-                ('<', Some('=')) => Ok(Operator::LessThanOrEqual),
-                ('>', _) => Ok(Operator::GreaterThan),
-                ('<', _) => Ok(Operator::LessThan),
-                _ => anyhow::bail!("Invalid operator"),
-            }
-        } else {
-            anyhow::bail!("Invalid token for operator!")
-        }
-    }
-}
+parse_peek_group!(SingleQuoted, SingleQuote, SingleQuote);
+parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 
 #[derive(Clone, Debug)]
 pub enum BindMarker {
@@ -305,89 +557,41 @@ pub enum BindMarker {
     Named(Identifier),
 }
 
-#[derive(Clone, Debug)]
-pub enum Term {
-    Constant(Constant),
-    Literal(CqlTypeLiteral),
-    FunctionCall(FunctionCall),
-    ArithmeticOp {
-        lhs: Option<Box<Term>>,
-        op: ArithmeticOp,
-        rhs: Box<Term>,
-    },
-    TypeHint {
-        hint: CqlType,
-        ident: Identifier,
-    },
-    BindMarker(BindMarker),
-}
-
-impl Parse for Term {
-    type Output = Term;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        todo!()
+impl Parse for BindMarker {
+    type Output = BindMarker;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(if s.parse_if::<Question>().is_some() {
+            BindMarker::Anonymous
+        } else {
+            let (_, id) = s.parse::<(Colon, Identifier)>()?;
+            BindMarker::Named(id)
+        })
     }
 }
 
-impl Peek for Term {
+impl Peek for BindMarker {
     fn peek(s: StatementStream<'_>) -> bool {
-        todo!()
+        s.check::<Question>() || s.check::<(Colon, Identifier)>()
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Constant {
-    Null,
-    String(String),
-    Integer(String),
-    Float(String),
-    Boolean(bool),
-    Uuid(Uuid),
-    Hex(Vec<u8>),
-    Blob(Vec<u8>),
+impl Parse for Uuid {
+    type Output = Uuid;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if let Some(u) = s.nextn(36) {
+            Ok(Uuid::parse_str(&u)?)
+        } else {
+            anyhow::bail!("Invalid UUID!")
+        }
+    }
+}
+impl Peek for Uuid {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse::<Self>().is_ok()
+    }
 }
 
-// impl Parse for Constant {
-//    fn parse(input: ParseStream) -> syn::Result<Self> {
-//        let lookahead = input.lookahead1();
-//        Ok(if lookahead.peek(NULL) {
-//            Constant::Null
-//        } else if lookahead.peek(NAN) {
-//            Constant::Float(Keyword::NAN.to_string())
-//        } else if lookahead.peek(INFINITY) {
-//            Constant::Float(Keyword::INFINITY.to_string())
-//        } else if lookahead.peek(syn::Ident::peek_any) {
-//            let id = syn::Ident::parse_any(input)?.to_string().to_lowercase();
-//            if let Some(captures) = STRING_REGEX.captures(&id) {
-//                Constant::String(
-//                    captures
-//                        .get(1)
-//                        .unwrap_or_else(|| captures.get(2).unwrap())
-//                        .as_str()
-//                        .to_string(),
-//                )
-//            } else if regex::Regex::new(INTEGER_REGEX).unwrap().is_match(&id) {
-//                Constant::Integer(id)
-//            } else if regex::Regex::new(FLOAT_REGEX).unwrap().is_match(&id) {
-//                Constant::Float(id)
-//            } else if regex::Regex::new(BOOLEAN_REGEX).unwrap().is_match(&id) {
-//                Constant::Boolean(id == "true")
-//            } else if regex::Regex::new(UUID_REGEX).unwrap().is_match(&id) {
-//                Constant::Uuid(Uuid::parse_str(&id).unwrap())
-//            } else if regex::Regex::new(HEX_REGEX).unwrap().is_match(&id) {
-//                Constant::Hex(hex::decode(id).unwrap())
-//            } else if regex::Regex::new(BLOB_REGEX).unwrap().is_match(&id) {
-//                Constant::Blob(hex::decode(id).unwrap())
-//            } else {
-//                return Err(lookahead.error());
-//            }
-//        } else {
-//            return Err(lookahead.error());
-//        })
-//    }
-//}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum Identifier {
     Name(Name),
     Keyword(Keyword),
@@ -406,14 +610,11 @@ impl Parse for Identifier {
 
 impl Peek for Identifier {
     fn peek(s: StatementStream<'_>) -> bool {
-        match s.parse_from::<Token>() {
-            Ok(t) => Keyword::from_str(&t).is_ok() || UNQUOTED_REGEX.is_match(&t) || QUOTED_REGEX.is_match(&t),
-            Err(e) => false,
-        }
+        s.check::<Keyword>() || s.check::<Name>()
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum Name {
     Quoted(String),
     Unquoted(String),
@@ -422,20 +623,36 @@ pub enum Name {
 impl Parse for Name {
     type Output = Name;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if s.parse_if::<Quote>().is_some() {
-            let res = s.parse_from::<Alphanumeric>()?;
-            s.parse::<Quote>()?;
-            Ok(Name::Quoted(res))
+        let mut res = String::new();
+        if s.peek().map(|c| c == '"').unwrap_or(false) {
+            while let Some(c) = s.next() {
+                if c == '"' {
+                    return Ok(Self::Quoted(res));
+                } else {
+                    res.push(c);
+                }
+            }
+            anyhow::bail!("End of statement!")
         } else {
-            Ok(Name::Unquoted(s.parse_from::<Alphanumeric>()?))
+            while let Some(c) = s.peek() {
+                if c.is_alphanumeric() || c == '_' {
+                    s.next();
+                    res.push(c);
+                } else {
+                    break;
+                }
+            }
+            if res.is_empty() {
+                anyhow::bail!("End of statement!")
+            }
+            return Ok(Self::Unquoted(res));
         }
     }
 }
 
 impl Peek for Name {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.parse_if::<Quote>();
-        s.check::<Alphanumeric>()
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse::<Self>().is_ok()
     }
 }
 
@@ -501,22 +718,13 @@ pub struct ColumnOrder {
     pub order: Order,
 }
 
-// impl Parse for ColumnOrder {
-//    fn parse(input: ParseStream) -> syn::Result<Self> {
-//        let column = input.parse::<Identifier>()?;
-//        let lookahead = input.lookahead1();
-//        let order = if lookahead.peek(ASC) {
-//            input.parse::<ASC>()?;
-//            Order::Ascending
-//        } else if lookahead.peek(DESC) {
-//            input.parse::<DESC>()?;
-//            Order::Descending
-//        } else {
-//            Order::default()
-//        };
-//        Ok(ColumnOrder { column, order })
-//    }
-//}
+impl Parse for ColumnOrder {
+    type Output = ColumnOrder;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let (column, order) = s.parse::<(Identifier, Order)>()?;
+        Ok(ColumnOrder { column, order })
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum Order {
@@ -524,9 +732,41 @@ pub enum Order {
     Descending,
 }
 
+impl Parse for Order {
+    type Output = Order;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if s.parse_if::<ASC>().is_some() {
+            Ok(Order::Ascending)
+        } else if s.parse_if::<DESC>().is_some() {
+            Ok(Order::Descending)
+        } else {
+            anyhow::bail!("Invalid sort order!")
+        }
+    }
+}
+
 impl Default for Order {
     fn default() -> Self {
         Self::Ascending
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FromClause {
+    pub table: TableName,
+}
+
+impl Parse for FromClause {
+    type Output = FromClause;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, table) = s.parse::<(FROM, TableName)>()?;
+        Ok(FromClause { table })
+    }
+}
+
+impl Peek for FromClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<FROM>()
     }
 }
 
@@ -538,7 +778,7 @@ pub struct WhereClause {
 impl Parse for WhereClause {
     type Output = WhereClause;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, relations) = s.parse::<(WHERE, Vec<Relation>)>()?;
+        let (_, relations) = s.parse_from::<(WHERE, List<Relation, AND>)>()?;
         Ok(WhereClause { relations })
     }
 }
@@ -572,7 +812,7 @@ impl Parse for Relation {
     type Output = Relation;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         Ok(if s.parse_if::<TOKEN>().is_some() {
-            let (columns, operator, term) = s.parse_from::<(Parens<Vec<Identifier>>, Operator, Term)>()?;
+            let (columns, operator, term) = s.parse_from::<(Parens<List<Identifier, Comma>>, Operator, Term)>()?;
             Relation::Token {
                 columns,
                 operator,
@@ -580,7 +820,7 @@ impl Parse for Relation {
             }
         } else if s.check::<LeftParen>() {
             let (columns, operator, tuple_literal) =
-                s.parse_from::<(Parens<Vec<Identifier>>, Operator, TupleLiteral)>()?;
+                s.parse_from::<(Parens<List<Identifier, Comma>>, Operator, TupleLiteral)>()?;
             Relation::Tuple {
                 columns,
                 operator,
@@ -598,96 +838,72 @@ pub struct GroupByClause {
     pub columns: Vec<Identifier>,
 }
 
-// impl Parse for GroupByClause {
-//    fn parse(input: ParseStream) -> syn::Result<Self> {
-//        input.parse::<GROUP>()?;
-//        input.parse::<BY>()?;
-//        let mut columns = vec![input.parse()?];
-//        while input.peek(syn::Token![,]) {
-//            input.parse::<syn::Token![,]>()?;
-//            columns.push(input.parse()?);
-//        }
-//        Ok(Self { columns })
-//    }
-//}
-// impl CustomToken for GroupByClause {
-//    fn peek(cursor: syn::buffer::Cursor) -> bool {
-//        if let Some((group, rest)) = cursor.ident() {
-//            group == "GROUP" && rest.ident().unwrap().0 == "BY"
-//        } else {
-//            false
-//        }
-//    }
-//
-//    fn display() -> &'static str {
-//        "GROUP BY clause"
-//    }
-//}
+impl Parse for GroupByClause {
+    type Output = GroupByClause;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<Identifier, Comma>)>()?;
+        Ok(GroupByClause { columns })
+    }
+}
+
+impl Peek for GroupByClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<(GROUP, BY)>()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct OrderingClause {
     pub columns: Vec<ColumnOrder>,
 }
 
-// impl Parse for OrderingClause {
-//    fn parse(input: ParseStream) -> syn::Result<Self> {
-//        input.parse::<ORDER>()?;
-//        input.parse::<BY>()?;
-//        let mut columns = vec![input.parse()?];
-//        while input.peek(syn::Token![,]) {
-//            input.parse::<syn::Token![,]>()?;
-//            columns.push(input.parse()?);
-//        }
-//        Ok(Self { columns })
-//    }
-//}
-// impl CustomToken for OrderingClause {
-//    fn peek(cursor: syn::buffer::Cursor) -> bool {
-//        if let Some((order, rest)) = cursor.ident() {
-//            order == "ORDER" && rest.ident().unwrap().0 == "BY"
-//        } else {
-//            false
-//        }
-//    }
-//
-//    fn display() -> &'static str {
-//        "ORDER BY clause"
-//    }
-//}
+impl Parse for OrderingClause {
+    type Output = OrderingClause;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<ColumnOrder, Comma>)>()?;
+        Ok(OrderingClause { columns })
+    }
+}
+
+impl Peek for OrderingClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<(ORDER, BY)>()
+    }
+}
 
 #[derive(Clone, Debug)]
-pub enum MaybeBound {
+pub enum Limit {
     Literal(i32),
     BindMarker(BindMarker),
 }
 
-// impl Parse for MaybeBound {
-//    fn parse(input: ParseStream) -> syn::Result<Self> {
-//        todo!()
-//    }
-//}
-// impl CustomToken for MaybeBound {
-//    fn peek(cursor: syn::buffer::Cursor) -> bool {
-//        if let Some((lit, _rest)) = cursor.literal() {
-//            return regex::Regex::new(INTEGER_REGEX).unwrap().is_match(&lit.to_string());
-//        }
-//        if let Some((id, rest)) = cursor.ident() {
-//            if id == "?" {
-//                return true;
-//            } else {
-//                todo!();
-//            }
-//        } else {
-//            false
-//        }
-//    }
-//
-//    fn display() -> &'static str {
-//        "bind marker or literal"
-//    }
-//}
+impl Parse for Limit {
+    type Output = Limit;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if let Some(bind) = s.parse_if::<BindMarker>() {
+            Ok(Limit::BindMarker(bind?))
+        } else {
+            Ok(Limit::Literal(s.parse::<i32>()?))
+        }
+    }
+}
 
 pub enum ColumnDefault {
     Null,
     Unset,
+}
+
+mod test {
+    #[test]
+    fn test_parse_select() {
+        let mut stream = super::StatementStream::new(
+            "SELECT time, value
+            FROM my_keyspace.events
+            WHERE event_type = 'myEvent'
+            AND time > '2011-02-03'
+            AND time <= '2012-01-01'",
+        );
+        let statement = stream.parse::<super::SelectStatement>().unwrap();
+        println!("{:#?}", statement);
+    }
 }

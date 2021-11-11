@@ -1,20 +1,6 @@
 use crate::parser::{
-    keywords::*,
-    ArithmeticOp,
-    ColumnDefault,
-    CqlType,
-    GroupByClause,
-    Identifier,
-    ListLiteral,
-    MaybeBound,
-    Operator,
-    OrderingClause,
-    Parse,
-    Peek,
-    StatementStream,
-    TableName,
-    Term,
-    TupleLiteral,
+    keywords::*, ArithmeticOp, ColumnDefault, CqlType, DurationLiteral, FromClause, GroupByClause, Identifier, Limit,
+    List, ListLiteral, Operator, OrderingClause, Parens, Parse, Peek, StatementStream, TableName, Term, TupleLiteral,
     WhereClause,
 };
 use derive_builder::Builder;
@@ -29,15 +15,26 @@ pub enum DataManipulationStatement {
 
 #[derive(Builder, Clone, Debug)]
 pub struct SelectStatement {
+    #[builder(default = "false")]
     pub distinct: bool,
     pub select_clause: SelectClauseKind,
-    pub from: TableName,
+    pub from: FromClause,
+    #[builder(default = "None")]
     pub where_clause: Option<WhereClause>,
+    #[builder(default = "None")]
     pub group_by_clause: Option<GroupByClause>,
+    #[builder(default = "None")]
     pub order_by_clause: Option<OrderingClause>,
-    pub per_partition_limit: Option<MaybeBound>,
-    pub limit: Option<MaybeBound>,
+    #[builder(default = "None")]
+    pub per_partition_limit: Option<Limit>,
+    #[builder(default = "None")]
+    pub limit: Option<Limit>,
+    #[builder(default = "false")]
     pub allow_filtering: bool,
+    #[builder(default = "false")]
+    pub bypass_cache: bool,
+    #[builder(default = "None")]
+    pub timeout: Option<DurationLiteral>,
 }
 
 impl Parse for SelectStatement {
@@ -55,7 +52,19 @@ impl Parse for SelectStatement {
             .group_by_clause(s.parse()?)
             .order_by_clause(s.parse()?);
         if s.parse_if::<(PER, PARTITION, LIMIT)>().is_some() {
-            res.per_partition_limit(s.parse()?);
+            res.per_partition_limit(Some(s.parse::<Limit>()?));
+        }
+        if s.parse_if::<LIMIT>().is_some() {
+            res.limit(Some(s.parse::<Limit>()?));
+        }
+        if s.parse_if::<(ALLOW, FILTERING)>().is_some() {
+            res.allow_filtering(true);
+        }
+        if s.parse_if::<(BYPASS, CACHE)>().is_some() {
+            res.bypass_cache(true);
+        }
+        if s.parse_if::<(USING, TIMEOUT)>().is_some() {
+            res.timeout(Some(s.parse::<DurationLiteral>()?));
         }
         Ok(res
             .build()
@@ -78,7 +87,7 @@ impl Parse for SelectClauseKind {
         Ok(if s.parse_if::<Star>().is_some() {
             SelectClauseKind::All
         } else {
-            SelectClauseKind::Selectors(s.parse()?)
+            SelectClauseKind::Selectors(s.parse_from::<List<Selector, Comma>>()?)
         })
     }
 }
@@ -95,9 +104,10 @@ impl Parse for Selector {
     where
         Self: Sized,
     {
+        let (kind, as_id) = s.parse::<(SelectorKind, Option<(AS, Identifier)>)>()?;
         Ok(Self {
-            kind: s.parse()?,
-            as_id: s.parse()?,
+            kind,
+            as_id: as_id.map(|(_, id)| id),
         })
     }
 }
@@ -114,16 +124,13 @@ impl Parse for SelectorFunction {
     where
         Self: Sized,
     {
-        let function = s.parse()?;
-        s.parse::<LeftParen>()?;
-        let args = s.parse()?;
-        s.parse::<RightParen>()?;
+        let (function, args) = s.parse_from::<(Identifier, Parens<List<Selector, Comma>>)>()?;
         Ok(SelectorFunction { function, args })
     }
 }
 
 impl Peek for SelectorFunction {
-    fn peek(s: StatementStream<'_>) -> bool {
+    fn peek(mut s: StatementStream<'_>) -> bool {
         if s.parse_if::<Identifier>().is_some() {
             s.check::<LeftParen>()
         } else {
@@ -148,18 +155,18 @@ impl Parse for SelectorKind {
         Self: Sized,
     {
         Ok(if s.parse_if::<CAST>().is_some() {
-            let (_, selector, _, cql_type, _) = s.parse::<(LeftParen, _, AS, _, RightParen)>()?;
+            let (selector, _, cql_type) = s.parse_from::<Parens<(Selector, AS, CqlType)>>()?;
             Self::Cast(Box::new(selector), cql_type)
         } else if s.parse_if::<COUNT>().is_some() {
             // TODO: Double check that this is ok
-            s.parse::<(LeftParen, char, RightParen)>()?;
+            s.parse_from::<Parens<char>>()?;
             Self::Count
         } else if let Some(f) = s.parse_if() {
             Self::Function(f?)
-        } else if let Some(term) = s.parse_if() {
-            Self::Term(term?)
         } else if let Some(id) = s.parse_if() {
             Self::Column(id?)
+        } else if let Some(term) = s.parse_if() {
+            Self::Term(term?)
         } else {
             anyhow::bail!("Invalid selector!")
         })
@@ -191,8 +198,8 @@ pub enum InsertKind {
 }
 
 pub enum UpdateParameter {
-    TTL(MaybeBound),
-    Timestamp(MaybeBound),
+    TTL(Limit),
+    Timestamp(Limit),
 }
 
 pub struct UpdateStatement {

@@ -1,7 +1,14 @@
 use crate::parser::{
+    Comma,
     CqlType,
+    Dot,
     Identifier,
+    List,
     Name,
+    Parens,
+    Parse,
+    Peek,
+    StatementStream,
     Term,
 };
 
@@ -9,6 +16,22 @@ use crate::parser::{
 pub struct FunctionName {
     pub keyspace: Option<Name>,
     pub name: Name,
+}
+
+impl Parse for FunctionName {
+    type Output = FunctionName;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let (keyspace, name) = s.parse::<(Option<(Name, Dot)>, Name)>()?;
+        Ok(Self {
+            keyspace: keyspace.map(|(k, _)| k),
+            name,
+        })
+    }
+}
+impl Peek for FunctionName {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse::<Self>().is_ok()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -27,6 +50,19 @@ pub struct FunctionReference {
 pub struct FunctionCall {
     pub name: FunctionName,
     pub args: Vec<Term>,
+}
+
+impl Parse for FunctionCall {
+    type Output = FunctionCall;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let (name, args) = s.parse_from::<(FunctionName, Parens<List<Term, Comma>>)>()?;
+        Ok(Self { name, args })
+    }
+}
+impl Peek for FunctionCall {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse::<Self>().is_ok()
+    }
 }
 
 #[derive(Clone, Debug)]
