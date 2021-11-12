@@ -1,6 +1,6 @@
 use super::{
-    keywords::*, Angles, BindMarker, Braces, Brackets, Float, FunctionCall, Hex, Identifier, List, Name, Nothing,
-    Number, Parens, Parse, Peek, SignedNumber, StatementStream, Token,
+    keywords::*, Angles, BindMarker, Braces, Brackets, Float, FunctionCall, Hex, List, Name, Nothing, Number, Parens,
+    Parse, Peek, SignedNumber, StatementStream, Token,
 };
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use std::{
@@ -100,14 +100,12 @@ impl Display for Operator {
 impl Parse for Operator {
     type Output = Operator;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(res) = s.parse_if::<(Keyword, Option<Keyword>)>() {
-            let (first, second) = res?;
-            Ok(match (first, second) {
-                (Keyword::IN, _) => Operator::In,
-                (Keyword::CONTAINS, Some(Keyword::KEY)) => Operator::ContainsKey,
-                (Keyword::CONTAINS, _) => Operator::Contains,
-                _ => anyhow::bail!("Invalid keyword operator!"),
-            })
+        if s.parse_if::<(CONTAINS, KEY)>().is_some() {
+            Ok(Operator::ContainsKey)
+        } else if s.parse_if::<CONTAINS>().is_some() {
+            Ok(Operator::Contains)
+        } else if s.parse_if::<IN>().is_some() {
+            Ok(Operator::In)
         } else if let (Some(first), second) = (s.next(), s.peek()) {
             Ok(match (first, second) {
                 ('=', _) => Operator::Equal,
@@ -125,7 +123,7 @@ impl Parse for Operator {
                 }
                 ('>', _) => Operator::GreaterThan,
                 ('<', _) => Operator::LessThan,
-                _ => anyhow::bail!("Invalid operator"),
+                _ => anyhow::bail!("Invalid operator: '{}' {:?}", first, second),
             })
         } else {
             anyhow::bail!("Invalid token for operator!")
@@ -247,7 +245,7 @@ pub enum Term {
     },
     TypeHint {
         hint: CqlType,
-        ident: Identifier,
+        ident: Name,
     },
     BindMarker(BindMarker),
 }
@@ -285,7 +283,7 @@ impl Peek for Term {
             || s.check::<Literal>()
             || s.check::<FunctionCall>()
             || s.check::<(Option<Term>, ArithmeticOp, Term)>()
-            || s.check::<(CqlType, Identifier)>()
+            || s.check::<(CqlType, Name)>()
             || s.check::<BindMarker>()
     }
 }
@@ -762,7 +760,7 @@ impl Peek for DurationLiteral {
 
 #[derive(Clone, Debug)]
 pub struct UserDefinedTypeLiteral {
-    pub fields: HashMap<Identifier, Term>,
+    pub fields: HashMap<Name, Term>,
 }
 
 impl Parse for UserDefinedTypeLiteral {
@@ -773,7 +771,7 @@ impl Parse for UserDefinedTypeLiteral {
     {
         Ok(Self {
             fields: s
-                .parse_from::<Braces<List<(Identifier, Colon, Term), Comma>>>()?
+                .parse_from::<Braces<List<(Name, Colon, Term), Comma>>>()?
                 .into_iter()
                 .fold(HashMap::new(), |mut acc, (k, _, v)| {
                     acc.insert(k, v);
@@ -791,7 +789,7 @@ impl Peek for UserDefinedTypeLiteral {
 #[derive(Clone, Debug)]
 pub struct UserDefinedType {
     pub keyspace: Option<Name>,
-    pub ident: Identifier,
+    pub ident: Name,
 }
 
 impl Parse for UserDefinedType {
@@ -800,7 +798,7 @@ impl Parse for UserDefinedType {
     where
         Self: Sized,
     {
-        let (keyspace, ident) = s.parse::<(Option<(Name, Dot)>, Identifier)>()?;
+        let (keyspace, ident) = s.parse::<(Option<(Name, Dot)>, Name)>()?;
         Ok(Self {
             keyspace: keyspace.map(|(i, _)| i),
             ident,
@@ -810,6 +808,6 @@ impl Parse for UserDefinedType {
 
 impl Peek for UserDefinedType {
     fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(Option<(Name, Dot)>, Identifier)>()
+        s.check::<(Option<(Name, Dot)>, Name)>()
     }
 }

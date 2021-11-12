@@ -1,16 +1,4 @@
-use crate::parser::{
-    Comma,
-    CqlType,
-    Dot,
-    Identifier,
-    List,
-    Name,
-    Parens,
-    Parse,
-    Peek,
-    StatementStream,
-    Term,
-};
+use crate::parser::{Comma, CqlType, Dot, List, Name, Parens, Parse, Peek, StatementStream, Term};
 
 #[derive(Clone, Debug)]
 pub struct FunctionName {
@@ -80,7 +68,7 @@ pub struct CreateFunctionStatement {
     pub func: FunctionDeclaration,
     pub on_null_input: OnNullInput,
     pub return_type: CqlType,
-    pub language: Identifier,
+    pub language: Name,
     pub body: String,
 }
 
@@ -92,7 +80,7 @@ pub enum OnNullInput {
 
 #[derive(Clone, Debug)]
 pub struct ArgumentDeclaration {
-    pub ident: Identifier,
+    pub ident: Name,
     pub cql_type: CqlType,
 }
 

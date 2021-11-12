@@ -1,11 +1,5 @@
 use super::FunctionReference;
-use crate::parser::{
-    Identifier,
-    MapLiteral,
-    Name,
-    SetLiteral,
-    TableName,
-};
+use crate::parser::{MapLiteral, Name, SetLiteral, TableName};
 
 pub enum RoleStatement {
     Create(CreateRoleStatement),
@@ -27,32 +21,32 @@ pub enum RoleOpt {
 
 pub struct CreateRoleStatement {
     pub if_not_exists: bool,
-    pub name: Identifier,
+    pub name: Name,
     pub options: Vec<RoleOpt>,
 }
 
 pub struct AlterRoleStatement {
-    pub name: Identifier,
+    pub name: Name,
     pub options: Vec<RoleOpt>,
 }
 
 pub struct DropRoleStatement {
     pub if_exists: bool,
-    pub name: Identifier,
+    pub name: Name,
 }
 
 pub struct GrantRoleStatement {
-    pub name: Identifier,
-    pub to: Identifier,
+    pub name: Name,
+    pub to: Name,
 }
 
 pub struct RevokeRoleStatement {
-    pub name: Identifier,
-    pub from: Identifier,
+    pub name: Name,
+    pub from: Name,
 }
 
 pub struct ListRolesStatement {
-    pub name: Option<Identifier>,
+    pub name: Option<Name>,
     pub no_recursive: bool,
 }
 
@@ -77,7 +71,7 @@ pub enum Resource {
     Keyspace(Name),
     Table(TableName),
     AllRoles,
-    Role(Identifier),
+    Role(Name),
     AllFunctions { keyspace: Option<Name> },
     Function(FunctionReference),
     AllMBeans,
@@ -93,19 +87,19 @@ pub enum PermissionStatement {
 pub struct GrantPermissionStatement {
     pub permissions: Vec<PermissionKind>,
     pub resource: Resource,
-    pub to: Identifier,
+    pub to: Name,
 }
 
 pub struct RevokePermissionStatement {
     pub permissions: Vec<PermissionKind>,
     pub resource: Resource,
-    pub from: Identifier,
+    pub from: Name,
 }
 
 pub struct ListPermissionsStatement {
     pub permissions: Vec<PermissionKind>,
     pub resource: Option<Resource>,
-    pub role: Option<Identifier>,
+    pub role: Option<Name>,
     pub no_recursive: bool,
 }
 
@@ -118,20 +112,20 @@ pub enum UserStatement {
 
 pub struct CreateUserStatement {
     pub if_not_exists: bool,
-    pub name: Identifier,
+    pub name: Name,
     pub with_password: String,
     pub superuser: bool,
 }
 
 pub struct AlterUserStatement {
-    pub name: Identifier,
+    pub name: Name,
     pub with_password: Option<String>,
     pub superuser: Option<bool>,
 }
 
 pub struct DropUserStatement {
     pub if_exists: bool,
-    pub name: Identifier,
+    pub name: Name,
 }
 
 pub struct ListUsersStatement;

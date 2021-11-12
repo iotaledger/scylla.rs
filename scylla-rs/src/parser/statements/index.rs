@@ -1,8 +1,4 @@
-use crate::parser::{
-    Identifier,
-    MapLiteral,
-    TableName,
-};
+use crate::parser::{MapLiteral, Name, TableName};
 
 pub struct IndexName(String);
 
@@ -21,8 +17,8 @@ pub struct CreateIndexStatement {
 }
 
 pub enum IndexIdentifier {
-    Column(Identifier),
-    Qualified(IndexQualifier, Identifier),
+    Column(Name),
+    Qualified(IndexQualifier, Name),
 }
 
 pub enum IndexQualifier {

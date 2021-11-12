@@ -1,12 +1,4 @@
-use crate::parser::{
-    ColumnDefinition,
-    Identifier,
-    Name,
-    PrimaryKey,
-    StatementOpt,
-    TableName,
-    TableOpt,
-};
+use crate::parser::{ColumnDefinition, Name, PrimaryKey, StatementOpt, TableName, TableOpt};
 
 pub enum DataDefinitionStatement {
     Use(UseStatement),
@@ -54,7 +46,7 @@ pub struct AlterTableStatement {
 
 pub enum AlterTableInstruction {
     Add(Vec<ColumnDefinition>),
-    Drop(Vec<Identifier>),
+    Drop(Vec<Name>),
     With(Vec<StatementOpt>),
 }
 

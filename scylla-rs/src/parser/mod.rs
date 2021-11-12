@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, str::FromStr};
 use uuid::Uuid;
 
 mod statements;
@@ -89,6 +89,18 @@ impl<'a> StatementStream<'a> {
         P::peek(this)
     }
 
+    pub fn find<P: Parse<Output = P>>(&self) -> Option<P> {
+        let mut this = self.clone();
+        this.skip_whitespace();
+        P::parse(&mut this).ok()
+    }
+
+    pub fn find_from<P: Parse>(&self) -> Option<P::Output> {
+        let mut this = self.clone();
+        this.skip_whitespace();
+        P::parse(&mut this).ok()
+    }
+
     pub fn parse_if<P: Peek + Parse<Output = P>>(&mut self) -> Option<anyhow::Result<P>> {
         self.parse::<Option<P>>().transpose()
     }
@@ -105,14 +117,6 @@ impl<'a> StatementStream<'a> {
     pub fn parse_from<P: Parse>(&mut self) -> anyhow::Result<P::Output> {
         self.skip_whitespace();
         P::parse(self)
-    }
-}
-
-impl<'a> Iterator for StatementStream<'a> {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next()
     }
 }
 
@@ -167,6 +171,12 @@ impl Parse for char {
             Some(c) => Ok(c),
             None => Err(anyhow::anyhow!("End of statement!")),
         }
+    }
+}
+
+impl Peek for char {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.next().is_some()
     }
 }
 
@@ -554,7 +564,7 @@ parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 #[derive(Clone, Debug)]
 pub enum BindMarker {
     Anonymous,
-    Named(Identifier),
+    Named(Name),
 }
 
 impl Parse for BindMarker {
@@ -563,7 +573,7 @@ impl Parse for BindMarker {
         Ok(if s.parse_if::<Question>().is_some() {
             BindMarker::Anonymous
         } else {
-            let (_, id) = s.parse::<(Colon, Identifier)>()?;
+            let (_, id) = s.parse::<(Colon, Name)>()?;
             BindMarker::Named(id)
         })
     }
@@ -571,7 +581,7 @@ impl Parse for BindMarker {
 
 impl Peek for BindMarker {
     fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<Question>() || s.check::<(Colon, Identifier)>()
+        s.check::<Question>() || s.check::<(Colon, Name)>()
     }
 }
 
@@ -594,13 +604,13 @@ impl Peek for Uuid {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum Identifier {
     Name(Name),
-    Keyword(Keyword),
+    Keyword(ReservedKeyword),
 }
 
 impl Parse for Identifier {
     type Output = Identifier;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(keyword) = s.parse_if::<Keyword>() {
+        if let Some(keyword) = s.parse_if::<ReservedKeyword>() {
             Ok(Identifier::Keyword(keyword?))
         } else {
             Ok(Identifier::Name(s.parse::<Name>()?))
@@ -610,7 +620,7 @@ impl Parse for Identifier {
 
 impl Peek for Identifier {
     fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<Keyword>() || s.check::<Name>()
+        s.check::<ReservedKeyword>() || s.check::<Name>()
     }
 }
 
@@ -644,6 +654,8 @@ impl Parse for Name {
             }
             if res.is_empty() {
                 anyhow::bail!("End of statement!")
+            } else if ReservedKeyword::from_str(&res).is_ok() {
+                anyhow::bail!("Invalid name: {} is a reserved keyword", res)
             }
             return Ok(Self::Unquoted(res));
         }
@@ -680,18 +692,18 @@ impl Peek for TableName {
 }
 
 pub struct StatementOpt {
-    pub name: Identifier,
+    pub name: Name,
     pub value: StatementOptValue,
 }
 
 pub enum StatementOptValue {
-    Identifier(Identifier),
+    Identifier(Name),
     Constant(Constant),
     Map(MapLiteral),
 }
 
 pub struct ColumnDefinition {
-    pub name: Identifier,
+    pub name: Name,
     pub data_type: CqlType,
     pub static_column: bool,
     pub primary_key: bool,
@@ -699,11 +711,11 @@ pub struct ColumnDefinition {
 
 pub struct PrimaryKey {
     pub partition_key: PartitionKey,
-    pub clustering_columns: Vec<Identifier>,
+    pub clustering_columns: Vec<Name>,
 }
 
 pub struct PartitionKey {
-    pub columns: Vec<Identifier>,
+    pub columns: Vec<Name>,
 }
 
 pub enum TableOpt {
@@ -714,14 +726,14 @@ pub enum TableOpt {
 
 #[derive(Clone, Debug)]
 pub struct ColumnOrder {
-    pub column: Identifier,
+    pub column: Name,
     pub order: Order,
 }
 
 impl Parse for ColumnOrder {
     type Output = ColumnOrder;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        let (column, order) = s.parse::<(Identifier, Order)>()?;
+        let (column, order) = s.parse::<(Name, Order)>()?;
         Ok(ColumnOrder { column, order })
     }
 }
@@ -792,17 +804,17 @@ impl Peek for WhereClause {
 #[derive(Clone, Debug)]
 pub enum Relation {
     Normal {
-        column: Identifier,
+        column: Name,
         operator: Operator,
         term: Term,
     },
     Tuple {
-        columns: Vec<Identifier>,
+        columns: Vec<Name>,
         operator: Operator,
         tuple_literal: TupleLiteral,
     },
     Token {
-        columns: Vec<Identifier>,
+        columns: Vec<Name>,
         operator: Operator,
         term: Term,
     },
@@ -812,7 +824,7 @@ impl Parse for Relation {
     type Output = Relation;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         Ok(if s.parse_if::<TOKEN>().is_some() {
-            let (columns, operator, term) = s.parse_from::<(Parens<List<Identifier, Comma>>, Operator, Term)>()?;
+            let (columns, operator, term) = s.parse_from::<(Parens<List<Name, Comma>>, Operator, Term)>()?;
             Relation::Token {
                 columns,
                 operator,
@@ -820,7 +832,7 @@ impl Parse for Relation {
             }
         } else if s.check::<LeftParen>() {
             let (columns, operator, tuple_literal) =
-                s.parse_from::<(Parens<List<Identifier, Comma>>, Operator, TupleLiteral)>()?;
+                s.parse_from::<(Parens<List<Name, Comma>>, Operator, TupleLiteral)>()?;
             Relation::Tuple {
                 columns,
                 operator,
@@ -835,13 +847,13 @@ impl Parse for Relation {
 
 #[derive(Clone, Debug)]
 pub struct GroupByClause {
-    pub columns: Vec<Identifier>,
+    pub columns: Vec<Name>,
 }
 
 impl Parse for GroupByClause {
     type Output = GroupByClause;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<Identifier, Comma>)>()?;
+        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<Name, Comma>)>()?;
         Ok(GroupByClause { columns })
     }
 }
@@ -888,9 +900,35 @@ impl Parse for Limit {
     }
 }
 
+impl Peek for Limit {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<i32>() || s.check::<BindMarker>()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub enum ColumnDefault {
     Null,
     Unset,
+}
+
+impl Parse for ColumnDefault {
+    type Output = ColumnDefault;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if s.parse_if::<NULL>().is_some() {
+            Ok(ColumnDefault::Null)
+        } else if s.parse_if::<UNSET>().is_some() {
+            Ok(ColumnDefault::Unset)
+        } else {
+            anyhow::bail!("Invalid column default!")
+        }
+    }
+}
+
+impl Peek for ColumnDefault {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<NULL>() || s.check::<UNSET>()
+    }
 }
 
 mod test {
@@ -904,6 +942,60 @@ mod test {
             AND time <= '2012-01-01'",
         );
         let statement = stream.parse::<super::SelectStatement>().unwrap();
+        println!("{:#?}", statement);
+    }
+
+    #[test]
+    fn test_parse_insert() {
+        let mut stream = super::StatementStream::new(
+            "INSERT INTO NerdMovies (movie, director, main_actor, year)
+            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005)
+            USING TTL 86400 IF NOT EXISTS;",
+        );
+        let statement = stream.parse::<super::InsertStatement>().unwrap();
+        println!("{:#?}", statement);
+    }
+
+    #[test]
+    fn test_parse_update() {
+        let mut stream = super::StatementStream::new(
+            "UPDATE NerdMovies
+            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion'
+            WHERE movie = 'Serenity'
+            IF EXISTS;",
+        );
+        let statement = stream.parse::<super::UpdateStatement>().unwrap();
+        println!("{:#?}", statement);
+    }
+
+    #[test]
+    fn test_parse_delete() {
+        let mut stream = super::StatementStream::new(
+            "DELETE FROM NerdMovies
+            WHERE movie = 'Serenity'
+            IF EXISTS;",
+        );
+        let statement = stream.parse::<super::DeleteStatement>().unwrap();
+        println!("{:#?}", statement);
+    }
+
+    #[test]
+    fn test_parse_batch() {
+        let mut stream = super::StatementStream::new(
+            "BEGIN BATCH
+            INSERT INTO NerdMovies (movie, director, main_actor, year)
+            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005)
+            USING TTL 86400 IF NOT EXISTS;
+            UPDATE NerdMovies
+            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion'
+            WHERE movie = 'Serenity'
+            IF EXISTS;
+            DELETE FROM NerdMovies
+            WHERE movie = 'Serenity'
+            IF EXISTS;
+            APPLY BATCH;",
+        );
+        let statement = stream.parse::<super::BatchStatement>().unwrap();
         println!("{:#?}", statement);
     }
 }

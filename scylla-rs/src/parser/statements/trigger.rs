@@ -1,7 +1,4 @@
-use crate::parser::{
-    Identifier,
-    TableName,
-};
+use crate::parser::{Name, TableName};
 
 pub enum TriggerStatement {
     Create(CreateTriggerStatement),
@@ -10,13 +7,13 @@ pub enum TriggerStatement {
 
 pub struct CreateTriggerStatement {
     pub if_not_exists: bool,
-    pub name: Identifier,
+    pub name: Name,
     pub table: TableName,
     pub using: String,
 }
 
 pub struct DropTriggerStatement {
     pub if_exists: bool,
-    pub name: Identifier,
+    pub name: Name,
     pub table: TableName,
 }
