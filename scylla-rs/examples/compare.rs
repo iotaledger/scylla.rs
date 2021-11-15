@@ -7,7 +7,6 @@ use scylla::{
 };
 use scylla_rs::prelude::*;
 use std::{
-    borrow::Cow,
     convert::TryInto,
     net::SocketAddr,
     sync::Arc,
@@ -136,10 +135,11 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
         let handle = sender.clone();
+        let keyspace = keyspace.clone();
         tokio::task::spawn(async move {
             handle.send(
-                "INSERT INTO scylla_example.test (key, data) VALUES (?, ?)"
-                    .as_insert_prepared(&[&format!("Key {}", i)], &[&i])
+                keyspace
+                    .insert_prepared(&format!("Key {}", i), &i)
                     .build()?
                     .get_local()
                     .await,

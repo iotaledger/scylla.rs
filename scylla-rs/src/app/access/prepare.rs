@@ -52,8 +52,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement().to_string();
-        let keyspace = self.name().into();
+        let statement = self.statement();
+        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
         PrepareRequest::new(keyspace, statement)
     }
 
@@ -103,8 +103,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement().to_string();
-        let keyspace = self.name().into();
+        let statement = self.statement();
+        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
         PrepareRequest::new(keyspace, statement)
     }
 
@@ -163,8 +163,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Update<K, V, I>,
     {
-        let statement = self.statement().to_string();
-        let keyspace = self.name().into();
+        let statement = self.statement();
+        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
         PrepareRequest::new(keyspace, statement)
     }
 
@@ -210,8 +210,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement().to_string();
-        let keyspace = self.name().into();
+        let statement = self.statement();
+        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
         PrepareRequest::new(keyspace, statement)
     }
 }
