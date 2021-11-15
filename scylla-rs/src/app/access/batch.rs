@@ -86,38 +86,38 @@ impl<S: Select<K, V, O> + Debug, K, V, O> Debug for SelectStatement<S, K, V, O> 
 }
 
 impl<S: Update<K, V, U> + Debug, K, V, U> ToStatement for UpdateStatement<S, K, V, U> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
+    fn to_statement(&self) -> String {
+        self.0.statement().to_string()
     }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
+    fn keyspace(&self) -> String {
+        self.0.name()
     }
 }
 
 impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
+    fn to_statement(&self) -> String {
+        self.0.statement().to_string()
     }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
+    fn keyspace(&self) -> String {
+        self.0.name()
     }
 }
 
 impl<S: Delete<K, V, D> + Debug, K, V, D> ToStatement for DeleteStatement<S, K, V, D> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
+    fn to_statement(&self) -> String {
+        self.0.statement().to_string()
     }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
+    fn keyspace(&self) -> String {
+        self.0.name()
     }
 }
 
 impl<S: Select<K, V, O> + Debug, K, V, O> ToStatement for SelectStatement<S, K, V, O> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
+    fn to_statement(&self) -> String {
+        self.0.statement().to_string()
     }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
+    fn keyspace(&self) -> String {
+        self.0.name()
     }
 }
 
@@ -260,7 +260,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
-        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -273,7 +273,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         S: Insert<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -292,7 +292,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         self.map.insert(id, Box::new(InsertStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
-        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -315,7 +315,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         };
 
         // this will advnace the builder as defined in the Update<K, V>
-        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, variables, values);
 
@@ -328,7 +328,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         S: Update<K, V, I>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, variables, values);
 
@@ -353,7 +353,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         self.map.insert(id, Box::new(UpdateStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
-        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, variables, values);
 
@@ -376,7 +376,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
-        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key, variables);
 
@@ -389,7 +389,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         S: Delete<K, V, D>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key, variables);
 
@@ -409,7 +409,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchSt
         self.map.insert(id, Box::new(DeleteStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
-        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key, variables);
 
@@ -433,7 +433,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         };
 
         // this will advnace the builder as defined in the Insert<K, V>
-        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -446,7 +446,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         S: Insert<K, V>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -465,7 +465,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         self.map.insert(id, Box::new(InsertStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
-        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Insert<K, V>
         let builder = S::bind_values(builder, key, value);
 
@@ -488,7 +488,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         };
 
         // this will advnace the builder as defined in the Update<K, V>
-        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, variables, values);
 
@@ -501,7 +501,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         S: Update<K, V, I>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, variables, values);
 
@@ -526,7 +526,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         self.map.insert(id, Box::new(UpdateStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
-        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Update<K, V>
         let builder = S::bind_values(builder, key, variables, values);
 
@@ -549,7 +549,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         };
 
         // this will advnace the builder as defined in the Delete<K, V>
-        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = S::QueryOrPrepared::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key, variables);
 
@@ -562,7 +562,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         S: Delete<K, V, D>,
     {
         // this will advnace the builder with QueryStatement
-        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = QueryStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key, variables);
 
@@ -582,7 +582,7 @@ impl<'a, S: Keyspace, Type: Copy + Into<u8>> BatchCollector<'a, S, Type, BatchVa
         self.map.insert(id, Box::new(DeleteStatement::new(self.keyspace)));
 
         // this will advnace the builder with PreparedStatement
-        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement());
+        let builder = PreparedStatement::encode_statement(self.builder, &self.keyspace.statement().to_string());
         // bind_values of Delete<K, V>
         let builder = S::bind_values(builder, key, variables);
 
@@ -712,7 +712,7 @@ impl Request for BatchRequest {
         self.token
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         panic!("Must use `get_statement` on batch requests!")
     }
 
@@ -755,7 +755,7 @@ impl BatchRequest {
     }
 
     /// Get a statement given an id from the request's map
-    pub fn get_statement(&self, id: &[u8; 16]) -> Option<Cow<str>> {
+    pub fn get_statement(&self, id: &[u8; 16]) -> Option<String> {
         self.map.get(id).map(|res| res.to_statement())
     }
 

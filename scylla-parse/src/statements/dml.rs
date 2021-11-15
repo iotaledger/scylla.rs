@@ -12,6 +12,7 @@ use crate::{
     DurationLiteral,
     FromClause,
     GroupByClause,
+    KeyspaceExt,
     Limit,
     List,
     ListLiteral,
@@ -179,7 +180,7 @@ impl Display for SelectStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "SELECT {}{} FROM {}",
+            "SELECT {}{} {}",
             if self.distinct { "DISTINCT " } else { "" },
             self.select_clause,
             self.from
@@ -209,6 +210,16 @@ impl Display for SelectStatement {
             write!(f, " USING TIMEOUT {}", timeout)?;
         }
         Ok(())
+    }
+}
+
+impl KeyspaceExt for SelectStatement {
+    fn keyspace(&self) -> String {
+        self.from.table.name.to_string()
+    }
+
+    fn set_keyspace(&mut self, keyspace: &str) {
+        self.from.table.name = Name::Quoted(keyspace.to_string());
     }
 }
 
@@ -424,6 +435,16 @@ impl Display for InsertStatement {
     }
 }
 
+impl KeyspaceExt for InsertStatement {
+    fn keyspace(&self) -> String {
+        self.table.name.to_string()
+    }
+
+    fn set_keyspace(&mut self, keyspace: &str) {
+        self.table.name = Name::Quoted(keyspace.to_string());
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum InsertKind {
     NameValue {
@@ -574,6 +595,16 @@ impl Display for UpdateStatement {
     }
 }
 
+impl KeyspaceExt for UpdateStatement {
+    fn keyspace(&self) -> String {
+        self.table.name.to_string()
+    }
+
+    fn set_keyspace(&mut self, keyspace: &str) {
+        self.table.name = Name::Quoted(keyspace.to_string());
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Assignment {
     Simple {
@@ -720,7 +751,7 @@ impl Display for IfClause {
 pub struct DeleteStatement {
     #[builder(default = "None")]
     pub selections: Option<Vec<SimpleSelection>>,
-    pub from: TableName,
+    pub from: FromClause,
     #[builder(default = "None")]
     pub using: Option<Vec<UpdateParameter>>,
     pub where_clause: WhereClause,
@@ -734,7 +765,7 @@ impl Parse for DeleteStatement {
         s.parse::<DELETE>()?;
         let mut res = DeleteStatementBuilder::default();
         res.selections(s.parse_from::<Option<List<SimpleSelection, Comma>>>()?)
-            .from(s.parse::<(FROM, TableName)>()?.1)
+            .from(s.parse()?)
             .using(
                 s.parse_from::<Option<(USING, List<UpdateParameter, AND>)>>()?
                     .map(|(_, v)| v),
@@ -764,7 +795,7 @@ impl Display for DeleteStatement {
                 selections.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
             )?;
         }
-        write!(f, " FROM {}", self.from)?;
+        write!(f, " {}", self.from)?;
         if let Some(using) = &self.using {
             write!(
                 f,
@@ -777,6 +808,16 @@ impl Display for DeleteStatement {
             write!(f, " {}", if_clause)?;
         }
         Ok(())
+    }
+}
+
+impl KeyspaceExt for DeleteStatement {
+    fn keyspace(&self) -> String {
+        self.from.table.name.to_string()
+    }
+
+    fn set_keyspace(&mut self, keyspace: &str) {
+        self.from.table.name = Name::Quoted(keyspace.to_string());
     }
 }
 

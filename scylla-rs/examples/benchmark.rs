@@ -3,7 +3,6 @@
 use log::*;
 use scylla_rs::prelude::*;
 use std::{
-    borrow::Cow,
     net::SocketAddr,
     time::SystemTime,
 };
@@ -154,8 +153,10 @@ impl ToString for MyKeyspace {
 
 impl Insert<String, i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
-    fn statement(&self) -> Cow<'static, str> {
-        format!("INSERT INTO {}.test (key, data) VALUES (?, ?)", self.name()).into()
+    fn statement(&self) -> InsertStatement {
+        let mut stmt: InsertStatement = parse_statement!("INSERT INTO test (key, data) VALUES (?, ?)");
+        stmt.set_keyspace(&self.name());
+        stmt
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, value: &i32) -> T {
@@ -166,8 +167,10 @@ impl Insert<String, i32> for MyKeyspace {
 impl Select<String, (), i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
 
-    fn statement(&self) -> Cow<'static, str> {
-        format!("SELECT data FROM {}.test WHERE key = ?", self.name()).into()
+    fn statement(&self) -> SelectStatement {
+        let mut stmt: SelectStatement = parse_statement!("SELECT data FROM test WHERE key = ?");
+        stmt.set_keyspace(&self.name());
+        stmt
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, _variables: &()) -> T {

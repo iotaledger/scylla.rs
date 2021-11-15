@@ -835,7 +835,7 @@ impl Peek for FromClause {
 
 impl Display for FromClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.table)
+        write!(f, "FROM {}", self.table)
     }
 }
 

@@ -98,6 +98,8 @@ pub use prepare::{
     GetStaticPrepareRequest,
     PrepareRequest,
 };
+pub use scylla_parse::*;
+pub use scylla_rs_macros::parse_statement;
 pub use select::{
     AsDynamicSelectRequest,
     GetDynamicSelectRequest,
@@ -105,9 +107,11 @@ pub use select::{
     Select,
     SelectRequest,
 };
-pub use std::borrow::Cow;
-use std::{
+pub use std::{
+    borrow::Cow,
     convert::TryInto,
+};
+use std::{
     fmt::Debug,
     marker::PhantomData,
     ops::{
@@ -149,29 +153,69 @@ pub enum RequestType {
 /// For instance, a select query string or a keyspace with a `Select<K, V>` impl.
 pub trait ToStatement: DynClone + Debug + Send + Sync {
     /// Get the statement from this type
-    fn to_statement(&self) -> Cow<'static, str>;
+    fn to_statement(&self) -> String;
     /// Get the keyspace name from this type
-    fn keyspace(&self) -> Cow<'static, str>;
+    fn keyspace(&self) -> String;
 }
 dyn_clone::clone_trait_object!(ToStatement);
 
 impl ToStatement for String {
-    fn to_statement(&self) -> Cow<'static, str> {
+    fn to_statement(&self) -> String {
         self.clone().into()
     }
-    fn keyspace(&self) -> Cow<'static, str> {
+    fn keyspace(&self) -> String {
         // Todo parse the keyspace from the cql statement or default to empty string
         String::new().into()
     }
 }
 
 impl ToStatement for &str {
-    fn to_statement(&self) -> Cow<'static, str> {
+    fn to_statement(&self) -> String {
         self.to_string().into()
     }
-    fn keyspace(&self) -> Cow<'static, str> {
+    fn keyspace(&self) -> String {
         // Todo parse the keyspace from the cql statement or default to empty string
         String::new().into()
+    }
+}
+
+impl ToStatement for SelectStatement {
+    fn to_statement(&self) -> String {
+        self.to_string().into()
+    }
+
+    fn keyspace(&self) -> String {
+        KeyspaceExt::keyspace(self)
+    }
+}
+
+impl ToStatement for UpdateStatement {
+    fn to_statement(&self) -> String {
+        self.to_string().into()
+    }
+
+    fn keyspace(&self) -> String {
+        KeyspaceExt::keyspace(self)
+    }
+}
+
+impl ToStatement for InsertStatement {
+    fn to_statement(&self) -> String {
+        self.to_string().into()
+    }
+
+    fn keyspace(&self) -> String {
+        KeyspaceExt::keyspace(self)
+    }
+}
+
+impl ToStatement for DeleteStatement {
+    fn to_statement(&self) -> String {
+        self.to_string().into()
+    }
+
+    fn keyspace(&self) -> String {
+        KeyspaceExt::keyspace(self)
     }
 }
 
@@ -202,7 +246,7 @@ pub trait Request {
     fn token(&self) -> i64;
 
     /// Get the statement that was used to create this request
-    fn statement(&self) -> &Cow<'static, str>;
+    fn statement(&self) -> &String;
 
     /// Get the request payload
     fn payload(&self) -> Vec<u8>;
@@ -355,7 +399,7 @@ pub struct CommonRequest {
     pub(crate) keyspace_name: String,
     pub(crate) token: i64,
     pub(crate) payload: Vec<u8>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: String,
 }
 
 impl CommonRequest {
@@ -375,7 +419,7 @@ impl Request for CommonRequest {
         self.token
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         &self.statement
     }
 
@@ -390,11 +434,11 @@ impl Request for CommonRequest {
 /// Defines two helper methods to specify statement / id
 #[allow(missing_docs)]
 pub trait GetStatementIdExt {
-    fn select_statement<K, V, O>(&self) -> Cow<'static, str>
+    fn select_statement<K, V, O>(&self) -> String
     where
         Self: Select<K, V, O>,
     {
-        self.statement()
+        self.statement().to_string()
     }
 
     fn select_id<K, V, O>(&self) -> [u8; 16]
@@ -404,11 +448,11 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn insert_statement<K, V>(&self) -> Cow<'static, str>
+    fn insert_statement<K, V>(&self) -> String
     where
         Self: Insert<K, V>,
     {
-        self.statement()
+        self.statement().to_string()
     }
 
     fn insert_id<K, V>(&self) -> [u8; 16]
@@ -418,11 +462,11 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn update_statement<K, V, U>(&self) -> Cow<'static, str>
+    fn update_statement<K, V, U>(&self) -> String
     where
         Self: Update<K, V, U>,
     {
-        self.statement()
+        self.statement().to_string()
     }
 
     fn update_id<K, V, U>(&self) -> [u8; 16]
@@ -432,11 +476,11 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn delete_statement<K, V, D>(&self) -> Cow<'static, str>
+    fn delete_statement<K, V, D>(&self) -> String
     where
         Self: Delete<K, V, D>,
     {
-        self.statement()
+        self.statement().to_string()
     }
 
     fn delete_id<K, V, D>(&self) -> [u8; 16]
@@ -605,8 +649,8 @@ pub mod tests {
 
     impl Select<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            "SELECT col1 FROM keyspace.table WHERE key = ?".into()
+        fn statement(&self) -> SelectStatement {
+            parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -616,8 +660,10 @@ pub mod tests {
 
     impl Select<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = QueryStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
+        fn statement(&self) -> SelectStatement {
+            let mut stmt: SelectStatement = parse_statement!("SELECT col2 FROM my_table WHERE key = ?");
+            stmt.set_keyspace(&self.name);
+            stmt
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -627,8 +673,8 @@ pub mod tests {
 
     impl Insert<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+        fn statement(&self) -> InsertStatement {
+            parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, values: &f32) -> B {
@@ -638,8 +684,8 @@ pub mod tests {
 
     impl Update<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+        fn statement(&self) -> UpdateStatement {
+            parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &(), values: &f32) -> B {
@@ -649,8 +695,8 @@ pub mod tests {
 
     impl Delete<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            "DELETE FROM keyspace.table WHERE key = ?".into()
+        fn statement(&self) -> DeleteStatement {
+            parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -660,8 +706,8 @@ pub mod tests {
 
     impl Delete<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+        fn statement(&self) -> DeleteStatement {
+            parse_statement!("DELETE FROM my_table WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -674,9 +720,7 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let select_stmt: SelectStatement = parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?")
-            .try_into()
-            .unwrap();
+        let select_stmt: SelectStatement = parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?");
         let res = keyspace
             .select_with::<f32>(
                 "SELECT col1 FROM keyspace.table WHERE key = ?",

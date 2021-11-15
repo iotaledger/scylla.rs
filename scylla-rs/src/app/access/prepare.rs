@@ -36,7 +36,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
@@ -52,7 +52,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement();
+        let statement = self.statement().to_string();
         let keyspace = self.name().into();
         PrepareRequest::new(keyspace, statement)
     }
@@ -86,7 +86,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
@@ -103,7 +103,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement();
+        let statement = self.statement().to_string();
         let keyspace = self.name().into();
         PrepareRequest::new(keyspace, statement)
     }
@@ -138,7 +138,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!(
     ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
     ///             self.name()
@@ -163,7 +163,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Update<K, V, I>,
     {
-        let statement = self.statement();
+        let statement = self.statement().to_string();
         let keyspace = self.name().into();
         PrepareRequest::new(keyspace, statement)
     }
@@ -194,7 +194,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
@@ -210,7 +210,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement();
+        let statement = self.statement().to_string();
         let keyspace = self.name().into();
         PrepareRequest::new(keyspace, statement)
     }
@@ -264,13 +264,13 @@ impl<S: ToStatement> AsDynamicPrepareRequest for S {}
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
-    pub(crate) keyspace_name: Cow<'static, str>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) keyspace_name: String,
+    pub(crate) statement: String,
     pub(crate) token: i64,
 }
 
 impl PrepareRequest {
-    fn new(keyspace: Cow<'static, str>, statement: Cow<'static, str>) -> Self {
+    fn new(keyspace: String, statement: String) -> Self {
         PrepareRequest {
             keyspace_name: keyspace,
             statement,
@@ -284,7 +284,7 @@ impl Request for PrepareRequest {
         self.token
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         &self.statement
     }
 

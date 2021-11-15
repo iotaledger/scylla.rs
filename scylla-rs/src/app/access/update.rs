@@ -1,6 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use scylla_parse::UpdateStatement;
+
 use super::*;
 
 /// Update query trait which creates an `UpdateRequest`
@@ -39,7 +41,7 @@ use super::*;
 /// }
 /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> Cow<'static, str> {
+///     fn statement(&self) -> String {
 ///         format!(
 ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
 ///             self.name()
@@ -65,7 +67,7 @@ pub trait Update<K, V, U>: Keyspace {
     type QueryOrPrepared: QueryOrPrepared;
 
     /// Create your update statement here.
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> UpdateStatement;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
@@ -109,7 +111,7 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!(
     ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
     ///             self.name()
@@ -142,14 +144,15 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     where
         Self: Update<K, V, U>,
     {
+        let statement = self.statement().to_string();
         UpdateBuilder {
             keyspace: PhantomData,
             keyspace_name: self.name(),
-            statement: self.statement(),
             key,
             variables,
             values,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -184,7 +187,7 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!(
     ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
     ///             self.name()
@@ -217,14 +220,15 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     where
         Self: Update<K, V, U>,
     {
+        let statement = self.statement().to_string();
         UpdateBuilder {
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
             values,
-            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -259,7 +263,7 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!(
     ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
     ///             self.name()
@@ -292,14 +296,15 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     where
         Self: Update<K, V, U>,
     {
+        let statement = self.statement().to_string();
         UpdateBuilder {
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
             values,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -558,7 +563,7 @@ impl<S: ToStatement> AsDynamicUpdateRequest for S {}
 pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, U: ?Sized, Stage, T> {
     pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: String,
     pub(crate) key: &'a K,
     pub(crate) variables: &'a V,
     pub(crate) values: &'a U,
@@ -902,7 +907,7 @@ impl Request for UpdateRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         self.0.statement()
     }
 

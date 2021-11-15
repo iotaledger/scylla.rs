@@ -78,3 +78,9 @@ impl Parse for Statement {
         })
     }
 }
+
+pub trait KeyspaceExt {
+    fn keyspace(&self) -> String;
+
+    fn set_keyspace(&mut self, keyspace: &str);
+}

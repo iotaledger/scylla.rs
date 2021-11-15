@@ -1,6 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use scylla_parse::DeleteStatement;
+
 use super::*;
 
 /// Delete query trait which creates a `DeleteRequest`
@@ -30,7 +32,7 @@ use super::*;
 /// # type MyValueType = f32;
 /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> Cow<'static, str> {
+///     fn statement(&self) -> String {
 ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
 ///     }
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
@@ -50,7 +52,7 @@ pub trait Delete<K, V, D>: Keyspace {
     type QueryOrPrepared: QueryOrPrepared;
 
     /// Create your delete statement here.
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> DeleteStatement;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
@@ -92,7 +94,7 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
@@ -115,13 +117,14 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
+        let statement = self.statement().to_string();
         DeleteBuilder {
             keyspace_name: self.name().into(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement),
+            statement,
             _marker: PhantomData,
         }
     }
@@ -152,7 +155,7 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
@@ -175,13 +178,14 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
+        let statement = self.statement().to_string();
         DeleteBuilder {
             keyspace_name: self.name().into(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
             _marker: PhantomData,
         }
     }
@@ -212,7 +216,7 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
@@ -235,13 +239,14 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
+        let statement = self.statement().to_string();
         DeleteBuilder {
             keyspace_name: self.name().into(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
             _marker: PhantomData,
         }
     }
@@ -491,9 +496,9 @@ impl<S: Keyspace> GetDynamicDeleteRequest for S {}
 impl<S: ToStatement> AsDynamicDeleteRequest for S {}
 
 pub struct DeleteBuilder<'a, S, K: ?Sized, V: ?Sized, D, Stage, T> {
-    pub(crate) keyspace_name: Cow<'static, str>,
+    pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: String,
     pub(crate) key: &'a K,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -703,7 +708,7 @@ impl Request for DeleteRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         self.0.statement()
     }
 

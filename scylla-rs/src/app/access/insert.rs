@@ -1,6 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use scylla_parse::InsertStatement;
+
 use super::*;
 
 /// Insert query trait which creates an `InsertRequest`
@@ -38,7 +40,7 @@ use super::*;
 /// }
 /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> Cow<'static, str> {
+///     fn statement(&self) -> String {
 ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
 ///     }
 ///
@@ -59,7 +61,7 @@ pub trait Insert<K, V>: Keyspace {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
     type QueryOrPrepared: QueryOrPrepared;
     /// Create your insert statement here.
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> InsertStatement;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
@@ -102,7 +104,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
@@ -122,13 +124,14 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
+        let statement = self.statement().to_string();
         InsertBuilder {
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             values,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -162,7 +165,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
@@ -186,13 +189,14 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
+        let statement = self.statement().to_string();
         InsertBuilder {
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             values: values,
-            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -226,7 +230,7 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
+    ///     fn statement(&self) -> String {
     ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
     ///     }
     ///
@@ -250,13 +254,14 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
+        let statement = self.statement().to_string();
         InsertBuilder {
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             values,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -504,7 +509,7 @@ impl<S: ToStatement> AsDynamicInsertRequest for S {}
 pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
     pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: String,
     pub(crate) key: &'a K,
     pub(crate) values: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -831,7 +836,7 @@ impl Request for InsertRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         self.0.statement()
     }
 

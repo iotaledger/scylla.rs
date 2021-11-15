@@ -15,10 +15,22 @@ impl ToTokens for Tokenable<&DataManipulationStatement> {
                 let s = Tokenable(s);
                 tokens.extend(quote! {DataManipulationStatement::Select(#s)});
             }
-            DataManipulationStatement::Insert(s) => todo!(),
-            DataManipulationStatement::Update(s) => todo!(),
-            DataManipulationStatement::Delete(s) => todo!(),
-            DataManipulationStatement::Batch(s) => todo!(),
+            DataManipulationStatement::Insert(s) => {
+                let s = Tokenable(s);
+                tokens.extend(quote! {DataManipulationStatement::Insert(#s)});
+            }
+            DataManipulationStatement::Update(s) => {
+                let s = Tokenable(s);
+                tokens.extend(quote! {DataManipulationStatement::Update(#s)});
+            }
+            DataManipulationStatement::Delete(s) => {
+                let s = Tokenable(s);
+                tokens.extend(quote! {DataManipulationStatement::Delete(#s)});
+            }
+            DataManipulationStatement::Batch(s) => {
+                let s = Tokenable(s);
+                tokens.extend(quote! {DataManipulationStatement::Batch(#s)});
+            }
         }
     }
 }
@@ -45,8 +57,8 @@ impl ToTokens for Tokenable<&SelectStatement> {
         let per_partition_limit = Tokenable(per_partition_limit);
         let limit = Tokenable(limit);
         let timeout = Tokenable(timeout);
-        *tokens = quote! {
-            #tokens SelectStatement {
+        tokens.extend(quote! {
+            SelectStatement {
                 distinct: #distinct,
                 select_clause: #select_clause,
                 from: #from,
@@ -59,7 +71,101 @@ impl ToTokens for Tokenable<&SelectStatement> {
                 bypass_cache: #bypass_cache,
                 timeout: #timeout,
             }
-        };
+        });
+    }
+}
+
+impl ToTokens for Tokenable<&InsertStatement> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let InsertStatement {
+            table,
+            kind,
+            if_not_exists,
+            using,
+        } = self.0;
+        let table = Tokenable(table);
+        let kind = Tokenable(kind);
+        let using = Tokenable(using);
+        tokens.extend(quote! {
+            InsertStatement {
+                table: #table,
+                kind: #kind,
+                if_not_exists: #if_not_exists,
+                using: #using,
+            }
+        });
+    }
+}
+
+impl ToTokens for Tokenable<&UpdateStatement> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let UpdateStatement {
+            table,
+            using,
+            set_clause,
+            where_clause,
+            if_clause,
+        } = self.0;
+        let table = Tokenable(table);
+        let using = Tokenable(using);
+        let set_clause = Tokenable(set_clause);
+        let where_clause = Tokenable(where_clause);
+        let if_clause = Tokenable(if_clause);
+        tokens.extend(quote! {
+            UpdateStatement {
+                table: #table,
+                using: #using,
+                set_clause: #set_clause,
+                where_clause: #where_clause,
+                if_clause: #if_clause,
+            }
+        });
+    }
+}
+
+impl ToTokens for Tokenable<&DeleteStatement> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let DeleteStatement {
+            selections,
+            from,
+            using,
+            where_clause,
+            if_clause,
+        } = self.0;
+        let selections = Tokenable(selections);
+        let from = Tokenable(from);
+        let using = Tokenable(using);
+        let where_clause = Tokenable(where_clause);
+        let if_clause = Tokenable(if_clause);
+        tokens.extend(quote! {
+            DeleteStatement {
+                selections: #selections,
+                from: #from,
+                using: #using,
+                where_clause: #where_clause,
+                if_clause: #if_clause,
+            }
+        });
+    }
+}
+
+impl ToTokens for Tokenable<&BatchStatement> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let BatchStatement {
+            kind,
+            using,
+            statements,
+        } = self.0;
+        let kind = Tokenable(kind);
+        let using = Tokenable(using);
+        let statements = Tokenable(statements);
+        tokens.extend(quote! {
+            BatchStatement {
+                kind: #kind,
+                using: #using,
+                statements: #statements,
+            }
+        });
     }
 }
 
@@ -565,5 +671,134 @@ impl ToTokens for Tokenable<&MapLiteral> {
     fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
         let elements = Tokenable(&self.0.elements);
         tokens.extend(quote! {MapLiteral {elements: #elements}});
+    }
+}
+
+impl ToTokens for Tokenable<&InsertKind> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            InsertKind::NameValue { names, values } => {
+                let (names, values) = (Tokenable(names), Tokenable(values));
+                quote! {InsertKind::NameValue {names: #names, values: #values}}
+            }
+            InsertKind::Json { json, default } => {
+                let default = Tokenable(default);
+                quote! {InsertKind::Json {json: #json.to_string(), default: #default}}
+            }
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&ColumnDefault> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            ColumnDefault::Null => quote! {ColumnDefault::Null},
+            ColumnDefault::Unset => quote! {ColumnDefault::Unset},
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&UpdateParameter> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            UpdateParameter::TTL(t) => {
+                let t = Tokenable(t);
+                quote! {UpdateParameter::TTL(#t)}
+            }
+            UpdateParameter::Timestamp(t) => {
+                let t = Tokenable(t);
+                quote! {UpdateParameter::Timestamp(#t)}
+            }
+            UpdateParameter::Timeout(t) => {
+                let t = Tokenable(t);
+                quote! {UpdateParameter::Timeout(#t)}
+            }
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&Assignment> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            Assignment::Simple { selection, term } => {
+                let (selection, term) = (Tokenable(selection), Tokenable(term));
+                quote! {Assignment::Simple {selection: #selection, term: #term}}
+            }
+            Assignment::Arithmetic { assignee, lhs, op, rhs } => {
+                let (assignee, lhs, op, rhs) = (Tokenable(assignee), Tokenable(lhs), Tokenable(op), Tokenable(rhs));
+                quote! {Assignment::Arithmetic {assignee: #assignee, lhs: #lhs, op: #op, rhs: #rhs}}
+            }
+            Assignment::Append { assignee, list, item } => {
+                let (assignee, list, item) = (Tokenable(assignee), Tokenable(list), Tokenable(item));
+                quote! {Assignment::Append {assignee: #assignee, list: #list, item: #item}}
+            }
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&SimpleSelection> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            SimpleSelection::Column(c) => {
+                let c = Tokenable(c);
+                quote! {SimpleSelection::Column(#c)}
+            }
+            SimpleSelection::Term(n, t) => {
+                let (n, t) = (Tokenable(n), Tokenable(t));
+                quote! {SimpleSelection::Term(#n, #t)}
+            }
+            SimpleSelection::Field(n, f) => {
+                let (n, f) = (Tokenable(n), Tokenable(f));
+                quote! {SimpleSelection::Field(#n, #f)}
+            }
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&IfClause> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            IfClause::Exists => quote! {IfClause::Exists},
+            IfClause::Conditions(c) => {
+                let c = Tokenable(c);
+                quote! {IfClause::Conditions(#c)}
+            }
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&Condition> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let (lhs, op, rhs) = (Tokenable(&self.0.lhs), Tokenable(&self.0.op), Tokenable(&self.0.rhs));
+        tokens.extend(quote! {Condition {lhs: #lhs, op: #op, rhs: #rhs}});
+    }
+}
+
+impl ToTokens for Tokenable<&BatchKind> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            BatchKind::Logged => quote! {BatchKind::Logged},
+            BatchKind::Unlogged => quote! {BatchKind::Unlogged},
+            BatchKind::Counter => quote! {BatchKind::Counter},
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&ModificationStatement> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            ModificationStatement::Insert(i) => {
+                let i = Tokenable(i);
+                quote! {ModificationStatement::Insert(#i)}
+            }
+            ModificationStatement::Update(u) => {
+                let u = Tokenable(u);
+                quote! {ModificationStatement::Update(#u)}
+            }
+            ModificationStatement::Delete(d) => {
+                let d = Tokenable(d);
+                quote! {ModificationStatement::Delete(#d)}
+            }
+        })
     }
 }

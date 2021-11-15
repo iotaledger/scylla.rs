@@ -493,7 +493,7 @@ pub fn parse_statement(item: TokenStream) -> TokenStream {
         Statement::DataDefinition(_) => todo!(),
         Statement::DataManipulation(dml) => {
             let dml = Tokenable(dml);
-            quote!(Statement::DataManipulation(#dml))
+            quote!(Statement::DataManipulation(#dml).try_into().unwrap())
         },
         Statement::SecondaryIndex(_) => todo!(),
         Statement::MaterializedView(_) => todo!(),

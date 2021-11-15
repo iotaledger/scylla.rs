@@ -192,8 +192,8 @@ impl<S: Keyspace> GetDynamicExecuteRequest for S {}
 impl<S: ToStatement> AsDynamicExecuteRequest for S {}
 
 pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
-    pub(crate) keyspace_name: Cow<'static, str>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) keyspace_name: String,
+    pub(crate) statement: String,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
 }
@@ -316,7 +316,7 @@ impl Request for ExecuteRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         self.0.statement()
     }
 

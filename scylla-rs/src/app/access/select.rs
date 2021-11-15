@@ -50,7 +50,7 @@ pub trait Select<K, V, O>: Keyspace {
     type QueryOrPrepared: QueryOrPrepared;
 
     /// Create your select statement here.
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> SelectStatement;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
@@ -115,14 +115,15 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
+        let statement = self.statement().to_string();
         SelectBuilder {
             _marker: StaticRequest,
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement),
+            statement,
         }
     }
 
@@ -175,14 +176,15 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
+        let statement = self.statement().to_string();
         SelectBuilder {
             _marker: StaticRequest,
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            statement,
         }
     }
 
@@ -235,14 +237,15 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
+        let statement = self.statement().to_string();
         SelectBuilder {
             _marker: StaticRequest,
             keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            statement,
         }
     }
 }
@@ -495,7 +498,7 @@ impl<S: ToStatement> AsDynamicSelectRequest for S {}
 pub struct SelectBuilder<'a, S, K: ?Sized, V: ?Sized, O, Stage, T> {
     pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S, O) -> (S, O)>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: String,
     pub(crate) key: &'a K,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -1090,7 +1093,7 @@ impl<O: 'static> Request for SelectRequest<O> {
         self.inner.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
+    fn statement(&self) -> &String {
         self.inner.statement()
     }
 
