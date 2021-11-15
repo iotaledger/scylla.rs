@@ -1,4 +1,8 @@
-use std::{marker::PhantomData, str::FromStr};
+use std::{
+    fmt::{Display, Formatter},
+    marker::PhantomData,
+    str::FromStr,
+};
 use uuid::Uuid;
 
 mod statements;
@@ -124,6 +128,11 @@ pub trait Peek {
     fn peek(s: StatementStream<'_>) -> bool;
 }
 
+pub trait Parse {
+    type Output;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>;
+}
+
 macro_rules! peek_parse_tuple {
     ($($t:ident),+) => {
         impl<$($t: Peek + Parse),+> Peek for ($($t),+,) {
@@ -158,11 +167,6 @@ peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6);
 peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7);
 peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
 peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
-
-pub trait Parse {
-    type Output;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>;
-}
 
 impl Parse for char {
     type Output = char;
@@ -585,6 +589,15 @@ impl Peek for BindMarker {
     }
 }
 
+impl Display for BindMarker {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BindMarker::Anonymous => write!(f, "?"),
+            BindMarker::Named(id) => write!(f, ":{}", id),
+        }
+    }
+}
+
 impl Parse for Uuid {
     type Output = Uuid;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
@@ -668,6 +681,15 @@ impl Peek for Name {
     }
 }
 
+impl Display for Name {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Quoted(s) => write!(f, "\"{}\"", s),
+            Self::Unquoted(s) => write!(f, "{}", s),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TableName {
     pub keyspace: Option<Name>,
@@ -688,6 +710,17 @@ impl Parse for TableName {
 impl Peek for TableName {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(Option<(Name, Dot)>, Name)>()
+    }
+}
+
+impl Display for TableName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(keyspace) = &self.keyspace {
+            write!(f, "{}.{}", keyspace, self.name)?;
+        } else {
+            write!(f, "{}", self.name)?;
+        }
+        Ok(())
     }
 }
 
@@ -738,6 +771,12 @@ impl Parse for ColumnOrder {
     }
 }
 
+impl Display for ColumnOrder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.column, self.order)
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum Order {
     Ascending,
@@ -763,6 +802,15 @@ impl Default for Order {
     }
 }
 
+impl Display for Order {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ascending => write!(f, "ASC"),
+            Self::Descending => write!(f, "DESC"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FromClause {
     pub table: TableName,
@@ -782,6 +830,12 @@ impl Peek for FromClause {
     }
 }
 
+impl Display for FromClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.table)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WhereClause {
     pub relations: Vec<Relation>,
@@ -798,6 +852,20 @@ impl Parse for WhereClause {
 impl Peek for WhereClause {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<WHERE>()
+    }
+}
+
+impl Display for WhereClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WHERE {}",
+            self.relations
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        )
     }
 }
 
@@ -845,6 +913,36 @@ impl Parse for Relation {
     }
 }
 
+impl Display for Relation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Relation::Normal { column, operator, term } => write!(f, "{} {} {}", column, operator, term),
+            Relation::Tuple {
+                columns,
+                operator,
+                tuple_literal,
+            } => write!(
+                f,
+                "({}) {} {}",
+                columns.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "),
+                operator,
+                tuple_literal
+            ),
+            Relation::Token {
+                columns,
+                operator,
+                term,
+            } => write!(
+                f,
+                "TOKEN ({}) {} {}",
+                columns.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "),
+                operator,
+                term
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GroupByClause {
     pub columns: Vec<Name>,
@@ -864,6 +962,20 @@ impl Peek for GroupByClause {
     }
 }
 
+impl Display for GroupByClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "GROUP BY {}",
+            self.columns
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OrderingClause {
     pub columns: Vec<ColumnOrder>,
@@ -880,6 +992,20 @@ impl Parse for OrderingClause {
 impl Peek for OrderingClause {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(ORDER, BY)>()
+    }
+}
+
+impl Display for OrderingClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ORDER BY {}",
+            self.columns
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -903,6 +1029,15 @@ impl Parse for Limit {
 impl Peek for Limit {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<i32>() || s.check::<BindMarker>()
+    }
+}
+
+impl Display for Limit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Limit::Literal(i) => write!(f, "{}", i),
+            Limit::BindMarker(b) => write!(f, "{}", b),
+        }
     }
 }
 
@@ -931,71 +1066,85 @@ impl Peek for ColumnDefault {
     }
 }
 
+impl Display for ColumnDefault {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ColumnDefault::Null => write!(f, "NULL"),
+            ColumnDefault::Unset => write!(f, "UNSET"),
+        }
+    }
+}
+
 mod test {
     #[test]
     fn test_parse_select() {
-        let mut stream = super::StatementStream::new(
-            "SELECT time, value
-            FROM my_keyspace.events
-            WHERE event_type = 'myEvent'
-            AND time > '2011-02-03'
-            AND time <= '2012-01-01'",
-        );
-        let statement = stream.parse::<super::SelectStatement>().unwrap();
-        println!("{:#?}", statement);
+        let statement = "SELECT time, value \
+            FROM my_keyspace.events \
+            WHERE event_type = 'myEvent' \
+            AND time > '2011-02-03' \
+            AND time <= '2012-01-01'";
+        let mut stream = super::StatementStream::new(statement);
+        let select_statement = stream.parse::<super::SelectStatement>().unwrap();
+        println!("{:#?}", select_statement);
+        println!("{}", select_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), select_statement.to_string())
     }
 
     #[test]
     fn test_parse_insert() {
-        let mut stream = super::StatementStream::new(
-            "INSERT INTO NerdMovies (movie, director, main_actor, year)
-            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005)
-            USING TTL 86400 IF NOT EXISTS;",
-        );
-        let statement = stream.parse::<super::InsertStatement>().unwrap();
-        println!("{:#?}", statement);
+        let statement = "INSERT INTO NerdMovies (movie, director, main_actor, year) \
+            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) \
+            IF NOT EXISTS USING TTL 86400";
+        let mut stream = super::StatementStream::new(statement);
+        let insert_statement = stream.parse::<super::InsertStatement>().unwrap();
+        println!("{:#?}", insert_statement);
+        println!("{}", insert_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), insert_statement.to_string())
     }
 
     #[test]
     fn test_parse_update() {
-        let mut stream = super::StatementStream::new(
-            "UPDATE NerdMovies
-            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion'
-            WHERE movie = 'Serenity'
-            IF EXISTS;",
-        );
-        let statement = stream.parse::<super::UpdateStatement>().unwrap();
-        println!("{:#?}", statement);
+        let statement = "UPDATE NerdMovies \
+            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' \
+            WHERE movie = 'Serenity' \
+            IF EXISTS";
+        let mut stream = super::StatementStream::new(statement);
+        let update_statement = stream.parse::<super::UpdateStatement>().unwrap();
+        println!("{:#?}", update_statement);
+        println!("{}", update_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), update_statement.to_string())
     }
 
     #[test]
     fn test_parse_delete() {
-        let mut stream = super::StatementStream::new(
-            "DELETE FROM NerdMovies
-            WHERE movie = 'Serenity'
-            IF EXISTS;",
-        );
-        let statement = stream.parse::<super::DeleteStatement>().unwrap();
-        println!("{:#?}", statement);
+        let statement = "DELETE FROM NerdMovies \
+            WHERE movie = 'Serenity' \
+            IF EXISTS";
+        let mut stream = super::StatementStream::new(statement);
+        let delete_statement = stream.parse::<super::DeleteStatement>().unwrap();
+        println!("{:#?}", delete_statement);
+        println!("{}", delete_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), delete_statement.to_string())
     }
 
     #[test]
     fn test_parse_batch() {
-        let mut stream = super::StatementStream::new(
-            "BEGIN BATCH
-            INSERT INTO NerdMovies (movie, director, main_actor, year)
-            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005)
-            USING TTL 86400 IF NOT EXISTS;
-            UPDATE NerdMovies
-            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion'
-            WHERE movie = 'Serenity'
-            IF EXISTS;
-            DELETE FROM NerdMovies
-            WHERE movie = 'Serenity'
-            IF EXISTS;
-            APPLY BATCH;",
-        );
-        let statement = stream.parse::<super::BatchStatement>().unwrap();
-        println!("{:#?}", statement);
+        let statement = "BEGIN BATCH \
+            INSERT INTO NerdMovies (movie, director, main_actor, year) \
+            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) \
+            IF NOT EXISTS USING TTL 86400; \
+            UPDATE NerdMovies \
+            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' \
+            WHERE movie = 'Serenity' \
+            IF EXISTS; \
+            DELETE FROM NerdMovies \
+            WHERE movie = 'Serenity' \
+            IF EXISTS \
+            APPLY BATCH";
+        let mut stream = super::StatementStream::new(statement);
+        let batch_statement = stream.parse::<super::BatchStatement>().unwrap();
+        println!("{:#?}", batch_statement);
+        println!("{}", batch_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), batch_statement.to_string())
     }
 }

@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use crate::parser::{Comma, CqlType, Dot, List, Name, Parens, Parse, Peek, StatementStream, Term};
 
 #[derive(Clone, Debug)]
@@ -19,6 +21,15 @@ impl Parse for FunctionName {
 impl Peek for FunctionName {
     fn peek(mut s: StatementStream<'_>) -> bool {
         s.parse::<Self>().is_ok()
+    }
+}
+
+impl Display for FunctionName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(keyspace) = &self.keyspace {
+            write!(f, "{}.", keyspace)?;
+        }
+        write!(f, "{}", self.name)
     }
 }
 
@@ -50,6 +61,17 @@ impl Parse for FunctionCall {
 impl Peek for FunctionCall {
     fn peek(mut s: StatementStream<'_>) -> bool {
         s.parse::<Self>().is_ok()
+    }
+}
+
+impl Display for FunctionCall {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            self.args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
+        )
     }
 }
 

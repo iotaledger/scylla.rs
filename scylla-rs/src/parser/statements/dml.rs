@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use crate::parser::{
     keywords::*, ArithmeticOp, Brackets, ColumnDefault, CqlType, DurationLiteral, FromClause, GroupByClause, Limit,
     List, ListLiteral, Name, Operator, OrderingClause, Parens, Parse, Peek, StatementStream, TableName, Term,
@@ -29,6 +31,18 @@ impl Parse for DataManipulationStatement {
         } else {
             anyhow::bail!("Expected a data manipulation statement!")
         })
+    }
+}
+
+impl Display for DataManipulationStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Select(s) => write!(f, "{}", s),
+            Self::Insert(s) => write!(f, "{}", s),
+            Self::Update(s) => write!(f, "{}", s),
+            Self::Delete(s) => write!(f, "{}", s),
+            Self::Batch(s) => write!(f, "{}", s),
+        }
     }
 }
 
@@ -119,6 +133,43 @@ impl Parse for SelectStatement {
     }
 }
 
+impl Display for SelectStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SELECT {}{} FROM {}",
+            if self.distinct { "DISTINCT " } else { "" },
+            self.select_clause,
+            self.from
+        )?;
+        if let Some(where_clause) = &self.where_clause {
+            write!(f, " {}", where_clause)?;
+        }
+        if let Some(group_by_clause) = &self.group_by_clause {
+            write!(f, " {}", group_by_clause)?;
+        }
+        if let Some(order_by_clause) = &self.order_by_clause {
+            write!(f, " {}", order_by_clause)?;
+        }
+        if let Some(per_partition_limit) = &self.per_partition_limit {
+            write!(f, " PER PARTITION LIMIT {}", per_partition_limit)?;
+        }
+        if let Some(limit) = &self.limit {
+            write!(f, " LIMIT {}", limit)?;
+        }
+        if self.allow_filtering {
+            write!(f, " ALLOW FILTERING")?;
+        }
+        if self.bypass_cache {
+            write!(f, " BYPASS CACHE")?;
+        }
+        if let Some(timeout) = &self.timeout {
+            write!(f, " USING TIMEOUT {}", timeout)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SelectClauseKind {
     All,
@@ -139,6 +190,23 @@ impl Parse for SelectClauseKind {
     }
 }
 
+impl Display for SelectClauseKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectClauseKind::All => write!(f, "*"),
+            SelectClauseKind::Selectors(selectors) => {
+                for (i, selector) in selectors.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", selector)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Selector {
     pub kind: SelectorKind,
@@ -156,6 +224,16 @@ impl Parse for Selector {
             kind,
             as_id: as_id.map(|(_, id)| id),
         })
+    }
+}
+
+impl Display for Selector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.kind)?;
+        if let Some(id) = &self.as_id {
+            write!(f, " AS {}", id)?;
+        }
+        Ok(())
     }
 }
 
@@ -183,6 +261,17 @@ impl Peek for SelectorFunction {
         } else {
             false
         }
+    }
+}
+
+impl Display for SelectorFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}({})",
+            self.function,
+            self.args.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
+        )
     }
 }
 
@@ -217,6 +306,18 @@ impl Parse for SelectorKind {
         } else {
             anyhow::bail!("Invalid selector!")
         })
+    }
+}
+
+impl Display for SelectorKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectorKind::Column(id) => write!(f, "{}", id),
+            SelectorKind::Term(term) => write!(f, "{}", term),
+            SelectorKind::Cast(selector, cql_type) => write!(f, "CAST({} AS {})", selector, cql_type),
+            SelectorKind::Function(func) => write!(f, "{}", func),
+            SelectorKind::Count => write!(f, "COUNT(*)"),
+        }
     }
 }
 
@@ -264,6 +365,23 @@ impl Peek for InsertStatement {
     }
 }
 
+impl Display for InsertStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "INSERT INTO {} {}", self.table, self.kind)?;
+        if self.if_not_exists {
+            write!(f, " IF NOT EXISTS")?;
+        }
+        if let Some(using) = &self.using {
+            write!(
+                f,
+                " USING {}",
+                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum InsertKind {
     NameValue {
@@ -288,6 +406,26 @@ impl Parse for InsertKind {
         } else {
             let (names, _, values) = s.parse_from::<(Parens<List<Name, Comma>>, VALUES, TupleLiteral)>()?;
             Ok(Self::NameValue { names, values })
+        }
+    }
+}
+
+impl Display for InsertKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InsertKind::NameValue { names, values } => write!(
+                f,
+                "({}) VALUES {}",
+                names.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "),
+                values
+            ),
+            InsertKind::Json { json, default } => {
+                write!(f, "JSON '{}'", json)?;
+                if let Some(default) = default {
+                    write!(f, " DEFAULT {}", default)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -317,6 +455,16 @@ impl Parse for UpdateParameter {
 impl Peek for UpdateParameter {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(TTL, Limit)>() || s.check::<(TIMESTAMP, Limit)>() || s.check::<(TIMEOUT, DurationLiteral)>()
+    }
+}
+
+impl Display for UpdateParameter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateParameter::TTL(limit) => write!(f, "TTL {}", limit),
+            UpdateParameter::Timestamp(limit) => write!(f, "TIMESTAMP {}", limit),
+            UpdateParameter::Timeout(duration) => write!(f, "TIMEOUT {}", duration),
+        }
     }
 }
 
@@ -357,6 +505,33 @@ impl Peek for UpdateStatement {
     }
 }
 
+impl Display for UpdateStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UPDATE {}", self.table)?;
+        if let Some(using) = &self.using {
+            write!(
+                f,
+                " USING {}",
+                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
+            )?;
+        }
+        write!(
+            f,
+            " SET {} {}",
+            self.set_clause
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.where_clause
+        )?;
+        if let Some(if_clause) = &self.if_clause {
+            write!(f, " {}", if_clause)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Assignment {
     Simple {
@@ -392,6 +567,18 @@ impl Parse for Assignment {
     }
 }
 
+impl Display for Assignment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Assignment::Simple { selection, term } => write!(f, "{} = {}", selection, term),
+            Assignment::Arithmetic { assignee, lhs, op, rhs } => write!(f, "{} = {} {} {}", assignee, lhs, op, rhs),
+            Assignment::Append { assignee, list, item } => {
+                write!(f, "{} = {} + {}", assignee, list, item)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SimpleSelection {
     Column(Name),
@@ -414,6 +601,16 @@ impl Parse for SimpleSelection {
     }
 }
 
+impl Display for SimpleSelection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Column(name) => write!(f, "{}", name),
+            Self::Term(name, term) => write!(f, "{}[{}]", name, term),
+            Self::Field(column, field) => write!(f, "{}.{}", column, field),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Condition {
     pub lhs: SimpleSelection,
@@ -426,6 +623,12 @@ impl Parse for Condition {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let (lhs, op, rhs) = s.parse()?;
         Ok(Condition { lhs, op, rhs })
+    }
+}
+
+impl Display for Condition {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {}", self.lhs, self.op, self.rhs)
     }
 }
 
@@ -449,6 +652,25 @@ impl Parse for IfClause {
 impl Peek for IfClause {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<IF>()
+    }
+}
+
+impl Display for IfClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exists => write!(f, "IF EXISTS"),
+            Self::Conditions(conditions) => {
+                write!(
+                    f,
+                    "IF {}",
+                    conditions
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" AND ")
+                )
+            }
+        }
     }
 }
 
@@ -487,6 +709,32 @@ impl Parse for DeleteStatement {
 impl Peek for DeleteStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<DELETE>()
+    }
+}
+
+impl Display for DeleteStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DELETE")?;
+        if let Some(selections) = &self.selections {
+            write!(
+                f,
+                " {}",
+                selections.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
+            )?;
+        }
+        write!(f, " FROM {}", self.from)?;
+        if let Some(using) = &self.using {
+            write!(
+                f,
+                " USING {}",
+                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+            )?;
+        }
+        write!(f, " {}", self.where_clause)?;
+        if let Some(if_clause) = &self.if_clause {
+            write!(f, " {}", if_clause)?;
+        }
+        Ok(())
     }
 }
 
@@ -535,6 +783,36 @@ impl Peek for BatchStatement {
     }
 }
 
+impl Display for BatchStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BEGIN")?;
+        match self.kind {
+            BatchKind::Logged => (),
+            BatchKind::Unlogged => write!(f, " UNLOGGED")?,
+            BatchKind::Counter => write!(f, " COUNTER")?,
+        };
+        write!(f, " BATCH")?;
+        if let Some(using) = &self.using {
+            write!(
+                f,
+                " USING {}",
+                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+            )?;
+        }
+        write!(
+            f,
+            " {}",
+            self.statements
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )?;
+        write!(f, " APPLY BATCH")?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ModificationStatement {
     Insert(InsertStatement),
@@ -563,6 +841,16 @@ impl Parse for ModificationStatement {
 impl Peek for ModificationStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<InsertStatement>() || s.check::<UpdateStatement>() || s.check::<DeleteStatement>()
+    }
+}
+
+impl Display for ModificationStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Insert(s) => write!(f, "{}", s),
+            Self::Update(s) => write!(f, "{}", s),
+            Self::Delete(s) => write!(f, "{}", s),
+        }
     }
 }
 

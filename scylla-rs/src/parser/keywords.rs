@@ -163,6 +163,7 @@ keyword!(KEYS);
 keyword!(KEYSPACE);
 keyword!(KEYSPACES);
 keyword!(LANGUAGE);
+keyword!(LIKE);
 keyword!(LIMIT);
 keyword!(LIST);
 keyword!(LOGIN);

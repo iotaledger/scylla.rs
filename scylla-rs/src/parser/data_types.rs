@@ -6,7 +6,7 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
-    fmt::Display,
+    fmt::{Display, Formatter},
     str::FromStr,
 };
 use uuid::Uuid;
@@ -21,7 +21,7 @@ pub enum ArithmeticOp {
 }
 
 impl Display for ArithmeticOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -75,10 +75,11 @@ pub enum Operator {
     In,
     Contains,
     ContainsKey,
+    Like,
 }
 
 impl Display for Operator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -92,6 +93,7 @@ impl Display for Operator {
                 Operator::In => "IN",
                 Operator::Contains => "CONTAINS",
                 Operator::ContainsKey => "CONTAINS KEY",
+                Operator::Like => "LIKE",
             }
         )
     }
@@ -106,6 +108,8 @@ impl Parse for Operator {
             Ok(Operator::Contains)
         } else if s.parse_if::<IN>().is_some() {
             Ok(Operator::In)
+        } else if s.parse_if::<LIKE>().is_some() {
+            Ok(Operator::Like)
         } else if let (Some(first), second) = (s.next(), s.peek()) {
             Ok(match (first, second) {
                 ('=', _) => Operator::Equal,
@@ -172,7 +176,7 @@ impl FromStr for TimeUnit {
 }
 
 impl Display for TimeUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -288,6 +292,22 @@ impl Peek for Term {
     }
 }
 
+impl Display for Term {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Constant(c) => write!(f, "{}", c),
+            Self::Literal(l) => write!(f, "{}", l),
+            Self::FunctionCall(fc) => write!(f, "{}", fc),
+            Self::ArithmeticOp { lhs, op, rhs } => match lhs {
+                Some(lhs) => write!(f, "{}{}{}", lhs, op, rhs),
+                None => write!(f, "{}{}", op, rhs),
+            },
+            Self::TypeHint { hint, ident } => write!(f, "{} {}", hint, ident),
+            Self::BindMarker(b) => write!(f, "{}", b),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Constant {
     Null,
@@ -341,6 +361,21 @@ impl Peek for Constant {
     }
 }
 
+impl Display for Constant {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Null => write!(f, "NULL"),
+            Self::String(s) => write!(f, "'{}'", s),
+            Self::Integer(s) => write!(f, "{}", s),
+            Self::Float(s) => write!(f, "{}", s),
+            Self::Boolean(b) => write!(f, "{}", b.to_string().to_uppercase()),
+            Self::Uuid(u) => write!(f, "{}", u),
+            Self::Hex(h) => write!(f, "{}", hex::encode(h)),
+            Self::Blob(b) => write!(f, "0x{}", hex::encode(b)),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Literal {
     Collection(CollectionTypeLiteral),
@@ -365,6 +400,16 @@ impl Parse for Literal {
 impl Peek for Literal {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<CollectionTypeLiteral>() || s.check::<UserDefinedTypeLiteral>() || s.check::<TupleLiteral>()
+    }
+}
+
+impl Display for Literal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Collection(c) => write!(f, "{}", c),
+            Self::UserDefined(u) => write!(f, "{}", u),
+            Self::Tuple(t) => write!(f, "{}", t),
+        }
     }
 }
 
@@ -408,6 +453,22 @@ impl Peek for CqlType {
     }
 }
 
+impl Display for CqlType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native(n) => write!(f, "{}", n),
+            Self::Collection(c) => write!(f, "{}", c),
+            Self::UserDefined(u) => write!(f, "{}", u),
+            Self::Tuple(t) => write!(
+                f,
+                "TUPLE<{}>",
+                t.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
+            ),
+            Self::Custom(c) => write!(f, "{}", c),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum NativeType {
     Ascii,
@@ -434,7 +495,7 @@ pub enum NativeType {
 }
 
 impl Display for NativeType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
@@ -544,6 +605,16 @@ impl Peek for CollectionTypeLiteral {
     }
 }
 
+impl Display for CollectionTypeLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::List(l) => write!(f, "{}", l),
+            Self::Set(s) => write!(f, "{}", s),
+            Self::Map(m) => write!(f, "{}", m),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum CollectionType {
     List(Box<CqlType>),
@@ -576,6 +647,16 @@ impl Peek for CollectionType {
     }
 }
 
+impl Display for CollectionType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::List(e) => write!(f, "LIST<{}>", e),
+            Self::Set(e) => write!(f, "SET<{}>", e),
+            Self::Map(k, v) => write!(f, "MAP<{}, {}>", k, v),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MapLiteral {
     pub elements: Vec<(Term, Term)>,
@@ -602,6 +683,20 @@ impl Peek for MapLiteral {
     }
 }
 
+impl Display for MapLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{{}}}",
+            self.elements
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TupleLiteral {
     pub elements: Vec<Term>,
@@ -624,6 +719,20 @@ impl Peek for TupleLiteral {
     }
 }
 
+impl Display for TupleLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "({})",
+            self.elements
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SetLiteral {
     pub elements: Vec<Term>,
@@ -643,6 +752,20 @@ impl Peek for SetLiteral {
     }
 }
 
+impl Display for SetLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}]",
+            self.elements
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ListLiteral {
     pub elements: Vec<Term>,
@@ -659,6 +782,20 @@ impl Parse for ListLiteral {
 impl Peek for ListLiteral {
     fn peek(mut s: StatementStream<'_>) -> bool {
         s.parse::<Self>().is_ok()
+    }
+}
+
+impl Display for ListLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}]",
+            self.elements
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -758,6 +895,12 @@ impl Peek for DurationLiteral {
     }
 }
 
+impl Display for DurationLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}mo{}d{}ns", self.months, self.days, self.nanos)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct UserDefinedTypeLiteral {
     pub fields: HashMap<Name, Term>,
@@ -786,6 +929,20 @@ impl Peek for UserDefinedTypeLiteral {
     }
 }
 
+impl Display for UserDefinedTypeLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{{}}}",
+            self.fields
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct UserDefinedType {
     pub keyspace: Option<Name>,
@@ -809,5 +966,15 @@ impl Parse for UserDefinedType {
 impl Peek for UserDefinedType {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(Option<(Name, Dot)>, Name)>()
+    }
+}
+
+impl Display for UserDefinedType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(keyspace) = &self.keyspace {
+            write!(f, "{}.{}", keyspace, self.ident)
+        } else {
+            write!(f, "{}", self.ident)
+        }
     }
 }
