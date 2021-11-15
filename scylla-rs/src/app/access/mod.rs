@@ -86,8 +86,6 @@ pub use insert::{
     GetStaticInsertRequest,
     Insert,
     InsertRequest,
-    TimeToLive,
-    Ttl,
 };
 pub use keyspace::Keyspace;
 pub use prepare::{
@@ -632,6 +630,7 @@ impl Marker for DecodeVoid {
 #[derive(Clone)]
 pub struct DecodeResult<T> {
     inner: T,
+    /// Identify the type of request
     pub request_type: RequestType,
 }
 impl<T> DecodeResult<T> {
