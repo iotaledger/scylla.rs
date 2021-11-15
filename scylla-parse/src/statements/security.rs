@@ -1,5 +1,10 @@
 use super::FunctionReference;
-use crate::parser::{MapLiteral, Name, SetLiteral, TableName};
+use crate::{
+    MapLiteral,
+    Name,
+    SetLiteral,
+    TableName,
+};
 
 pub enum RoleStatement {
     Create(CreateRoleStatement),

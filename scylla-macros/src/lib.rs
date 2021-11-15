@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
+use scylla_parse::{DataManipulationStatement, SelectClauseKind, SelectStatement, Statement, StatementStream};
+use quote::TokenStreamExt;
+use syn::parse_quote;
+
+mod to_tokens;
+use to_tokens::*;
 
 #[proc_macro_derive(ColumnEncoder, attributes(column, encode, decode))]
 pub fn column_encoder_derive(input: TokenStream) -> TokenStream {
@@ -475,6 +481,28 @@ pub fn row_derive(input: TokenStream) -> TokenStream {
             }
         }
         syn::Data::Union(_) => panic!("Unions not supported!"),
+    };
+    res.into()
+}
+
+#[proc_macro]
+pub fn parse_statement(item: TokenStream) -> TokenStream {
+    let statement_str = syn::parse_macro_input!(item as syn::LitStr).value();
+    let statement = StatementStream::new(&statement_str).parse::<Statement>().unwrap();
+    let res = match &statement {
+        Statement::DataDefinition(_) => todo!(),
+        Statement::DataManipulation(dml) => {
+            let dml = Tokenable(dml);
+            quote!(Statement::DataManipulation(#dml))
+        },
+        Statement::SecondaryIndex(_) => todo!(),
+        Statement::MaterializedView(_) => todo!(),
+        Statement::Role(_) => todo!(),
+        Statement::Permission(_) => todo!(),
+        Statement::User(_) => todo!(),
+        Statement::UserDefinedFunction(_) => todo!(),
+        Statement::UserDefinedType(_) => todo!(),
+        Statement::Trigger(_) => todo!(),
     };
     res.into()
 }

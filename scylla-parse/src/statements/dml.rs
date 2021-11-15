@@ -1,13 +1,39 @@
-use std::fmt::{Display, Formatter};
+use std::fmt::{
+    Display,
+    Formatter,
+};
 
-use crate::parser::{
-    keywords::*, ArithmeticOp, Brackets, ColumnDefault, CqlType, DurationLiteral, FromClause, GroupByClause, Limit,
-    List, ListLiteral, Name, Operator, OrderingClause, Parens, Parse, Peek, StatementStream, TableName, Term,
-    TupleLiteral, WhereClause,
+use crate::{
+    keywords::*,
+    ArithmeticOp,
+    Brackets,
+    ColumnDefault,
+    CqlType,
+    DurationLiteral,
+    FromClause,
+    GroupByClause,
+    Limit,
+    List,
+    ListLiteral,
+    Name,
+    Operator,
+    OrderingClause,
+    Parens,
+    Parse,
+    Peek,
+    StatementStream,
+    TableName,
+    Term,
+    TupleLiteral,
+    WhereClause,
 };
 use derive_builder::Builder;
+use derive_more::{
+    From,
+    TryInto,
+};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, TryInto, From)]
 pub enum DataManipulationStatement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -31,6 +57,16 @@ impl Parse for DataManipulationStatement {
         } else {
             anyhow::bail!("Expected a data manipulation statement!")
         })
+    }
+}
+
+impl Peek for DataManipulationStatement {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<InsertStatement>()
+            || s.check::<UpdateStatement>()
+            || s.check::<DeleteStatement>()
+            || s.check::<SelectStatement>()
+            || s.check::<BatchStatement>()
     }
 }
 
@@ -130,6 +166,12 @@ impl Parse for SelectStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid SELECT statement: {}", e))?)
+    }
+}
+
+impl Peek for SelectStatement {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<SELECT>()
     }
 }
 
@@ -813,7 +855,7 @@ impl Display for BatchStatement {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, TryInto, From)]
 pub enum ModificationStatement {
     Insert(InsertStatement),
     Update(UpdateStatement),

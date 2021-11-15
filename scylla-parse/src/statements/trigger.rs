@@ -1,4 +1,7 @@
-use crate::parser::{Name, TableName};
+use crate::{
+    Name,
+    TableName,
+};
 
 pub enum TriggerStatement {
     Create(CreateTriggerStatement),

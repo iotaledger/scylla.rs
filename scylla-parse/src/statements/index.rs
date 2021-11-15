@@ -1,4 +1,4 @@
-use crate::parser::{MapLiteral, Name, TableName};
+use crate::{MapLiteral, Name, TableName};
 
 pub struct IndexName(String);
 

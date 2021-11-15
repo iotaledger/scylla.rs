@@ -1,5 +1,18 @@
-use crate::parser::{ColumnDefinition, Name, PrimaryKey, StatementOpt, TableName, TableOpt};
+use derive_more::{
+    From,
+    TryInto,
+};
 
+use crate::{
+    ColumnDefinition,
+    Name,
+    PrimaryKey,
+    StatementOpt,
+    TableName,
+    TableOpt,
+};
+
+#[derive(TryInto, From)]
 pub enum DataDefinitionStatement {
     Use(UseStatement),
     CreateKeyspace(CreateKeyspaceStatement),

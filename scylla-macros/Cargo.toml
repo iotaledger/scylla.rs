@@ -6,7 +6,7 @@ edition = "2018"
 license-file = "LICENSE"
 homepage = "https://www.iota.org"
 repository = "https://github.com/iotaledger/scylla.rs"
-description = "Procedural macros for the Backstage framework"
+description = "Procedural macros for the scylla-rs driver"
 keywords = ["iota", "scylla", "cassandra", "database", "driver"]
 exclude = [".github/**/*"]
 
@@ -16,6 +16,8 @@ proc-macro = true
 [dependencies]
 syn = "1.0"
 quote = "1.0"
+maplit = "1.0"
+scylla-parse = { path = "../scylla-parse" }
 
 [dev-dependencies]
 syn = { version = "1.0", features = ["full"]}

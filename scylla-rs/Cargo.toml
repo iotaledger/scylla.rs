@@ -23,14 +23,9 @@ num-derive = "0.3"
 num-traits = "0.2"
 md5 = "0.7"
 scylla-rs-macros = { path = "../scylla-macros" }
+scylla-parse = { path = "../scylla-parse" }
 arc-swap = "1.4.0"
 maplit = "1.0.2"
-uuid = "0.8"
-regex = "1.5"
-hex = "0.4"
-derive_builder = "0.10"
-lazy_static = "1.4"
-chrono = { version = "0.4", default-features = false }
 
 # App
 #backstage = { version = "0.1", optional = true }
@@ -49,7 +44,7 @@ dyn-clone = { version = "1.0", optional = true }
 [dev-dependencies]
 env_logger = "0.9"
 tokio = { version = "1.12", features = ["macros", "rt-multi-thread", "signal", "net", "io-util"] }
-scylla = "0.2"
+scylla = "0.3"
 
 [[example]]
 name = "scylla"

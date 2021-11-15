@@ -1,5 +1,8 @@
 use std::{
-    fmt::{Display, Formatter},
+    fmt::{
+        Display,
+        Formatter,
+    },
     marker::PhantomData,
     str::FromStr,
 };
@@ -23,7 +26,7 @@ pub struct StatementStream<'a> {
 }
 
 impl<'a> StatementStream<'a> {
-    pub(crate) fn new(statement: &'a str) -> Self {
+    pub fn new(statement: &'a str) -> Self {
         Self {
             cursor: statement.chars().peekable(),
         }

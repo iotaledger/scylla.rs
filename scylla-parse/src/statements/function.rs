@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use crate::parser::{Comma, CqlType, Dot, List, Name, Parens, Parse, Peek, StatementStream, Term};
+use crate::{Comma, CqlType, Dot, List, Name, Parens, Parse, Peek, StatementStream, Term};
 
 #[derive(Clone, Debug)]
 pub struct FunctionName {

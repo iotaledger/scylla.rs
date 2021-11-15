@@ -18,6 +18,109 @@ use crate::cql::{
 };
 use std::collections::HashMap;
 
+struct UpdateStatement<S: Update<K, V, U>, K, V, U>(S, PhantomData<fn(K, V, U) -> (K, V, U)>);
+impl<S: Update<K, V, U>, K, V, U> UpdateStatement<S, K, V, U> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Update<K, V, U>, K, V, U> Clone for UpdateStatement<S, K, V, U> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Update<K, V, U> + Debug, K, V, U> Debug for UpdateStatement<S, K, V, U> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("UpdateStatement").field(&self.0).finish()
+    }
+}
+struct InsertStatement<S: Insert<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
+impl<S: Insert<K, V>, K, V> InsertStatement<S, K, V> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V>, K, V> Clone for InsertStatement<S, K, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("InsertStatement").field(&self.0).finish()
+    }
+}
+struct DeleteStatement<S: Delete<K, V, D>, K, V, D>(S, PhantomData<fn(K, V, D) -> (K, V, D)>);
+impl<S: Delete<K, V, D>, K, V, D> DeleteStatement<S, K, V, D> {
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V, D>, K, V, D> Clone for DeleteStatement<S, K, V, D> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Delete<K, V, D> + Debug, K, V, D> Debug for DeleteStatement<S, K, V, D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DeleteStatement").field(&self.0).finish()
+    }
+}
+
+struct SelectStatement<S: Select<K, V, O>, K, V, O>(S, PhantomData<fn(K, V, O) -> (K, V, O)>);
+impl<S: Select<K, V, O>, K, V, O> SelectStatement<S, K, V, O> {
+    #[allow(unused)]
+    fn new(keyspace: &S) -> Self {
+        Self(keyspace.clone(), PhantomData)
+    }
+}
+impl<S: Select<K, V, O>, K, V, O> Clone for SelectStatement<S, K, V, O> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<S: Select<K, V, O> + Debug, K, V, O> Debug for SelectStatement<S, K, V, O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SelectStatement").field(&self.0).finish()
+    }
+}
+
+impl<S: Update<K, V, U> + Debug, K, V, U> ToStatement for UpdateStatement<S, K, V, U> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
+    }
+}
+
+impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
+    }
+}
+
+impl<S: Delete<K, V, D> + Debug, K, V, D> ToStatement for DeleteStatement<S, K, V, D> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
+    }
+}
+
+impl<S: Select<K, V, O> + Debug, K, V, O> ToStatement for SelectStatement<S, K, V, O> {
+    fn to_statement(&self) -> Cow<'static, str> {
+        self.0.statement()
+    }
+    fn keyspace(&self) -> Cow<'static, str> {
+        self.0.name().into()
+    }
+}
+
 /// A batch collector, used to collect statements and build a `BatchRequest`.
 /// Access queries are defined by access traits ([`Insert`], [`Delete`], [`Update`])
 /// and qualified for use in a Batch via batch traits ([`InsertBatch`], [`DeleteBatch`], [`UpdateBatch`])
