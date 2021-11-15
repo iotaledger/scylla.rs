@@ -214,12 +214,12 @@ impl Display for SelectStatement {
 }
 
 impl KeyspaceExt for SelectStatement {
-    fn keyspace(&self) -> String {
-        self.from.table.name.to_string()
+    fn get_keyspace(&self) -> Option<String> {
+        self.from.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
     fn set_keyspace(&mut self, keyspace: &str) {
-        self.from.table.name = Name::Quoted(keyspace.to_string());
+        self.from.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
     }
 }
 
@@ -436,12 +436,12 @@ impl Display for InsertStatement {
 }
 
 impl KeyspaceExt for InsertStatement {
-    fn keyspace(&self) -> String {
-        self.table.name.to_string()
+    fn get_keyspace(&self) -> Option<String> {
+        self.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
     fn set_keyspace(&mut self, keyspace: &str) {
-        self.table.name = Name::Quoted(keyspace.to_string());
+        self.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
     }
 }
 
@@ -596,12 +596,12 @@ impl Display for UpdateStatement {
 }
 
 impl KeyspaceExt for UpdateStatement {
-    fn keyspace(&self) -> String {
-        self.table.name.to_string()
+    fn get_keyspace(&self) -> Option<String> {
+        self.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
     fn set_keyspace(&mut self, keyspace: &str) {
-        self.table.name = Name::Quoted(keyspace.to_string());
+        self.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
     }
 }
 
@@ -812,12 +812,12 @@ impl Display for DeleteStatement {
 }
 
 impl KeyspaceExt for DeleteStatement {
-    fn keyspace(&self) -> String {
-        self.from.table.name.to_string()
+    fn get_keyspace(&self) -> Option<String> {
+        self.from.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
     fn set_keyspace(&mut self, keyspace: &str) {
-        self.from.table.name = Name::Quoted(keyspace.to_string());
+        self.from.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
     }
 }
 

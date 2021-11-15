@@ -117,9 +117,10 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         DeleteBuilder {
-            keyspace_name: self.name().into(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -178,9 +179,10 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         DeleteBuilder {
-            keyspace_name: self.name().into(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -239,9 +241,10 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         DeleteBuilder {
-            keyspace_name: self.name().into(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -496,7 +499,7 @@ impl<S: Keyspace> GetDynamicDeleteRequest for S {}
 impl<S: ToStatement> AsDynamicDeleteRequest for S {}
 
 pub struct DeleteBuilder<'a, S, K: ?Sized, V: ?Sized, D, Stage, T> {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: String,
     pub(crate) key: &'a K,
@@ -715,7 +718,7 @@ impl Request for DeleteRequest {
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.0.keyspace()
     }
 }

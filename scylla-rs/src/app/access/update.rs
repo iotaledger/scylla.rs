@@ -144,10 +144,11 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     where
         Self: Update<K, V, U>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         UpdateBuilder {
             keyspace: PhantomData,
-            keyspace_name: self.name(),
+            keyspace_name,
             key,
             variables,
             values,
@@ -220,9 +221,10 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     where
         Self: Update<K, V, U>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         UpdateBuilder {
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -296,9 +298,10 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     where
         Self: Update<K, V, U>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         UpdateBuilder {
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -384,7 +387,7 @@ pub trait GetDynamicUpdateRequest: Keyspace {
         DynamicRequest,
     > {
         UpdateBuilder {
-            keyspace_name: self.name(),
+            keyspace_name: self.name().into(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -427,8 +430,7 @@ pub trait GetDynamicUpdateRequest: Keyspace {
         DynamicRequest,
     > {
         UpdateBuilder {
-            keyspace_name: self.name(),
-
+            keyspace_name: self.name().into(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -561,7 +563,7 @@ impl<S: Keyspace> GetDynamicUpdateRequest for S {}
 impl<S: ToStatement> AsDynamicUpdateRequest for S {}
 
 pub struct UpdateBuilder<'a, S, K: ?Sized, V: ?Sized, U: ?Sized, Stage, T> {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: String,
     pub(crate) key: &'a K,
@@ -914,7 +916,7 @@ impl Request for UpdateRequest {
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.0.keyspace()
     }
 }

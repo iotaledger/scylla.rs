@@ -115,10 +115,11 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         SelectBuilder {
             _marker: StaticRequest,
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -176,10 +177,11 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         SelectBuilder {
             _marker: StaticRequest,
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -237,10 +239,11 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         SelectBuilder {
             _marker: StaticRequest,
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
@@ -325,7 +328,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     > {
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.name(),
+            keyspace_name: self.name().into(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -367,7 +370,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     > {
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.name(),
+            keyspace_name: self.name().into(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -496,7 +499,7 @@ impl<S: Keyspace> GetDynamicSelectRequest for S {}
 impl<S: ToStatement> AsDynamicSelectRequest for S {}
 
 pub struct SelectBuilder<'a, S, K: ?Sized, V: ?Sized, O, Stage, T> {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) keyspace: PhantomData<fn(S, O) -> (S, O)>,
     pub(crate) statement: String,
     pub(crate) key: &'a K,
@@ -1100,7 +1103,7 @@ impl<O: 'static> Request for SelectRequest<O> {
     fn payload(&self) -> Vec<u8> {
         self.inner.payload()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.inner.keyspace()
     }
 }

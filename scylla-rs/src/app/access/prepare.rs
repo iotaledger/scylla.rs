@@ -264,15 +264,15 @@ impl<S: ToStatement> AsDynamicPrepareRequest for S {}
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) statement: String,
     pub(crate) token: i64,
 }
 
 impl PrepareRequest {
-    fn new(keyspace: String, statement: String) -> Self {
+    fn new(keyspace_name: Option<String>, statement: String) -> Self {
         PrepareRequest {
-            keyspace_name: keyspace,
+            keyspace_name,
             statement,
             token: rand::random(),
         }
@@ -291,7 +291,7 @@ impl Request for PrepareRequest {
     fn payload(&self) -> Vec<u8> {
         Prepare::new().statement(&self.statement).build().unwrap().0
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.keyspace_name.clone().into()
     }
 }

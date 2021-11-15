@@ -192,7 +192,7 @@ impl<S: Keyspace> GetDynamicExecuteRequest for S {}
 impl<S: ToStatement> AsDynamicExecuteRequest for S {}
 
 pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) statement: String,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -323,7 +323,7 @@ impl Request for ExecuteRequest {
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.0.keyspace()
     }
 }

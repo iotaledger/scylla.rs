@@ -25,7 +25,10 @@ pub use security::*;
 mod trigger;
 pub use trigger::*;
 
-use crate::Parse;
+use crate::{
+    Parse,
+    StatementStream,
+};
 
 #[derive(TryInto, From)]
 pub enum Statement {
@@ -39,6 +42,12 @@ pub enum Statement {
     UserDefinedFunction(UserDefinedFunctionStatement),
     UserDefinedType(UserDefinedTypeStatement),
     Trigger(TriggerStatement),
+}
+
+impl Statement {
+    pub fn parse(input: &str) -> anyhow::Result<Self> {
+        StatementStream::new(input).parse()
+    }
 }
 
 macro_rules! impl_try_into_statements {
@@ -80,7 +89,7 @@ impl Parse for Statement {
 }
 
 pub trait KeyspaceExt {
-    fn keyspace(&self) -> String;
+    fn get_keyspace(&self) -> Option<String>;
 
     fn set_keyspace(&mut self, keyspace: &str);
 }

@@ -124,9 +124,10 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         InsertBuilder {
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             values,
@@ -189,9 +190,10 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         InsertBuilder {
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             values: values,
@@ -254,9 +256,10 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement().to_string();
+        let statement = self.statement();
+        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         InsertBuilder {
-            keyspace_name: self.name(),
+            keyspace_name,
             keyspace: PhantomData,
             key,
             values,
@@ -339,7 +342,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
         DynamicRequest,
     > {
         InsertBuilder {
-            keyspace_name: self.name(),
+            keyspace_name: self.name().into(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -380,7 +383,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
         DynamicRequest,
     > {
         InsertBuilder {
-            keyspace_name: self.name(),
+            keyspace_name: self.name().into(),
             keyspace: PhantomData,
             statement: statement.to_owned().into(),
             key,
@@ -507,7 +510,7 @@ impl<S: Keyspace> GetDynamicInsertRequest for S {}
 impl<S: ToStatement> AsDynamicInsertRequest for S {}
 
 pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
     pub(crate) statement: String,
     pub(crate) key: &'a K,
@@ -843,7 +846,7 @@ impl Request for InsertRequest {
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.0.keyspace_name.clone()
     }
 }

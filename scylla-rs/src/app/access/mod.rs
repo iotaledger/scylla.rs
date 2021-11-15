@@ -155,7 +155,7 @@ pub trait ToStatement: DynClone + Debug + Send + Sync {
     /// Get the statement from this type
     fn to_statement(&self) -> String;
     /// Get the keyspace name from this type
-    fn keyspace(&self) -> String;
+    fn keyspace(&self) -> Option<String>;
 }
 dyn_clone::clone_trait_object!(ToStatement);
 
@@ -163,7 +163,7 @@ impl ToStatement for String {
     fn to_statement(&self) -> String {
         self.clone().into()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         // Todo parse the keyspace from the cql statement or default to empty string
         String::new().into()
     }
@@ -173,7 +173,7 @@ impl ToStatement for &str {
     fn to_statement(&self) -> String {
         self.to_string().into()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         // Todo parse the keyspace from the cql statement or default to empty string
         String::new().into()
     }
@@ -184,8 +184,8 @@ impl ToStatement for SelectStatement {
         self.to_string().into()
     }
 
-    fn keyspace(&self) -> String {
-        KeyspaceExt::keyspace(self)
+    fn keyspace(&self) -> Option<String> {
+        KeyspaceExt::get_keyspace(self)
     }
 }
 
@@ -194,8 +194,8 @@ impl ToStatement for UpdateStatement {
         self.to_string().into()
     }
 
-    fn keyspace(&self) -> String {
-        KeyspaceExt::keyspace(self)
+    fn keyspace(&self) -> Option<String> {
+        KeyspaceExt::get_keyspace(self)
     }
 }
 
@@ -204,8 +204,8 @@ impl ToStatement for InsertStatement {
         self.to_string().into()
     }
 
-    fn keyspace(&self) -> String {
-        KeyspaceExt::keyspace(self)
+    fn keyspace(&self) -> Option<String> {
+        KeyspaceExt::get_keyspace(self)
     }
 }
 
@@ -214,8 +214,8 @@ impl ToStatement for DeleteStatement {
         self.to_string().into()
     }
 
-    fn keyspace(&self) -> String {
-        KeyspaceExt::keyspace(self)
+    fn keyspace(&self) -> Option<String> {
+        KeyspaceExt::get_keyspace(self)
     }
 }
 
@@ -252,7 +252,7 @@ pub trait Request {
     fn payload(&self) -> Vec<u8>;
 
     /// get the keyspace of the request
-    fn keyspace(&self) -> String;
+    fn keyspace(&self) -> Option<String>;
 }
 
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
@@ -286,7 +286,12 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 
     /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(&self.keyspace(), self.token(), self.payload(), self.worker())?;
+        send_local(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            self.worker(),
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
@@ -295,12 +300,22 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(&self.keyspace(), self.token(), self.payload(), worker)?;
+        send_local(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            worker,
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
     /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(&self.keyspace(), self.token(), self.payload(), self.worker())?;
+        send_global(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            self.worker(),
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
@@ -309,7 +324,12 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(&self.keyspace(), self.token(), self.payload(), worker)?;
+        send_global(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            worker,
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
     /// Send this request to the local datacenter and await the response asynchronously
@@ -396,7 +416,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 /// A common request type which contains only the bare minimum information needed
 #[derive(Debug, Clone)]
 pub struct CommonRequest {
-    pub(crate) keyspace_name: String,
+    pub(crate) keyspace_name: Option<String>,
     pub(crate) token: i64,
     pub(crate) payload: Vec<u8>,
     pub(crate) statement: String,
@@ -404,9 +424,9 @@ pub struct CommonRequest {
 
 impl CommonRequest {
     #[allow(missing_docs)]
-    pub fn new<T: Into<String>>(keyspace_name: T, statement: &str, payload: Vec<u8>) -> Self {
+    pub fn new<T: Into<String>>(keyspace_name: Option<String>, statement: &str, payload: Vec<u8>) -> Self {
         Self {
-            keyspace_name: keyspace_name.into(),
+            keyspace_name,
             token: 0,
             payload,
             statement: statement.to_string().into(),
@@ -426,7 +446,7 @@ impl Request for CommonRequest {
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.keyspace_name.to_owned().clone().into()
     }
 }
@@ -593,7 +613,12 @@ impl<V> DecodeResult<DecodeRows<V>> {
 
 /// Send a local request to the Ring
 #[inline]
-pub fn send_local(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
+pub fn send_local(
+    keyspace: Option<&str>,
+    token: i64,
+    payload: Vec<u8>,
+    worker: Box<dyn Worker>,
+) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     SharedRing::send_local_random_replica(keyspace, token, request)
@@ -601,7 +626,12 @@ pub fn send_local(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn 
 
 /// Send a global request to the Ring
 #[inline]
-pub fn send_global(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
+pub fn send_global(
+    keyspace: Option<&str>,
+    token: i64,
+    payload: Vec<u8>,
+    worker: Box<dyn Worker>,
+) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     SharedRing::send_global_random_replica(keyspace, token, request)
@@ -714,8 +744,6 @@ pub mod tests {
             binder.value(key)
         }
     }
-
-    use scylla_parse::*;
 
     #[allow(dead_code)]
     fn test_select() {

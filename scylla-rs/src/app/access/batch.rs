@@ -89,8 +89,8 @@ impl<S: Update<K, V, U> + Debug, K, V, U> ToStatement for UpdateStatement<S, K, 
     fn to_statement(&self) -> String {
         self.0.statement().to_string()
     }
-    fn keyspace(&self) -> String {
-        self.0.name()
+    fn keyspace(&self) -> Option<String> {
+        self.0.name().into()
     }
 }
 
@@ -98,8 +98,8 @@ impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
     fn to_statement(&self) -> String {
         self.0.statement().to_string()
     }
-    fn keyspace(&self) -> String {
-        self.0.name()
+    fn keyspace(&self) -> Option<String> {
+        self.0.name().into()
     }
 }
 
@@ -107,8 +107,8 @@ impl<S: Delete<K, V, D> + Debug, K, V, D> ToStatement for DeleteStatement<S, K, 
     fn to_statement(&self) -> String {
         self.0.statement().to_string()
     }
-    fn keyspace(&self) -> String {
-        self.0.name()
+    fn keyspace(&self) -> Option<String> {
+        self.0.name().into()
     }
 }
 
@@ -116,8 +116,8 @@ impl<S: Select<K, V, O> + Debug, K, V, O> ToStatement for SelectStatement<S, K, 
     fn to_statement(&self) -> String {
         self.0.statement().to_string()
     }
-    fn keyspace(&self) -> String {
-        self.0.name()
+    fn keyspace(&self) -> Option<String> {
+        self.0.name().into()
     }
 }
 
@@ -719,7 +719,7 @@ impl Request for BatchRequest {
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.keyspace_name.clone().into()
     }
 }
