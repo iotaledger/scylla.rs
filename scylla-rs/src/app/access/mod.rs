@@ -346,10 +346,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     }
 
     /// Send this request and worker to the local datacenter, without waiting for a response
-    fn send_local_with_worker<W: 'static + Worker>(
-        self,
-        worker: Box<W>,
-    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+    fn send_local_with_worker(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_local(&self.keyspace(), self.token(), self.payload(), worker)?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
@@ -360,10 +357,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     }
 
     /// Send this request and worker to a global datacenter, without waiting for a response
-    fn send_global_with_worker<W: 'static + Worker>(
-        self,
-        worker: Box<W>,
-    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+    fn send_global_with_worker(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_global(&self.keyspace(), self.token(), self.payload(), worker)?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }

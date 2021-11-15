@@ -36,7 +36,7 @@ mod select;
 mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
-pub trait Worker: Send + Sync + std::fmt::Debug {
+pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
     /// Reporter will invoke this method to Send the cql response to worker
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
