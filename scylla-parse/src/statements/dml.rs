@@ -1,40 +1,15 @@
-use std::fmt::{
-    Display,
-    Formatter,
-};
-
+use super::*;
 use crate::{
-    keywords::*,
     ArithmeticOp,
-    Brackets,
-    ColumnDefault,
-    CqlType,
+    BindMarker,
     DurationLiteral,
-    FromClause,
-    GroupByClause,
-    KeyspaceExt,
-    Limit,
-    List,
     ListLiteral,
-    Name,
     Operator,
-    OrderingClause,
-    Parens,
-    Parse,
-    Peek,
-    StatementStream,
-    TableName,
-    Term,
+    ReservedKeyword,
     TupleLiteral,
-    WhereClause,
-};
-use derive_builder::Builder;
-use derive_more::{
-    From,
-    TryInto,
 };
 
-#[derive(Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
 pub enum DataManipulationStatement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -44,7 +19,7 @@ pub enum DataManipulationStatement {
 }
 
 impl Parse for DataManipulationStatement {
-    type Output = DataManipulationStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(keyword) = s.find::<ReservedKeyword>() {
             match keyword {
@@ -74,41 +49,41 @@ impl Peek for DataManipulationStatement {
 impl Display for DataManipulationStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Select(s) => write!(f, "{}", s),
-            Self::Insert(s) => write!(f, "{}", s),
-            Self::Update(s) => write!(f, "{}", s),
-            Self::Delete(s) => write!(f, "{}", s),
-            Self::Batch(s) => write!(f, "{}", s),
+            Self::Select(s) => s.fmt(f),
+            Self::Insert(s) => s.fmt(f),
+            Self::Update(s) => s.fmt(f),
+            Self::Delete(s) => s.fmt(f),
+            Self::Batch(s) => s.fmt(f),
         }
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct SelectStatement {
-    #[builder(default = "false")]
+    #[builder(default)]
     pub distinct: bool,
     pub select_clause: SelectClauseKind,
     pub from: FromClause,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub where_clause: Option<WhereClause>,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub group_by_clause: Option<GroupByClause>,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub order_by_clause: Option<OrderingClause>,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub per_partition_limit: Option<Limit>,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub limit: Option<Limit>,
-    #[builder(default = "false")]
+    #[builder(default)]
     pub allow_filtering: bool,
-    #[builder(default = "false")]
+    #[builder(default)]
     pub bypass_cache: bool,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub timeout: Option<DurationLiteral>,
 }
 
 impl Parse for SelectStatement {
-    type Output = SelectStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -223,14 +198,20 @@ impl KeyspaceExt for SelectStatement {
     }
 }
 
-#[derive(Clone, Debug)]
+impl WhereExt for SelectStatement {
+    fn iter_where(&self) -> Option<std::slice::Iter<Relation>> {
+        self.where_clause.as_ref().map(|w| w.relations.iter())
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum SelectClauseKind {
     All,
     Selectors(Vec<Selector>),
 }
 
 impl Parse for SelectClauseKind {
-    type Output = SelectClauseKind;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -252,7 +233,7 @@ impl Display for SelectClauseKind {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", selector)?;
+                    selector.fmt(f)?;
                 }
                 Ok(())
             }
@@ -260,14 +241,14 @@ impl Display for SelectClauseKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct Selector {
     pub kind: SelectorKind,
     pub as_id: Option<Name>,
 }
 
 impl Parse for Selector {
-    type Output = Selector;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -282,7 +263,7 @@ impl Parse for Selector {
 
 impl Display for Selector {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.kind)?;
+        self.kind.fmt(f)?;
         if let Some(id) = &self.as_id {
             write!(f, " AS {}", id)?;
         }
@@ -290,14 +271,14 @@ impl Display for Selector {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct SelectorFunction {
     pub function: Name,
     pub args: Vec<Selector>,
 }
 
 impl Parse for SelectorFunction {
-    type Output = SelectorFunction;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -328,7 +309,7 @@ impl Display for SelectorFunction {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum SelectorKind {
     Column(Name),
     Term(Term),
@@ -338,7 +319,7 @@ pub enum SelectorKind {
 }
 
 impl Parse for SelectorKind {
-    type Output = SelectorKind;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -357,7 +338,7 @@ impl Parse for SelectorKind {
         } else if let Some(term) = s.parse_if() {
             Self::Term(term?)
         } else {
-            anyhow::bail!("Invalid selector!")
+            anyhow::bail!("Invalid selector: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -365,31 +346,32 @@ impl Parse for SelectorKind {
 impl Display for SelectorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SelectorKind::Column(id) => write!(f, "{}", id),
-            SelectorKind::Term(term) => write!(f, "{}", term),
+            SelectorKind::Column(id) => id.fmt(f),
+            SelectorKind::Term(term) => term.fmt(f),
             SelectorKind::Cast(selector, cql_type) => write!(f, "CAST({} AS {})", selector, cql_type),
-            SelectorKind::Function(func) => write!(f, "{}", func),
+            SelectorKind::Function(func) => func.fmt(f),
             SelectorKind::Count => write!(f, "COUNT(*)"),
         }
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct InsertStatement {
-    pub table: TableName,
+    pub table: KeyspaceQualifiedName,
     pub kind: InsertKind,
-    #[builder(default = "false")]
+    #[builder(default)]
     pub if_not_exists: bool,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub using: Option<Vec<UpdateParameter>>,
 }
 
 impl Parse for InsertStatement {
-    type Output = InsertStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(INSERT, INTO)>()?;
         let mut res = InsertStatementBuilder::default();
-        res.table(s.parse::<TableName>()?).kind(s.parse::<InsertKind>()?);
+        res.table(s.parse::<KeyspaceQualifiedName>()?)
+            .kind(s.parse::<InsertKind>()?);
         loop {
             if s.parse_if::<(IF, NOT, EXISTS)>().is_some() {
                 if res.if_not_exists.is_some() {
@@ -445,7 +427,7 @@ impl KeyspaceExt for InsertStatement {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum InsertKind {
     NameValue {
         names: Vec<Name>,
@@ -458,7 +440,7 @@ pub enum InsertKind {
 }
 
 impl Parse for InsertKind {
-    type Output = InsertKind;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if s.parse_if::<JSON>().is_some() {
             let (json, default) = s.parse_from::<(String, Option<(DEFAULT, ColumnDefault)>)>()?;
@@ -493,7 +475,7 @@ impl Display for InsertKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum UpdateParameter {
     TTL(Limit),
     Timestamp(Limit),
@@ -501,7 +483,7 @@ pub enum UpdateParameter {
 }
 
 impl Parse for UpdateParameter {
-    type Output = UpdateParameter;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if s.parse_if::<TTL>().is_some() {
             Ok(UpdateParameter::TTL(s.parse()?))
@@ -510,7 +492,7 @@ impl Parse for UpdateParameter {
         } else if s.parse_if::<TIMEOUT>().is_some() {
             Ok(UpdateParameter::Timeout(s.parse()?))
         } else {
-            anyhow::bail!("Invalid update parameter!")
+            anyhow::bail!("Invalid update parameter: {}", s.parse_from::<Token>()?)
         }
     }
 }
@@ -531,23 +513,23 @@ impl Display for UpdateParameter {
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct UpdateStatement {
-    pub table: TableName,
-    #[builder(default = "None")]
+    pub table: KeyspaceQualifiedName,
+    #[builder(default)]
     pub using: Option<Vec<UpdateParameter>>,
     pub set_clause: Vec<Assignment>,
     pub where_clause: WhereClause,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub if_clause: Option<IfClause>,
 }
 
 impl Parse for UpdateStatement {
-    type Output = UpdateStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<UPDATE>()?;
         let mut res = UpdateStatementBuilder::default();
-        res.table(s.parse::<TableName>()?)
+        res.table(s.parse::<KeyspaceQualifiedName>()?)
             .using(
                 s.parse_from::<Option<(USING, List<UpdateParameter, AND>)>>()?
                     .map(|(_, v)| v),
@@ -605,7 +587,13 @@ impl KeyspaceExt for UpdateStatement {
     }
 }
 
-#[derive(Clone, Debug)]
+impl WhereExt for UpdateStatement {
+    fn iter_where(&self) -> Option<std::slice::Iter<Relation>> {
+        Some(self.where_clause.relations.iter())
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum Assignment {
     Simple {
         selection: SimpleSelection,
@@ -625,7 +613,7 @@ pub enum Assignment {
 }
 
 impl Parse for Assignment {
-    type Output = Assignment;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(a) = s.parse_if::<(_, Equals, _, Plus, _)>() {
             let (assignee, _, list, _, item) = a?;
@@ -652,7 +640,7 @@ impl Display for Assignment {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum SimpleSelection {
     Column(Name),
     Term(Name, Term),
@@ -660,7 +648,7 @@ pub enum SimpleSelection {
 }
 
 impl Parse for SimpleSelection {
-    type Output = SimpleSelection;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(res) = s.parse_if::<(_, Dot, _)>() {
             let (column, _, field) = res?;
@@ -677,14 +665,14 @@ impl Parse for SimpleSelection {
 impl Display for SimpleSelection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Column(name) => write!(f, "{}", name),
+            Self::Column(name) => name.fmt(f),
             Self::Term(name, term) => write!(f, "{}[{}]", name, term),
             Self::Field(column, field) => write!(f, "{}.{}", column, field),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct Condition {
     pub lhs: SimpleSelection,
     pub op: Operator,
@@ -692,7 +680,7 @@ pub struct Condition {
 }
 
 impl Parse for Condition {
-    type Output = Condition;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let (lhs, op, rhs) = s.parse()?;
         Ok(Condition { lhs, op, rhs })
@@ -705,14 +693,14 @@ impl Display for Condition {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum IfClause {
     Exists,
     Conditions(Vec<Condition>),
 }
 
 impl Parse for IfClause {
-    type Output = IfClause;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<IF>()?;
         Ok(if s.parse_if::<EXISTS>().is_some() {
@@ -747,20 +735,20 @@ impl Display for IfClause {
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct DeleteStatement {
-    #[builder(default = "None")]
+    #[builder(default)]
     pub selections: Option<Vec<SimpleSelection>>,
     pub from: FromClause,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub using: Option<Vec<UpdateParameter>>,
     pub where_clause: WhereClause,
-    #[builder(default = "None")]
+    #[builder(default)]
     pub if_clause: Option<IfClause>,
 }
 
 impl Parse for DeleteStatement {
-    type Output = DeleteStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<DELETE>()?;
         let mut res = DeleteStatementBuilder::default();
@@ -821,7 +809,13 @@ impl KeyspaceExt for DeleteStatement {
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+impl WhereExt for DeleteStatement {
+    fn iter_where(&self) -> Option<std::slice::Iter<Relation>> {
+        Some(self.where_clause.relations.iter())
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct BatchStatement {
     pub kind: BatchKind,
     pub using: Option<Vec<UpdateParameter>>,
@@ -837,7 +831,7 @@ impl BatchStatement {
 }
 
 impl Parse for BatchStatement {
-    type Output = BatchStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<BEGIN>()?;
         let mut res = BatchStatementBuilder::default();
@@ -896,7 +890,7 @@ impl Display for BatchStatement {
     }
 }
 
-#[derive(Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
 pub enum ModificationStatement {
     Insert(InsertStatement),
     Update(UpdateStatement),
@@ -904,7 +898,7 @@ pub enum ModificationStatement {
 }
 
 impl Parse for ModificationStatement {
-    type Output = ModificationStatement;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(keyword) = s.find::<ReservedKeyword>() {
             match keyword {
@@ -930,9 +924,9 @@ impl Peek for ModificationStatement {
 impl Display for ModificationStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Insert(s) => write!(f, "{}", s),
-            Self::Update(s) => write!(f, "{}", s),
-            Self::Delete(s) => write!(f, "{}", s),
+            Self::Insert(s) => s.fmt(f),
+            Self::Update(s) => s.fmt(f),
+            Self::Delete(s) => s.fmt(f),
         }
     }
 }
@@ -945,7 +939,7 @@ pub enum BatchKind {
 }
 
 impl Parse for BatchKind {
-    type Output = BatchKind;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if s.parse_if::<UNLOGGED>().is_some() {
             BatchKind::Unlogged
@@ -954,5 +948,272 @@ impl Parse for BatchKind {
         } else {
             BatchKind::Logged
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FromClause {
+    pub table: KeyspaceQualifiedName,
+}
+
+impl Parse for FromClause {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, table) = s.parse::<(FROM, KeyspaceQualifiedName)>()?;
+        Ok(FromClause { table })
+    }
+}
+
+impl Peek for FromClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<FROM>()
+    }
+}
+
+impl Display for FromClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FROM {}", self.table)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WhereClause {
+    pub relations: Vec<Relation>,
+}
+
+impl Parse for WhereClause {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, relations) = s.parse_from::<(WHERE, List<Relation, AND>)>()?;
+        Ok(WhereClause { relations })
+    }
+}
+
+impl Peek for WhereClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<WHERE>()
+    }
+}
+
+impl Display for WhereClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WHERE {}",
+            self.relations
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GroupByClause {
+    pub columns: Vec<Name>,
+}
+
+impl Parse for GroupByClause {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<Name, Comma>)>()?;
+        Ok(GroupByClause { columns })
+    }
+}
+
+impl Peek for GroupByClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<(GROUP, BY)>()
+    }
+}
+
+impl Display for GroupByClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "GROUP BY {}",
+            self.columns
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct OrderingClause {
+    pub columns: Vec<ColumnOrder>,
+}
+
+impl Parse for OrderingClause {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<ColumnOrder, Comma>)>()?;
+        Ok(OrderingClause { columns })
+    }
+}
+
+impl Peek for OrderingClause {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<(ORDER, BY)>()
+    }
+}
+
+impl Display for OrderingClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ORDER BY {}",
+            self.columns
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Limit {
+    Literal(i32),
+    BindMarker(BindMarker),
+}
+
+impl Parse for Limit {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if let Some(bind) = s.parse_if::<BindMarker>() {
+            Ok(Limit::BindMarker(bind?))
+        } else {
+            Ok(Limit::Literal(s.parse::<i32>()?))
+        }
+    }
+}
+
+impl Peek for Limit {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<i32>() || s.check::<BindMarker>()
+    }
+}
+
+impl Display for Limit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Limit::Literal(i) => i.fmt(f),
+            Limit::BindMarker(b) => b.fmt(f),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ColumnDefault {
+    Null,
+    Unset,
+}
+
+impl Parse for ColumnDefault {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if s.parse_if::<NULL>().is_some() {
+            Ok(ColumnDefault::Null)
+        } else if s.parse_if::<UNSET>().is_some() {
+            Ok(ColumnDefault::Unset)
+        } else {
+            anyhow::bail!("Invalid column default: {}", s.parse_from::<Token>()?)
+        }
+    }
+}
+
+impl Peek for ColumnDefault {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<NULL>() || s.check::<UNSET>()
+    }
+}
+
+impl Display for ColumnDefault {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ColumnDefault::Null => write!(f, "NULL"),
+            ColumnDefault::Unset => write!(f, "UNSET"),
+        }
+    }
+}
+
+mod test {
+    #[allow(unused)]
+    use super::*;
+
+    #[test]
+    fn test_parse_select() {
+        let statement = "SELECT movie, director \
+            FROM movies.NerdMovies \
+            WHERE main_actor = 'Nathan Fillion' \
+            AND year > 2011 \
+            AND year <= 2012";
+        let mut stream = StatementStream::new(statement);
+        let select_statement = stream.parse::<SelectStatement>().unwrap();
+        // println!("{:#?}", select_statement);
+        // println!("{}", select_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), select_statement.to_string())
+    }
+
+    #[test]
+    fn test_parse_insert() {
+        let statement = "INSERT INTO NerdMovies (movie, director, main_actor, year) \
+            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) \
+            IF NOT EXISTS USING TTL 86400";
+        let mut stream = StatementStream::new(statement);
+        let insert_statement = stream.parse::<InsertStatement>().unwrap();
+        // println!("{:#?}", insert_statement);
+        // println!("{}", insert_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), insert_statement.to_string())
+    }
+
+    #[test]
+    fn test_parse_update() {
+        let statement = "UPDATE NerdMovies \
+            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' \
+            WHERE movie = 'Serenity' \
+            IF EXISTS";
+        let mut stream = StatementStream::new(statement);
+        let update_statement = stream.parse::<UpdateStatement>().unwrap();
+        // println!("{:#?}", update_statement);
+        // println!("{}", update_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), update_statement.to_string())
+    }
+
+    #[test]
+    fn test_parse_delete() {
+        let statement = "DELETE FROM NerdMovies \
+            WHERE movie = 'Serenity' \
+            IF EXISTS";
+        let mut stream = StatementStream::new(statement);
+        let delete_statement = stream.parse::<DeleteStatement>().unwrap();
+        // println!("{:#?}", delete_statement);
+        // println!("{}", delete_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), delete_statement.to_string())
+    }
+
+    #[test]
+    fn test_parse_batch() {
+        let statement = "BEGIN BATCH \
+            INSERT INTO NerdMovies (movie, director, main_actor, year) \
+            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) \
+            IF NOT EXISTS USING TTL 86400; \
+            UPDATE NerdMovies \
+            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' \
+            WHERE movie = 'Serenity' \
+            IF EXISTS; \
+            DELETE FROM NerdMovies \
+            WHERE movie = 'Serenity' \
+            IF EXISTS \
+            APPLY BATCH";
+        let mut stream = StatementStream::new(statement);
+        let batch_statement = stream.parse::<BatchStatement>().unwrap();
+        // println!("{:#?}", batch_statement);
+        // println!("{}", batch_statement);
+        assert_eq!(statement.to_string().replace("\n", ""), batch_statement.to_string())
     }
 }

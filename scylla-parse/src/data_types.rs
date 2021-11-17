@@ -1,17 +1,49 @@
 use super::{
-    keywords::*, Angles, BindMarker, Braces, Brackets, Float, FunctionCall, Hex, List, Name, Nothing, Number, Parens,
-    Parse, Peek, SignedNumber, StatementStream, Token,
+    keywords::*,
+    Angles,
+    BindMarker,
+    Braces,
+    Brackets,
+    Float,
+    FunctionCall,
+    Hex,
+    List,
+    Name,
+    Nothing,
+    Number,
+    Parens,
+    Parse,
+    Peek,
+    SignedNumber,
+    StatementStream,
+    Token,
 };
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use crate::{
+    Alpha,
+    KeyspaceQualifiedName,
+};
+use chrono::{
+    DateTime,
+    NaiveDate,
+    NaiveTime,
+    Utc,
+};
+use scylla_parse_macros::ParseFromStr;
 use std::{
     collections::HashMap,
-    convert::{TryFrom, TryInto},
-    fmt::{Display, Formatter},
+    convert::{
+        TryFrom,
+        TryInto,
+    },
+    fmt::{
+        Display,
+        Formatter,
+    },
     str::FromStr,
 };
 use uuid::Uuid;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(ParseFromStr, Copy, Clone, Debug)]
 pub enum ArithmeticOp {
     Add,
     Sub,
@@ -52,7 +84,7 @@ impl TryFrom<char> for ArithmeticOp {
 }
 
 impl Parse for ArithmeticOp {
-    type Output = ArithmeticOp;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<char>()?.try_into()
     }
@@ -64,7 +96,7 @@ impl Peek for ArithmeticOp {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(ParseFromStr, Copy, Clone, Debug)]
 pub enum Operator {
     Equal,
     NotEqual,
@@ -100,7 +132,7 @@ impl Display for Operator {
 }
 
 impl Parse for Operator {
-    type Output = Operator;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         if s.parse_if::<(CONTAINS, KEY)>().is_some() {
             Ok(Operator::ContainsKey)
@@ -127,10 +159,17 @@ impl Parse for Operator {
                 }
                 ('>', _) => Operator::GreaterThan,
                 ('<', _) => Operator::LessThan,
-                _ => anyhow::bail!("Invalid operator: '{}' {:?}", first, second),
+                _ => anyhow::bail!(
+                    "Invalid operator: {}",
+                    if let Some(second) = second {
+                        format!("{}{}", first, second)
+                    } else {
+                        first.to_string()
+                    }
+                ),
             })
         } else {
-            anyhow::bail!("Invalid token for operator!")
+            anyhow::bail!("Invalid token for operator: {}", s.parse_from::<Token>()?)
         }
     }
 }
@@ -197,7 +236,7 @@ impl Display for TimeUnit {
 }
 
 impl Parse for TimeUnit {
-    type Output = TimeUnit;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let (Some(first), second) = (s.next(), s.peek()) {
             Ok(match (first, second) {
@@ -223,10 +262,17 @@ impl Parse for TimeUnit {
                 ('d', _) => TimeUnit::Days,
                 ('w', _) => TimeUnit::Weeks,
                 ('y', _) => TimeUnit::Years,
-                _ => anyhow::bail!("Invalid time unit!"),
+                _ => anyhow::bail!(
+                    "Invalid time unit: {}",
+                    if let Some(second) = second {
+                        format!("{}{}", first, second)
+                    } else {
+                        first.to_string()
+                    }
+                ),
             })
         } else {
-            anyhow::bail!("Invalid token for time unit!")
+            anyhow::bail!("Invalid token for time unit: {}", s.parse_from::<Token>()?)
         }
     }
 }
@@ -237,7 +283,7 @@ impl Peek for TimeUnit {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum Term {
     Constant(Constant),
     Literal(Literal),
@@ -255,28 +301,73 @@ pub enum Term {
 }
 
 impl Parse for Term {
-    type Output = Term;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         Ok(if let Some(c) = s.parse_if() {
-            Self::Constant(c?)
+            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
+                let (op, rhs) = res?;
+                Self::ArithmeticOp {
+                    lhs: Some(Box::new(Self::Constant(c?))),
+                    op,
+                    rhs: Box::new(rhs),
+                }
+            } else {
+                Self::Constant(c?)
+            }
         } else if let Some(lit) = s.parse_if() {
-            Self::Literal(lit?)
+            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
+                let (op, rhs) = res?;
+                Self::ArithmeticOp {
+                    lhs: Some(Box::new(Self::Literal(lit?))),
+                    op,
+                    rhs: Box::new(rhs),
+                }
+            } else {
+                Self::Literal(lit?)
+            }
         } else if let Some(f) = s.parse_if() {
-            Self::FunctionCall(f?)
+            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
+                let (op, rhs) = res?;
+                Self::ArithmeticOp {
+                    lhs: Some(Box::new(Self::FunctionCall(f?))),
+                    op,
+                    rhs: Box::new(rhs),
+                }
+            } else {
+                Self::FunctionCall(f?)
+            }
         } else if let Some(res) = s.parse_if() {
             let (hint, ident) = res?;
-            Self::TypeHint { hint, ident }
+            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
+                let (op, rhs) = res?;
+                Self::ArithmeticOp {
+                    lhs: Some(Box::new(Self::TypeHint { hint, ident })),
+                    op,
+                    rhs: Box::new(rhs),
+                }
+            } else {
+                Self::TypeHint { hint, ident }
+            }
         } else if let Some(b) = s.parse_if() {
-            Self::BindMarker(b?)
-        } else if let Some(res) = s.parse_if::<(Option<Term>, ArithmeticOp, Term)>() {
-            let (lhs, op, rhs) = res?;
+            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
+                let (op, rhs) = res?;
+                Self::ArithmeticOp {
+                    lhs: Some(Box::new(Self::BindMarker(b?))),
+                    op,
+                    rhs: Box::new(rhs),
+                }
+            } else {
+                Self::BindMarker(b?)
+            }
+        } else if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
+            let (op, rhs) = res?;
             Self::ArithmeticOp {
-                lhs: lhs.map(Box::new),
+                lhs: None,
                 op,
                 rhs: Box::new(rhs),
             }
         } else {
-            anyhow::bail!("Invalid term!")
+            anyhow::bail!("Invalid term: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -295,20 +386,20 @@ impl Peek for Term {
 impl Display for Term {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Constant(c) => write!(f, "{}", c),
-            Self::Literal(l) => write!(f, "{}", l),
-            Self::FunctionCall(fc) => write!(f, "{}", fc),
+            Self::Constant(c) => c.fmt(f),
+            Self::Literal(l) => l.fmt(f),
+            Self::FunctionCall(fc) => fc.fmt(f),
             Self::ArithmeticOp { lhs, op, rhs } => match lhs {
                 Some(lhs) => write!(f, "{}{}{}", lhs, op, rhs),
                 None => write!(f, "{}{}", op, rhs),
             },
             Self::TypeHint { hint, ident } => write!(f, "{} {}", hint, ident),
-            Self::BindMarker(b) => write!(f, "{}", b),
+            Self::BindMarker(b) => b.fmt(f),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum Constant {
     Null,
     String(String),
@@ -321,29 +412,27 @@ pub enum Constant {
 }
 
 impl Parse for Constant {
-    type Output = Constant;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if s.parse_if::<NULL>().is_some() {
             Constant::Null
         } else if let Some(ss) = s.parse_if() {
             Constant::String(ss?)
-        } else if let Some(i) = s.parse_from_if::<SignedNumber>() {
-            Constant::Integer(i?)
         } else if let Some(f) = s.parse_from_if::<Float>() {
             Constant::Float(f?)
-        } else if s.parse_from_if::<TRUE>().is_some() {
-            Constant::Boolean(true)
-        } else if s.parse_from_if::<FALSE>().is_some() {
-            Constant::Boolean(false)
+        } else if let Some(i) = s.parse_from_if::<SignedNumber>() {
+            Constant::Integer(i?)
+        } else if let Some(b) = s.parse_if() {
+            Constant::Boolean(b?)
         } else if let Some(u) = s.parse_if() {
             Constant::Uuid(u?)
-        } else if let Some(h) = s.parse_from_if::<Hex>() {
-            Constant::Hex(h?)
         } else if s.peekn(2).map(|s| s.to_lowercase().as_str() == "0x").unwrap_or(false) {
             s.nextn(2);
             Constant::Blob(s.parse_from::<Hex>()?)
+        } else if let Some(h) = s.parse_from_if::<Hex>() {
+            Constant::Hex(h?)
         } else {
-            anyhow::bail!("Invalid constant!")
+            anyhow::bail!("Invalid constant: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -353,8 +442,7 @@ impl Peek for Constant {
             || s.check::<String>()
             || s.check::<SignedNumber>()
             || s.check::<Float>()
-            || s.check::<TRUE>()
-            || s.check::<FALSE>()
+            || s.check::<bool>()
             || s.check::<Uuid>()
             || s.check::<Hex>()
             || s.nextn(2).map(|s| s.to_lowercase().as_str() == "0x").unwrap_or(false)
@@ -366,17 +454,17 @@ impl Display for Constant {
         match self {
             Self::Null => write!(f, "NULL"),
             Self::String(s) => write!(f, "'{}'", s),
-            Self::Integer(s) => write!(f, "{}", s),
-            Self::Float(s) => write!(f, "{}", s),
-            Self::Boolean(b) => write!(f, "{}", b.to_string().to_uppercase()),
-            Self::Uuid(u) => write!(f, "{}", u),
-            Self::Hex(h) => write!(f, "{}", hex::encode(h)),
+            Self::Integer(s) => s.fmt(f),
+            Self::Float(s) => s.fmt(f),
+            Self::Boolean(b) => b.to_string().to_uppercase().fmt(f),
+            Self::Uuid(u) => u.fmt(f),
+            Self::Hex(h) => hex::encode(h).fmt(f),
             Self::Blob(b) => write!(f, "0x{}", hex::encode(b)),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum Literal {
     Collection(CollectionTypeLiteral),
     UserDefined(UserDefinedTypeLiteral),
@@ -384,7 +472,7 @@ pub enum Literal {
 }
 
 impl Parse for Literal {
-    type Output = Literal;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(c) = s.parse_if() {
             Self::Collection(c?)
@@ -393,7 +481,7 @@ impl Parse for Literal {
         } else if let Some(t) = s.parse_if() {
             Self::Tuple(t?)
         } else {
-            anyhow::bail!("Invalid CQL literal type")
+            anyhow::bail!("Invalid CQL literal type: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -406,14 +494,14 @@ impl Peek for Literal {
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Collection(c) => write!(f, "{}", c),
-            Self::UserDefined(u) => write!(f, "{}", u),
-            Self::Tuple(t) => write!(f, "{}", t),
+            Self::Collection(c) => c.fmt(f),
+            Self::UserDefined(u) => u.fmt(f),
+            Self::Tuple(t) => t.fmt(f),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum CqlType {
     Native(NativeType),
     Collection(CollectionType),
@@ -423,7 +511,7 @@ pub enum CqlType {
 }
 
 impl Parse for CqlType {
-    type Output = CqlType;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -439,7 +527,7 @@ impl Parse for CqlType {
         } else if let Some(c) = s.parse_if() {
             Self::Custom(c?)
         } else {
-            anyhow::bail!("Invalid CQL Type!")
+            anyhow::bail!("Invalid CQL Type: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -456,15 +544,15 @@ impl Peek for CqlType {
 impl Display for CqlType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Native(n) => write!(f, "{}", n),
-            Self::Collection(c) => write!(f, "{}", c),
-            Self::UserDefined(u) => write!(f, "{}", u),
+            Self::Native(n) => n.fmt(f),
+            Self::Collection(c) => c.fmt(f),
+            Self::UserDefined(u) => u.fmt(f),
             Self::Tuple(t) => write!(
                 f,
                 "TUPLE<{}>",
                 t.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
             ),
-            Self::Custom(c) => write!(f, "{}", c),
+            Self::Custom(c) => c.fmt(f),
         }
     }
 }
@@ -552,25 +640,25 @@ impl FromStr for NativeType {
             "UUID" => NativeType::Uuid,
             "VARCHAR" => NativeType::Varchar,
             "VARINT" => NativeType::Varint,
-            _ => anyhow::bail!("Invalid native type!"),
+            _ => anyhow::bail!("Invalid native type: {}", s),
         })
     }
 }
 
 impl Parse for NativeType {
-    type Output = NativeType;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
     {
-        let token = s.parse_from::<Token>()?;
+        let token = s.parse_from::<Alpha>()?;
         NativeType::from_str(&token)
     }
 }
 
 impl Peek for NativeType {
     fn peek(mut s: StatementStream<'_>) -> bool {
-        if let Ok(token) = s.parse_from::<Token>() {
+        if let Ok(token) = s.parse_from::<Alpha>() {
             NativeType::from_str(&token).is_ok()
         } else {
             false
@@ -578,7 +666,7 @@ impl Peek for NativeType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum CollectionTypeLiteral {
     List(ListLiteral),
     Set(SetLiteral),
@@ -586,7 +674,7 @@ pub enum CollectionTypeLiteral {
 }
 
 impl Parse for CollectionTypeLiteral {
-    type Output = CollectionTypeLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(l) = s.parse_if() {
             Self::List(l?)
@@ -595,7 +683,7 @@ impl Parse for CollectionTypeLiteral {
         } else if let Some(m) = s.parse_if() {
             Self::Map(m?)
         } else {
-            anyhow::bail!("Invalid collection literal type!")
+            anyhow::bail!("Invalid collection literal type: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -608,14 +696,14 @@ impl Peek for CollectionTypeLiteral {
 impl Display for CollectionTypeLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::List(l) => write!(f, "{}", l),
-            Self::Set(s) => write!(f, "{}", s),
-            Self::Map(m) => write!(f, "{}", m),
+            Self::List(l) => l.fmt(f),
+            Self::Set(s) => s.fmt(f),
+            Self::Map(m) => m.fmt(f),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum CollectionType {
     List(Box<CqlType>),
     Set(Box<CqlType>),
@@ -623,7 +711,7 @@ pub enum CollectionType {
 }
 
 impl Parse for CollectionType {
-    type Output = CollectionType;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -636,7 +724,7 @@ impl Parse for CollectionType {
         } else if s.parse_if::<LIST>().is_some() {
             Self::List(Box::new(s.parse_from::<Angles<CqlType>>()?))
         } else {
-            anyhow::bail!("Invalid collection type!")
+            anyhow::bail!("Invalid collection type: {}", s.parse_from::<Token>()?)
         })
     }
 }
@@ -657,13 +745,13 @@ impl Display for CollectionType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct MapLiteral {
     pub elements: Vec<(Term, Term)>,
 }
 
 impl Parse for MapLiteral {
-    type Output = MapLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -697,13 +785,13 @@ impl Display for MapLiteral {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct TupleLiteral {
     pub elements: Vec<Term>,
 }
 
 impl Parse for TupleLiteral {
-    type Output = TupleLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -733,13 +821,13 @@ impl Display for TupleLiteral {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct SetLiteral {
     pub elements: Vec<Term>,
 }
 
 impl Parse for SetLiteral {
-    type Output = SetLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(Self {
             elements: s.parse_from::<Braces<List<Term, Comma>>>()?,
@@ -766,13 +854,13 @@ impl Display for SetLiteral {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct ListLiteral {
     pub elements: Vec<Term>,
 }
 
 impl Parse for ListLiteral {
-    type Output = ListLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(Self {
             elements: s.parse_from::<Brackets<List<Term, Comma>>>()?,
@@ -802,11 +890,13 @@ impl Display for ListLiteral {
 #[derive(Clone, Debug, Default)]
 pub struct TimestampLiteral(i64);
 impl Parse for TimestampLiteral {
-    type Output = TimestampLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(res) = s.parse_if::<String>() {
             let ts = res?;
-            Ok(Self(ts.parse::<DateTime<Utc>>()?.timestamp()))
+            Ok(Self(
+                ts.parse::<DateTime<Utc>>().map_err(|e| anyhow::anyhow!(e))?.timestamp(),
+            ))
         } else {
             Ok(Self(s.parse::<u64>()? as i64))
         }
@@ -816,11 +906,11 @@ impl Parse for TimestampLiteral {
 #[derive(Clone, Debug, Default)]
 pub struct DateLiteral(u32);
 impl Parse for DateLiteral {
-    type Output = DateLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(res) = s.parse_if::<String>() {
             let d = res?;
-            let dur = d.parse::<NaiveDate>()? - NaiveDate::from_ymd(1970, 1, 1);
+            let dur = d.parse::<NaiveDate>().map_err(|e| anyhow::anyhow!(e))? - NaiveDate::from_ymd(1970, 1, 1);
             Ok(Self(dur.num_days() as u32))
         } else {
             Ok(Self(s.parse::<u32>()?))
@@ -831,11 +921,11 @@ impl Parse for DateLiteral {
 #[derive(Clone, Debug, Default)]
 pub struct TimeLiteral(i64);
 impl Parse for TimeLiteral {
-    type Output = TimeLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(res) = s.parse_from_if::<String>() {
             let t = res?;
-            let t = t.parse::<NaiveTime>()? - NaiveTime::from_hms(0, 0, 0);
+            let t = t.parse::<NaiveTime>().map_err(|e| anyhow::anyhow!(e))? - NaiveTime::from_hms(0, 0, 0);
             Ok(Self(
                 t.num_nanoseconds()
                     .ok_or_else(|| anyhow::anyhow!("Invalid time literal!"))?,
@@ -854,7 +944,7 @@ pub struct DurationLiteral {
 }
 
 impl Parse for DurationLiteral {
-    type Output = DurationLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(
             if let Some(v) = s.parse_from_if::<List<(Number, TimeUnit), Nothing>>() {
@@ -901,13 +991,13 @@ impl Display for DurationLiteral {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct UserDefinedTypeLiteral {
     pub fields: HashMap<Name, Term>,
 }
 
 impl Parse for UserDefinedTypeLiteral {
-    type Output = UserDefinedTypeLiteral;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
@@ -943,38 +1033,4 @@ impl Display for UserDefinedTypeLiteral {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct UserDefinedType {
-    pub keyspace: Option<Name>,
-    pub ident: Name,
-}
-
-impl Parse for UserDefinedType {
-    type Output = UserDefinedType;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
-    where
-        Self: Sized,
-    {
-        let (keyspace, ident) = s.parse::<(Option<(Name, Dot)>, Name)>()?;
-        Ok(Self {
-            keyspace: keyspace.map(|(i, _)| i),
-            ident,
-        })
-    }
-}
-
-impl Peek for UserDefinedType {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(Option<(Name, Dot)>, Name)>()
-    }
-}
-
-impl Display for UserDefinedType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(keyspace) = &self.keyspace {
-            write!(f, "{}.{}", keyspace, self.ident)
-        } else {
-            write!(f, "{}", self.ident)
-        }
-    }
-}
+pub type UserDefinedType = KeyspaceQualifiedName;

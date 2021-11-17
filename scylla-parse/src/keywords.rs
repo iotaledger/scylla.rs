@@ -1,6 +1,14 @@
-use std::{fmt::Display, str::FromStr};
-
-use super::{Alphanumeric, Parse, Peek, StatementStream};
+use super::{
+    Alphanumeric,
+    Parse,
+    Peek,
+    StatementStream,
+};
+use scylla_parse_macros::ParseFromStr;
+use std::{
+    fmt::Display,
+    str::FromStr,
+};
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum ReservedKeyword {
@@ -64,13 +72,14 @@ pub enum ReservedKeyword {
 
 macro_rules! keyword {
     ($t:ident) => {
+        #[derive(ParseFromStr, Copy, Clone, Debug)]
         pub struct $t;
         impl Parse for $t {
-            type Output = $t;
+            type Output = Self;
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 let this = stringify!($t);
                 if let Some(token) = s.nextn(this.len()) {
-                    if token.as_str() != this {
+                    if token.to_uppercase().as_str() != this {
                         anyhow::bail!("Expected keyword '{}', found '{}'", this, token)
                     }
                 }
@@ -82,7 +91,7 @@ macro_rules! keyword {
                 let this = stringify!($t);
                 for (s1, s2) in this.chars().zip(std::iter::repeat_with(|| s.next())) {
                     if let Some(s2) = s2 {
-                        if s1 != s2 {
+                        if s1 != s2.to_uppercase().next().unwrap() {
                             return false;
                         }
                     } else {
@@ -95,6 +104,7 @@ macro_rules! keyword {
     };
 }
 
+keyword!(ACCESS);
 keyword!(ADD);
 keyword!(AGGREGATE);
 keyword!(ALL);
@@ -124,6 +134,7 @@ keyword!(COUNT);
 keyword!(COUNTER);
 keyword!(CREATE);
 keyword!(CUSTOM);
+keyword!(DATACENTERS);
 keyword!(DATE);
 keyword!(DECIMAL);
 keyword!(DEFAULT);
@@ -168,6 +179,9 @@ keyword!(LIMIT);
 keyword!(LIST);
 keyword!(LOGIN);
 keyword!(MAP);
+keyword!(MATERIALIZED);
+keyword!(MBEAN);
+keyword!(MBEANS);
 keyword!(MODIFY);
 keyword!(NAN);
 keyword!(NOLOGIN);
@@ -227,6 +241,7 @@ keyword!(UUID);
 keyword!(VALUES);
 keyword!(VARCHAR);
 keyword!(VARINT);
+keyword!(VIEW);
 keyword!(WHERE);
 keyword!(WITH);
 keyword!(WRITETIME);
@@ -365,7 +380,7 @@ impl FromStr for ReservedKeyword {
 }
 
 impl Parse for ReservedKeyword {
-    type Output = ReservedKeyword;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self>
     where
         Self: Sized,
@@ -386,9 +401,10 @@ impl Peek for ReservedKeyword {
 
 macro_rules! punctuation {
     ($t:ident, $c:literal) => {
+        #[derive(ParseFromStr, Copy, Clone, Debug)]
         pub struct $t;
         impl Parse for $t {
-            type Output = $t;
+            type Output = Self;
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 let c = s.parse::<char>()?;
                 if c != $c {

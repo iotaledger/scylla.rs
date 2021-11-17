@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
-use scylla_parse::{DataManipulationStatement, SelectClauseKind, SelectStatement, Statement, StatementStream};
-use quote::TokenStreamExt;
-use syn::parse_quote;
+use quote::quote;
+use scylla_parse::{Statement, StatementStream};
 
 mod to_tokens;
 use to_tokens::*;

@@ -1,4 +1,7 @@
+use derive_builder::Builder;
+use scylla_parse_macros::ParseFromStr;
 use std::{
+    collections::HashMap,
     fmt::{
         Display,
         Formatter,
@@ -80,9 +83,9 @@ impl<'a> StatementStream<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(c) = self.cursor.peek() {
+        while let Some(c) = self.peek() {
             if c.is_whitespace() {
-                self.cursor.next();
+                self.next();
                 continue;
             } else {
                 break;
@@ -172,7 +175,7 @@ peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
 peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
 
 impl Parse for char {
-    type Output = char;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         match s.next() {
             Some(c) => Ok(c),
@@ -187,10 +190,29 @@ impl Peek for char {
     }
 }
 
+impl Parse for bool {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(if s.parse_if::<TRUE>().is_some() {
+            true
+        } else if s.parse_if::<FALSE>().is_some() {
+            false
+        } else {
+            anyhow::bail!("Expected boolean!")
+        })
+    }
+}
+
+impl Peek for bool {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<TRUE>() || s.check::<FALSE>()
+    }
+}
+
 macro_rules! peek_parse_number {
     ($n:ident, $t:ident) => {
         impl Parse for $n {
-            type Output = $n;
+            type Output = Self;
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 s.parse_from::<$t>()?
                     .parse()
@@ -216,6 +238,17 @@ peek_parse_number!(u32, Number);
 peek_parse_number!(u64, Number);
 peek_parse_number!(f32, Float);
 peek_parse_number!(f64, Float);
+
+pub struct If<Cond, Res>(PhantomData<fn(Cond, Res) -> (Cond, Res)>);
+impl<Cond: Peek + Parse, Res: Parse> Parse for If<Cond, Res> {
+    type Output = Option<Res::Output>;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        match s.parse_from::<Option<Cond>>()? {
+            Some(_) => Ok(Some(s.parse_from::<Res>()?)),
+            None => Ok(None),
+        }
+    }
+}
 
 impl<T: Peek> Peek for Option<T> {
     fn peek(s: StatementStream<'_>) -> bool {
@@ -253,7 +286,7 @@ impl<T: Parse, Delim: Parse + Peek> Peek for List<T, Delim> {
 
 pub struct Nothing;
 impl Parse for Nothing {
-    type Output = Nothing;
+    type Output = Self;
     fn parse(_: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(Nothing)
     }
@@ -266,7 +299,7 @@ impl Peek for Nothing {
 
 pub struct Whitespace;
 impl Parse for Whitespace {
-    type Output = Whitespace;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         while let Some(c) = s.peek() {
             if c.is_whitespace() {
@@ -285,7 +318,7 @@ impl Peek for Whitespace {
 }
 
 impl Parse for String {
-    type Output = String;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
         let mut dollars = false;
@@ -568,14 +601,14 @@ parse_peek_group!(Angles, LeftAngle, RightAngle);
 parse_peek_group!(SingleQuoted, SingleQuote, SingleQuote);
 parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum BindMarker {
     Anonymous,
     Named(Name),
 }
 
 impl Parse for BindMarker {
-    type Output = BindMarker;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if s.parse_if::<Question>().is_some() {
             BindMarker::Anonymous
@@ -602,12 +635,12 @@ impl Display for BindMarker {
 }
 
 impl Parse for Uuid {
-    type Output = Uuid;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(u) = s.nextn(36) {
             Ok(Uuid::parse_str(&u)?)
         } else {
-            anyhow::bail!("Invalid UUID!")
+            anyhow::bail!("Invalid UUID: {}", s.parse_from::<Token>()?)
         }
     }
 }
@@ -617,14 +650,14 @@ impl Peek for Uuid {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum Identifier {
     Name(Name),
     Keyword(ReservedKeyword),
 }
 
 impl Parse for Identifier {
-    type Output = Identifier;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         if let Some(keyword) = s.parse_if::<ReservedKeyword>() {
             Ok(Identifier::Keyword(keyword?))
@@ -640,14 +673,14 @@ impl Peek for Identifier {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum Name {
     Quoted(String),
     Unquoted(String),
 }
 
 impl Parse for Name {
-    type Output = Name;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         let mut res = String::new();
         if s.peek().map(|c| c == '"').unwrap_or(false) {
@@ -688,86 +721,325 @@ impl Display for Name {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Quoted(s) => write!(f, "\"{}\"", s),
-            Self::Unquoted(s) => write!(f, "{}", s),
+            Self::Unquoted(s) => s.fmt(f),
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct TableName {
+#[derive(ParseFromStr, Clone, Debug)]
+pub struct KeyspaceQualifiedName {
     pub keyspace: Option<Name>,
     pub name: Name,
 }
 
-impl Parse for TableName {
-    type Output = TableName;
+impl Parse for KeyspaceQualifiedName {
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         let (keyspace, name) = s.parse::<(Option<(Name, Dot)>, Name)>()?;
-        Ok(TableName {
+        Ok(KeyspaceQualifiedName {
             keyspace: keyspace.map(|(i, _)| i),
             name,
         })
     }
 }
 
-impl Peek for TableName {
+impl Peek for KeyspaceQualifiedName {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(Option<(Name, Dot)>, Name)>()
     }
 }
 
-impl Display for TableName {
+impl Display for KeyspaceQualifiedName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(keyspace) = &self.keyspace {
             write!(f, "{}.{}", keyspace, self.name)?;
         } else {
-            write!(f, "{}", self.name)?;
+            self.name.fmt(f)?;
         }
         Ok(())
     }
 }
 
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct StatementOpt {
     pub name: Name,
     pub value: StatementOptValue,
 }
 
+impl Parse for StatementOpt {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (name, _, value) = s.parse::<(Name, Equals, StatementOptValue)>()?;
+        Ok(StatementOpt { name, value })
+    }
+}
+
+impl Display for StatementOpt {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} = {}", self.name, self.value)
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum StatementOptValue {
     Identifier(Name),
     Constant(Constant),
     Map(MapLiteral),
 }
 
+impl Parse for StatementOptValue {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        if let Some(map) = s.parse_if::<MapLiteral>() {
+            Ok(StatementOptValue::Map(map?))
+        } else if let Some(constant) = s.parse_if::<Constant>() {
+            Ok(StatementOptValue::Constant(constant?))
+        } else if let Some(identifier) = s.parse_if::<Name>() {
+            Ok(StatementOptValue::Identifier(identifier?))
+        } else {
+            anyhow::bail!("Invalid statement option value: {}", s.parse_from::<Token>()?)
+        }
+    }
+}
+
+impl Display for StatementOptValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Identifier(identifier) => identifier.fmt(f),
+            Self::Constant(constant) => constant.fmt(f),
+            Self::Map(map) => map.fmt(f),
+        }
+    }
+}
+
+#[derive(Builder, Clone, Debug)]
 pub struct ColumnDefinition {
     pub name: Name,
     pub data_type: CqlType,
+    #[builder(default)]
     pub static_column: bool,
+    #[builder(default)]
     pub primary_key: bool,
 }
 
-pub struct PrimaryKey {
-    pub partition_key: PartitionKey,
-    pub clustering_columns: Vec<Name>,
+impl ColumnDefinition {
+    pub fn build() -> ColumnDefinitionBuilder {
+        ColumnDefinitionBuilder::default()
+    }
 }
 
+impl Parse for ColumnDefinition {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        Ok(Self {
+            name: s.parse()?,
+            data_type: s.parse()?,
+            static_column: s.parse::<Option<STATIC>>()?.is_some(),
+            primary_key: s.parse::<Option<(PRIMARY, KEY)>>()?.is_some(),
+        })
+    }
+}
+
+impl Peek for ColumnDefinition {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<(Name, CqlType)>()
+    }
+}
+
+impl Display for ColumnDefinition {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.data_type)?;
+        if self.static_column {
+            write!(f, " STATIC")?;
+        }
+        if self.primary_key {
+            write!(f, " PRIMARY KEY")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
+pub struct PrimaryKey {
+    pub partition_key: PartitionKey,
+    pub clustering_columns: Option<Vec<Name>>,
+}
+
+impl Parse for PrimaryKey {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (partition_key, clustering_columns) =
+            s.parse_from::<(PartitionKey, Option<(Comma, List<Name, Comma>)>)>()?;
+        Ok(PrimaryKey {
+            partition_key,
+            clustering_columns: clustering_columns.map(|i| i.1),
+        })
+    }
+}
+
+impl Display for PrimaryKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.partition_key.fmt(f)?;
+        if let Some(clustering_columns) = &self.clustering_columns {
+            write!(
+                f,
+                ", {}",
+                clustering_columns
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct PartitionKey {
     pub columns: Vec<Name>,
 }
 
-pub enum TableOpt {
-    CompactStorage,
-    ClusteringOrder(Vec<ColumnOrder>),
-    Options(Vec<StatementOpt>),
+impl Parse for PartitionKey {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        Ok(if let Some(columns) = s.parse_from_if::<Parens<List<Name, Comma>>>() {
+            Self { columns: columns? }
+        } else {
+            Self {
+                columns: vec![s.parse::<Name>()?],
+            }
+        })
+    }
 }
 
-#[derive(Clone, Debug)]
+impl Display for PartitionKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.columns.len() {
+            0 => {
+                panic!("No partition key columns specified!");
+            }
+            1 => self.columns[0].fmt(f),
+            _ => write!(
+                f,
+                "({})",
+                self.columns
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
+// TODO: Scylla encryption opts and caching?
+#[derive(Builder, Clone, Debug, Default)]
+#[builder(default)]
+pub struct TableOpts {
+    pub compact_storage: bool,
+    pub clustering_order: Option<Vec<ColumnOrder>>,
+    pub options: Option<HashMap<Name, StatementOptValue>>,
+}
+
+impl Parse for TableOpts {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let mut res = TableOptsBuilder::default();
+        loop {
+            if s.parse_if::<(COMPACT, STORAGE)>().is_some() {
+                if res.compact_storage.is_some() {
+                    anyhow::bail!("Duplicate compact storage option");
+                }
+                res.compact_storage(true);
+                if s.parse::<Option<AND>>()?.is_none() {
+                    break;
+                }
+            } else if s.parse_if::<(CLUSTERING, ORDER, BY)>().is_some() {
+                if res.clustering_order.is_some() {
+                    anyhow::bail!("Duplicate clustering order option");
+                }
+                res.clustering_order(Some(s.parse_from::<Parens<List<ColumnOrder, Comma>>>()?));
+                if s.parse::<Option<AND>>()?.is_none() {
+                    break;
+                }
+            } else {
+                res.options(s.parse_from::<Option<List<StatementOpt, AND>>>()?.map(|i| {
+                    i.into_iter().fold(HashMap::new(), |mut acc, opt| {
+                        acc.insert(opt.name, opt.value);
+                        acc
+                    })
+                }));
+                break;
+            }
+        }
+        Ok(res
+            .build()
+            .map_err(|e| anyhow::anyhow!("Invalid Table Options: {}", e))?)
+    }
+}
+
+impl Display for TableOpts {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match (
+            self.compact_storage,
+            self.clustering_order.as_ref(),
+            self.options.as_ref(),
+        ) {
+            (true, None, None) => write!(f, "COMPACT STORAGE"),
+            (true, None, Some(opts)) => write!(
+                f,
+                "COMPACT STORAGE AND {}",
+                opts.iter()
+                    .map(|(name, value)| format!("{} = {}", name, value))
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            ),
+            (true, Some(c), None) => write!(
+                f,
+                "COMPACT STORAGE AND {}",
+                c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+            ),
+            (true, Some(c), Some(opts)) => write!(
+                f,
+                "COMPACT STORAGE AND {} AND {}",
+                c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+                opts.iter()
+                    .map(|(name, value)| format!("{} = {}", name, value))
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            ),
+            (false, None, Some(opts)) => write!(
+                f,
+                "{}",
+                opts.iter()
+                    .map(|(name, value)| format!("{} = {}", name, value))
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            ),
+            (false, Some(c), None) => write!(f, "{}", c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
+            (false, Some(c), Some(opts)) => write!(
+                f,
+                "{} AND {}",
+                c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+                opts.iter()
+                    .map(|(name, value)| format!("{} = {}", name, value))
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            ),
+            (false, None, None) => panic!("Invalid table options!"),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
 pub struct ColumnOrder {
     pub column: Name,
     pub order: Order,
 }
 
 impl Parse for ColumnOrder {
-    type Output = ColumnOrder;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let (column, order) = s.parse::<(Name, Order)>()?;
         Ok(ColumnOrder { column, order })
@@ -787,14 +1059,14 @@ pub enum Order {
 }
 
 impl Parse for Order {
-    type Output = Order;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if s.parse_if::<ASC>().is_some() {
             Ok(Order::Ascending)
         } else if s.parse_if::<DESC>().is_some() {
             Ok(Order::Descending)
         } else {
-            anyhow::bail!("Invalid sort order!")
+            anyhow::bail!("Invalid sort order: {}", s.parse_from::<Token>()?)
         }
     }
 }
@@ -814,65 +1086,7 @@ impl Display for Order {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct FromClause {
-    pub table: TableName,
-}
-
-impl Parse for FromClause {
-    type Output = FromClause;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, table) = s.parse::<(FROM, TableName)>()?;
-        Ok(FromClause { table })
-    }
-}
-
-impl Peek for FromClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<FROM>()
-    }
-}
-
-impl Display for FromClause {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FROM {}", self.table)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct WhereClause {
-    pub relations: Vec<Relation>,
-}
-
-impl Parse for WhereClause {
-    type Output = WhereClause;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, relations) = s.parse_from::<(WHERE, List<Relation, AND>)>()?;
-        Ok(WhereClause { relations })
-    }
-}
-
-impl Peek for WhereClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<WHERE>()
-    }
-}
-
-impl Display for WhereClause {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "WHERE {}",
-            self.relations
-                .iter()
-                .map(|r| r.to_string())
-                .collect::<Vec<_>>()
-                .join(" AND ")
-        )
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum Relation {
     Normal {
         column: Name,
@@ -892,7 +1106,7 @@ pub enum Relation {
 }
 
 impl Parse for Relation {
-    type Output = Relation;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         Ok(if s.parse_if::<TOKEN>().is_some() {
             let (columns, operator, term) = s.parse_from::<(Parens<List<Name, Comma>>, Operator, Term)>()?;
@@ -947,207 +1161,394 @@ impl Display for Relation {
 }
 
 #[derive(Clone, Debug)]
-pub struct GroupByClause {
-    pub columns: Vec<Name>,
+pub enum Replication {
+    SimpleStrategy(i32),
+    NetworkTopologyStrategy(HashMap<String, i32>),
 }
 
-impl Parse for GroupByClause {
-    type Output = GroupByClause;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<Name, Comma>)>()?;
-        Ok(GroupByClause { columns })
+impl Replication {
+    pub fn simple(replication_factor: i32) -> Self {
+        Replication::SimpleStrategy(replication_factor)
+    }
+
+    pub fn network_topology(replication_map: HashMap<String, i32>) -> Self {
+        Replication::NetworkTopologyStrategy(replication_map)
     }
 }
 
-impl Peek for GroupByClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(GROUP, BY)>()
-    }
-}
-
-impl Display for GroupByClause {
+impl Display for Replication {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "GROUP BY {}",
-            self.columns
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct OrderingClause {
-    pub columns: Vec<ColumnOrder>,
-}
-
-impl Parse for OrderingClause {
-    type Output = OrderingClause;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<ColumnOrder, Comma>)>()?;
-        Ok(OrderingClause { columns })
-    }
-}
-
-impl Peek for OrderingClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ORDER, BY)>()
-    }
-}
-
-impl Display for OrderingClause {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ORDER BY {}",
-            self.columns
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum Limit {
-    Literal(i32),
-    BindMarker(BindMarker),
-}
-
-impl Parse for Limit {
-    type Output = Limit;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if let Some(bind) = s.parse_if::<BindMarker>() {
-            Ok(Limit::BindMarker(bind?))
-        } else {
-            Ok(Limit::Literal(s.parse::<i32>()?))
+        match self {
+            Replication::SimpleStrategy(i) => write!(f, "{{'class': 'SimpleStrategy', 'replication_factor': {}}}", i),
+            Replication::NetworkTopologyStrategy(i) => write!(
+                f,
+                "{{'class': 'NetworkTopologyStrategy', {}}}",
+                i.iter()
+                    .map(|(k, v)| format!("'{}': {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }
 
-impl Peek for Limit {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<i32>() || s.check::<BindMarker>()
+#[derive(Clone, Debug)]
+pub enum SpeculativeRetry {
+    None,
+    Always,
+    Percentile(f32),
+    Custom(String),
+}
+
+impl Default for SpeculativeRetry {
+    fn default() -> Self {
+        SpeculativeRetry::Percentile(99.0)
     }
 }
 
-impl Display for Limit {
+impl Display for SpeculativeRetry {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Limit::Literal(i) => write!(f, "{}", i),
-            Limit::BindMarker(b) => write!(f, "{}", b),
+            SpeculativeRetry::None => write!(f, "'NONE'"),
+            SpeculativeRetry::Always => write!(f, "'ALWAYS'"),
+            SpeculativeRetry::Percentile(p) => write!(f, "'{:.1}PERCENTILE'", p),
+            SpeculativeRetry::Custom(s) => write!(f, "'{}'", s),
+        }
+    }
+}
+
+#[derive(Builder, Copy, Clone, Debug)]
+#[builder(default)]
+pub struct SizeTieredCompactionStrategy {
+    enabled: bool,
+    tombstone_threshhold: f32,
+    tombsone_compaction_interval: i32,
+    log_all: bool,
+    unchecked_tombstone_compaction: bool,
+    only_purge_repaired_tombstone: bool,
+    min_threshold: i32,
+    max_threshold: i32,
+    min_sstable_size: i32,
+    bucket_low: f32,
+    bucket_high: f32,
+}
+
+impl CompactionType for SizeTieredCompactionStrategy {}
+
+impl Default for SizeTieredCompactionStrategy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tombstone_threshhold: 0.2,
+            tombsone_compaction_interval: 86400,
+            log_all: false,
+            unchecked_tombstone_compaction: false,
+            only_purge_repaired_tombstone: false,
+            min_threshold: 4,
+            max_threshold: 32,
+            min_sstable_size: 50,
+            bucket_low: 0.5,
+            bucket_high: 1.5,
+        }
+    }
+}
+
+impl Display for SizeTieredCompactionStrategy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{'class': 'SizeTieredCompactionStrategy', 'enabled': {}, 'tombstone_threshold': {}, 'tombstone_compaction_interval': {}, \
+            'log_all': {}, 'unchecked_tombstone_compaction': {}, 'only_purge_repaired_tombstone': {}, 'min_threshold': {}, \
+            'max_threshold': {}, 'min_sstable_size': {}, 'bucket_low': {:.1}, 'bucket_high': {:.1}}}",
+            self.enabled,
+            self.tombstone_threshhold,
+            self.tombsone_compaction_interval,
+            self.log_all,
+            self.unchecked_tombstone_compaction,
+            self.only_purge_repaired_tombstone,
+            self.min_threshold,
+            self.max_threshold,
+            self.min_sstable_size,
+            self.bucket_low,
+            self.bucket_high
+        )
+    }
+}
+
+#[derive(Builder, Copy, Clone, Debug)]
+#[builder(default)]
+pub struct LeveledCompactionStrategy {
+    enabled: bool,
+    tombstone_threshhold: f32,
+    tombsone_compaction_interval: i32,
+    log_all: bool,
+    unchecked_tombstone_compaction: bool,
+    only_purge_repaired_tombstone: bool,
+    min_threshold: i32,
+    max_threshold: i32,
+    sstable_size_in_mb: i32,
+    fanout_size: i32,
+}
+
+impl CompactionType for LeveledCompactionStrategy {}
+
+impl Default for LeveledCompactionStrategy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tombstone_threshhold: 0.2,
+            tombsone_compaction_interval: 86400,
+            log_all: false,
+            unchecked_tombstone_compaction: false,
+            only_purge_repaired_tombstone: false,
+            min_threshold: 4,
+            max_threshold: 32,
+            sstable_size_in_mb: 160,
+            fanout_size: 10,
+        }
+    }
+}
+
+impl Display for LeveledCompactionStrategy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{'class': 'LeveledCompactionStrategy', 'enabled': {}, 'tombstone_threshold': {:.1}, 'tombstone_compaction_interval': {}, \
+            'log_all': {}, 'unchecked_tombstone_compaction': {}, 'only_purge_repaired_tombstone': {}, 'min_threshold': {}, \
+            'max_threshold': {}, 'sstable_size_in_mb': {}, 'fanout_size': {}}}",
+            self.enabled,
+            self.tombstone_threshhold,
+            self.tombsone_compaction_interval,
+            self.log_all,
+            self.unchecked_tombstone_compaction,
+            self.only_purge_repaired_tombstone,
+            self.min_threshold,
+            self.max_threshold,
+            self.sstable_size_in_mb,
+            self.fanout_size
+        )
+    }
+}
+
+#[derive(Builder, Copy, Clone, Debug)]
+#[builder(default)]
+pub struct TimeWindowCompactionStrategy {
+    enabled: bool,
+    tombstone_threshhold: f32,
+    tombsone_compaction_interval: i32,
+    log_all: bool,
+    unchecked_tombstone_compaction: bool,
+    only_purge_repaired_tombstone: bool,
+    min_threshold: i32,
+    max_threshold: i32,
+    compaction_window_unit: JavaTimeUnit,
+    compaction_window_size: i32,
+    unsafe_aggressive_sstable_expiration: bool,
+}
+
+impl CompactionType for TimeWindowCompactionStrategy {}
+
+impl Default for TimeWindowCompactionStrategy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tombstone_threshhold: 0.2,
+            tombsone_compaction_interval: 86400,
+            log_all: false,
+            unchecked_tombstone_compaction: false,
+            only_purge_repaired_tombstone: false,
+            min_threshold: 4,
+            max_threshold: 32,
+            compaction_window_unit: JavaTimeUnit::Days,
+            compaction_window_size: 1,
+            unsafe_aggressive_sstable_expiration: false,
+        }
+    }
+}
+
+impl Display for TimeWindowCompactionStrategy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{'class': 'TimeWindowCompactionStrategy', 'enabled': {}, 'tombstone_threshold': {:.1}, 'tombstone_compaction_interval': {}, \
+            'log_all': {}, 'unchecked_tombstone_compaction': {}, 'only_purge_repaired_tombstone': {}, 'min_threshold': {}, \
+            'max_threshold': {}, 'compaction_window_unit': '{}', 'compaction_window_size': {}, 'unsafe_aggressive_sstable_expiration': {}}}",
+            self.enabled,
+            self.tombstone_threshhold,
+            self.tombsone_compaction_interval,
+            self.log_all,
+            self.unchecked_tombstone_compaction,
+            self.only_purge_repaired_tombstone,
+            self.min_threshold,
+            self.max_threshold,
+            self.compaction_window_unit,
+            self.compaction_window_size,
+            self.unsafe_aggressive_sstable_expiration,
+        )
+    }
+}
+
+pub trait CompactionType: Display {}
+
+pub enum Compaction {
+    SizeTiered(SizeTieredCompactionStrategy),
+    Leveled(LeveledCompactionStrategy),
+    TimeWindow(TimeWindowCompactionStrategy),
+}
+
+impl Compaction {
+    pub fn size_tiered() -> SizeTieredCompactionStrategyBuilder
+    where
+        Self: Sized,
+    {
+        SizeTieredCompactionStrategyBuilder::default()
+    }
+
+    pub fn leveled() -> LeveledCompactionStrategyBuilder
+    where
+        Self: Sized,
+    {
+        LeveledCompactionStrategyBuilder::default()
+    }
+
+    pub fn time_window() -> TimeWindowCompactionStrategyBuilder
+    where
+        Self: Sized,
+    {
+        TimeWindowCompactionStrategyBuilder::default()
+    }
+}
+
+impl Display for Compaction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Compaction::SizeTiered(s) => s.fmt(f),
+            Compaction::Leveled(s) => s.fmt(f),
+            Compaction::TimeWindow(s) => s.fmt(f),
         }
     }
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum ColumnDefault {
-    Null,
-    Unset,
+pub enum JavaTimeUnit {
+    Minutes,
+    Hours,
+    Days,
 }
 
-impl Parse for ColumnDefault {
-    type Output = ColumnDefault;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if s.parse_if::<NULL>().is_some() {
-            Ok(ColumnDefault::Null)
-        } else if s.parse_if::<UNSET>().is_some() {
-            Ok(ColumnDefault::Unset)
-        } else {
-            anyhow::bail!("Invalid column default!")
-        }
-    }
-}
-
-impl Peek for ColumnDefault {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<NULL>() || s.check::<UNSET>()
-    }
-}
-
-impl Display for ColumnDefault {
+impl Display for JavaTimeUnit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ColumnDefault::Null => write!(f, "NULL"),
-            ColumnDefault::Unset => write!(f, "UNSET"),
+            JavaTimeUnit::Minutes => write!(f, "MINUTES"),
+            JavaTimeUnit::Hours => write!(f, "HOURS"),
+            JavaTimeUnit::Days => write!(f, "DAYS"),
         }
     }
 }
 
-mod test {
-    #[test]
-    fn test_parse_select() {
-        let statement = "SELECT time, value \
-            FROM my_keyspace.events \
-            WHERE event_type = 'myEvent' \
-            AND time > '2011-02-03' \
-            AND time <= '2012-01-01'";
-        let mut stream = super::StatementStream::new(statement);
-        let select_statement = stream.parse::<super::SelectStatement>().unwrap();
-        println!("{:#?}", select_statement);
-        println!("{}", select_statement);
-        assert_eq!(statement.to_string().replace("\n", ""), select_statement.to_string())
-    }
+#[derive(Builder, Clone, Debug)]
+#[builder(default)]
+pub struct Compression {
+    #[builder(default = "default_compressor()")]
+    class: String,
+    enabled: bool,
+    chunk_length_in_kb: i32,
+    crc_check_chance: f32,
+    compression_level: i32,
+}
 
-    #[test]
-    fn test_parse_insert() {
-        let statement = "INSERT INTO NerdMovies (movie, director, main_actor, year) \
-            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) \
-            IF NOT EXISTS USING TTL 86400";
-        let mut stream = super::StatementStream::new(statement);
-        let insert_statement = stream.parse::<super::InsertStatement>().unwrap();
-        println!("{:#?}", insert_statement);
-        println!("{}", insert_statement);
-        assert_eq!(statement.to_string().replace("\n", ""), insert_statement.to_string())
+impl Compression {
+    pub fn build() -> CompressionBuilder {
+        CompressionBuilder::default()
     }
+}
 
-    #[test]
-    fn test_parse_update() {
-        let statement = "UPDATE NerdMovies \
-            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' \
-            WHERE movie = 'Serenity' \
-            IF EXISTS";
-        let mut stream = super::StatementStream::new(statement);
-        let update_statement = stream.parse::<super::UpdateStatement>().unwrap();
-        println!("{:#?}", update_statement);
-        println!("{}", update_statement);
-        assert_eq!(statement.to_string().replace("\n", ""), update_statement.to_string())
+impl Default for Compression {
+    fn default() -> Self {
+        Self {
+            class: default_compressor(),
+            enabled: true,
+            chunk_length_in_kb: 64,
+            crc_check_chance: 1.0,
+            compression_level: 3,
+        }
     }
+}
 
-    #[test]
-    fn test_parse_delete() {
-        let statement = "DELETE FROM NerdMovies \
-            WHERE movie = 'Serenity' \
-            IF EXISTS";
-        let mut stream = super::StatementStream::new(statement);
-        let delete_statement = stream.parse::<super::DeleteStatement>().unwrap();
-        println!("{:#?}", delete_statement);
-        println!("{}", delete_statement);
-        assert_eq!(statement.to_string().replace("\n", ""), delete_statement.to_string())
+impl Display for Compression {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{'class': '{}', 'enabled': {}, 'chunk_length_in_kb': {}, 'crc_check_chance': {:.1}, 'compression_level': {}}}",
+            self.class, self.enabled, self.chunk_length_in_kb, self.crc_check_chance, self.compression_level
+        )
     }
+}
 
-    #[test]
-    fn test_parse_batch() {
-        let statement = "BEGIN BATCH \
-            INSERT INTO NerdMovies (movie, director, main_actor, year) \
-            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) \
-            IF NOT EXISTS USING TTL 86400; \
-            UPDATE NerdMovies \
-            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' \
-            WHERE movie = 'Serenity' \
-            IF EXISTS; \
-            DELETE FROM NerdMovies \
-            WHERE movie = 'Serenity' \
-            IF EXISTS \
-            APPLY BATCH";
-        let mut stream = super::StatementStream::new(statement);
-        let batch_statement = stream.parse::<super::BatchStatement>().unwrap();
-        println!("{:#?}", batch_statement);
-        println!("{}", batch_statement);
-        assert_eq!(statement.to_string().replace("\n", ""), batch_statement.to_string())
+fn default_compressor() -> String {
+    "LZ4Compressor".to_string()
+}
+
+#[derive(Builder, Clone, Debug)]
+#[builder(default)]
+pub struct Caching {
+    keys: Keys,
+    rows_per_partition: RowsPerPartition,
+}
+
+impl Caching {
+    pub fn build() -> CachingBuilder {
+        CachingBuilder::default()
+    }
+}
+
+impl Default for Caching {
+    fn default() -> Self {
+        Self {
+            keys: Keys::All,
+            rows_per_partition: RowsPerPartition::None,
+        }
+    }
+}
+
+impl Display for Caching {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{'keys': {}, 'rows_per_partition': {}}}",
+            self.keys, self.rows_per_partition
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Keys {
+    All,
+    None,
+}
+
+impl Display for Keys {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Keys::All => write!(f, "'ALL'"),
+            Keys::None => write!(f, "'NONE'"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum RowsPerPartition {
+    All,
+    None,
+    Count(i32),
+}
+
+impl Display for RowsPerPartition {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RowsPerPartition::All => write!(f, "'ALL'"),
+            RowsPerPartition::None => write!(f, "'NONE'"),
+            RowsPerPartition::Count(count) => count.fmt(f),
+        }
     }
 }

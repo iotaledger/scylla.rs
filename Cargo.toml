@@ -2,5 +2,6 @@
 members = [
     "scylla-rs",
     "scylla-macros",
-    "scylla-parse"
+    "scylla-parse",
+    "scylla-parse-macros"
 ]

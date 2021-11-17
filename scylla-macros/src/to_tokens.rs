@@ -297,10 +297,10 @@ impl ToTokens for Tokenable<&Selector> {
     }
 }
 
-impl ToTokens for Tokenable<&TableName> {
+impl ToTokens for Tokenable<&KeyspaceQualifiedName> {
     fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
         let (keyspace, name) = (Tokenable(&self.0.keyspace), Tokenable(&self.0.name));
-        tokens.extend(quote! {TableName {keyspace: #keyspace, name: #name}});
+        tokens.extend(quote! {KeyspaceQualifiedName {keyspace: #keyspace, name: #name}});
     }
 }
 
@@ -554,13 +554,6 @@ impl ToTokens for Tokenable<&FunctionCall> {
     }
 }
 
-impl ToTokens for Tokenable<&FunctionName> {
-    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
-        let (keyspace, name) = (Tokenable(&self.0.keyspace), Tokenable(&self.0.name));
-        tokens.extend(quote! {FunctionName {keyspace: #keyspace, name: #name}});
-    }
-}
-
 impl ToTokens for Tokenable<&ArithmeticOp> {
     fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
         tokens.extend(match self.0 {
@@ -617,13 +610,6 @@ impl ToTokens for Tokenable<&CollectionType> {
                 quote! {CollectionType::Map(#k, #v)}
             }
         })
-    }
-}
-
-impl ToTokens for Tokenable<&UserDefinedType> {
-    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
-        let (keyspace, ident) = (Tokenable(&self.0.keyspace), Tokenable(&self.0.ident));
-        tokens.extend(quote! {UserDefinedType {keyspace: #keyspace, ident: #ident}});
     }
 }
 
