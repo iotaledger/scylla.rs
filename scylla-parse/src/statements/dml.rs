@@ -59,6 +59,7 @@ impl Display for DataManipulationStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(strip_option))]
 pub struct SelectStatement {
     #[builder(default)]
     pub distinct: bool,
@@ -94,46 +95,46 @@ impl Parse for SelectStatement {
             .select_clause(s.parse()?)
             .from(s.parse()?);
         loop {
-            if let Some(where_clause) = s.parse_if() {
+            if let Some(where_clause) = s.parse()? {
                 if res.where_clause.is_some() {
                     anyhow::bail!("Duplicate WHERE clause!");
                 }
-                res.where_clause(where_clause?);
-            } else if let Some(group_by_clause) = s.parse_if() {
+                res.where_clause(where_clause);
+            } else if let Some(group_by_clause) = s.parse()? {
                 if res.group_by_clause.is_some() {
                     anyhow::bail!("Duplicate GROUP BY clause!");
                 }
-                res.group_by_clause(group_by_clause?);
-            } else if let Some(order_by_clause) = s.parse_if() {
+                res.group_by_clause(group_by_clause);
+            } else if let Some(order_by_clause) = s.parse()? {
                 if res.order_by_clause.is_some() {
                     anyhow::bail!("Duplicate ORDER BY clause!");
                 }
-                res.order_by_clause(order_by_clause?);
-            } else if s.parse_if::<(PER, PARTITION, LIMIT)>().is_some() {
+                res.order_by_clause(order_by_clause);
+            } else if s.parse::<Option<(PER, PARTITION, LIMIT)>>()?.is_some() {
                 if res.per_partition_limit.is_some() {
                     anyhow::bail!("Duplicate PER PARTITION LIMIT clause!");
                 }
-                res.per_partition_limit(Some(s.parse::<Limit>()?));
-            } else if s.parse_if::<LIMIT>().is_some() {
+                res.per_partition_limit(s.parse::<Limit>()?);
+            } else if s.parse::<Option<LIMIT>>()?.is_some() {
                 if res.limit.is_some() {
                     anyhow::bail!("Duplicate LIMIT clause!");
                 }
-                res.limit(Some(s.parse::<Limit>()?));
-            } else if s.parse_if::<(ALLOW, FILTERING)>().is_some() {
+                res.limit(s.parse::<Limit>()?);
+            } else if s.parse::<Option<(ALLOW, FILTERING)>>()?.is_some() {
                 if res.allow_filtering.is_some() {
                     anyhow::bail!("Duplicate ALLOW FILTERING clause!");
                 }
                 res.allow_filtering(true);
-            } else if s.parse_if::<(BYPASS, CACHE)>().is_some() {
+            } else if s.parse::<Option<(BYPASS, CACHE)>>()?.is_some() {
                 if res.bypass_cache.is_some() {
                     anyhow::bail!("Duplicate BYPASS CACHE clause!");
                 }
                 res.bypass_cache(true);
-            } else if s.parse_if::<(USING, TIMEOUT)>().is_some() {
+            } else if let Some(t) = s.parse_from::<If<(USING, TIMEOUT), DurationLiteral>>()? {
                 if res.timeout.is_some() {
                     anyhow::bail!("Duplicate USING TIMEOUT clause!");
                 }
-                res.timeout(Some(s.parse::<DurationLiteral>()?));
+                res.timeout(t);
             } else {
                 break;
             }
@@ -216,7 +217,7 @@ impl Parse for SelectClauseKind {
     where
         Self: Sized,
     {
-        Ok(if s.parse_if::<Star>().is_some() {
+        Ok(if s.parse::<Option<Star>>()?.is_some() {
             SelectClauseKind::All
         } else {
             SelectClauseKind::Selectors(s.parse_from::<List<Selector, Comma>>()?)
@@ -290,7 +291,7 @@ impl Parse for SelectorFunction {
 
 impl Peek for SelectorFunction {
     fn peek(mut s: StatementStream<'_>) -> bool {
-        if s.parse_if::<Name>().is_some() {
+        if s.parse::<Option<Name>>().transpose().is_some() {
             s.check::<LeftParen>()
         } else {
             false
@@ -324,19 +325,19 @@ impl Parse for SelectorKind {
     where
         Self: Sized,
     {
-        Ok(if s.parse_if::<CAST>().is_some() {
+        Ok(if s.parse::<Option<CAST>>()?.is_some() {
             let (selector, _, cql_type) = s.parse_from::<Parens<(Selector, AS, CqlType)>>()?;
             Self::Cast(Box::new(selector), cql_type)
-        } else if s.parse_if::<COUNT>().is_some() {
+        } else if s.parse::<Option<COUNT>>()?.is_some() {
             // TODO: Double check that this is ok
             s.parse_from::<Parens<char>>()?;
             Self::Count
-        } else if let Some(f) = s.parse_if() {
-            Self::Function(f?)
-        } else if let Some(id) = s.parse_if() {
-            Self::Column(id?)
-        } else if let Some(term) = s.parse_if() {
-            Self::Term(term?)
+        } else if let Some(f) = s.parse()? {
+            Self::Function(f)
+        } else if let Some(id) = s.parse()? {
+            Self::Column(id)
+        } else if let Some(term) = s.parse()? {
+            Self::Term(term)
         } else {
             anyhow::bail!("Invalid selector: {}", s.parse_from::<Token>()?)
         })
@@ -356,6 +357,7 @@ impl Display for SelectorKind {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(strip_option))]
 pub struct InsertStatement {
     pub table: KeyspaceQualifiedName,
     pub kind: InsertKind,
@@ -373,16 +375,16 @@ impl Parse for InsertStatement {
         res.table(s.parse::<KeyspaceQualifiedName>()?)
             .kind(s.parse::<InsertKind>()?);
         loop {
-            if s.parse_if::<(IF, NOT, EXISTS)>().is_some() {
+            if s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some() {
                 if res.if_not_exists.is_some() {
                     anyhow::bail!("Duplicate IF NOT EXISTS clause!");
                 }
                 res.if_not_exists(true);
-            } else if s.parse_if::<USING>().is_some() {
+            } else if s.parse::<Option<USING>>()?.is_some() {
                 if res.using.is_some() {
                     anyhow::bail!("Duplicate USING clause!");
                 }
-                res.using(Some(s.parse_from::<List<UpdateParameter, AND>>()?));
+                res.using(s.parse_from::<List<UpdateParameter, AND>>()?);
             } else {
                 break;
             }
@@ -434,7 +436,7 @@ pub enum InsertKind {
         values: TupleLiteral,
     },
     Json {
-        json: String,
+        json: LitStr,
         default: Option<ColumnDefault>,
     },
 }
@@ -442,8 +444,8 @@ pub enum InsertKind {
 impl Parse for InsertKind {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if s.parse_if::<JSON>().is_some() {
-            let (json, default) = s.parse_from::<(String, Option<(DEFAULT, ColumnDefault)>)>()?;
+        if s.parse::<Option<JSON>>()?.is_some() {
+            let (json, default) = s.parse_from::<(LitStr, Option<(DEFAULT, ColumnDefault)>)>()?;
             Ok(Self::Json {
                 json,
                 default: default.map(|(_, d)| d),
@@ -465,7 +467,7 @@ impl Display for InsertKind {
                 values
             ),
             InsertKind::Json { json, default } => {
-                write!(f, "JSON '{}'", json)?;
+                write!(f, "JSON {}", json)?;
                 if let Some(default) = default {
                     write!(f, " DEFAULT {}", default)?;
                 }
@@ -485,11 +487,11 @@ pub enum UpdateParameter {
 impl Parse for UpdateParameter {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if s.parse_if::<TTL>().is_some() {
+        if s.parse::<Option<TTL>>()?.is_some() {
             Ok(UpdateParameter::TTL(s.parse()?))
-        } else if s.parse_if::<TIMESTAMP>().is_some() {
+        } else if s.parse::<Option<TIMESTAMP>>()?.is_some() {
             Ok(UpdateParameter::Timestamp(s.parse()?))
-        } else if s.parse_if::<TIMEOUT>().is_some() {
+        } else if s.parse::<Option<TIMEOUT>>()?.is_some() {
             Ok(UpdateParameter::Timeout(s.parse()?))
         } else {
             anyhow::bail!("Invalid update parameter: {}", s.parse_from::<Token>()?)
@@ -514,6 +516,7 @@ impl Display for UpdateParameter {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(strip_option))]
 pub struct UpdateStatement {
     pub table: KeyspaceQualifiedName,
     #[builder(default)]
@@ -529,14 +532,15 @@ impl Parse for UpdateStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<UPDATE>()?;
         let mut res = UpdateStatementBuilder::default();
-        res.table(s.parse::<KeyspaceQualifiedName>()?)
-            .using(
-                s.parse_from::<Option<(USING, List<UpdateParameter, AND>)>>()?
-                    .map(|(_, v)| v),
-            )
-            .set_clause(s.parse_from::<(SET, List<Assignment, Comma>)>()?.1)
-            .where_clause(s.parse()?)
-            .if_clause(s.parse()?);
+        res.table(s.parse::<KeyspaceQualifiedName>()?);
+        if let Some(u) = s.parse_from::<If<USING, List<UpdateParameter, AND>>>()? {
+            res.using(u);
+        }
+        res.set_clause(s.parse_from::<(SET, List<Assignment, Comma>)>()?.1)
+            .where_clause(s.parse()?);
+        if let Some(i) = s.parse::<Option<IfClause>>()? {
+            res.if_clause(i);
+        }
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -615,16 +619,16 @@ pub enum Assignment {
 impl Parse for Assignment {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(a) = s.parse_if::<(_, Equals, _, Plus, _)>() {
-            let (assignee, _, list, _, item) = a?;
-            Self::Append { assignee, list, item }
-        } else if let Some(a) = s.parse_if::<(_, Equals, _, _, _)>() {
-            let (assignee, _, lhs, op, rhs) = a?;
-            Self::Arithmetic { assignee, lhs, op, rhs }
-        } else {
-            let (selection, _, term) = s.parse::<(_, Equals, _)>()?;
-            Self::Simple { selection, term }
-        })
+        Ok(
+            if let Some((assignee, _, list, _, item)) = s.parse::<Option<(_, Equals, _, Plus, _)>>()? {
+                Self::Append { assignee, list, item }
+            } else if let Some((assignee, _, lhs, op, rhs)) = s.parse::<Option<(_, Equals, _, _, _)>>()? {
+                Self::Arithmetic { assignee, lhs, op, rhs }
+            } else {
+                let (selection, _, term) = s.parse::<(_, Equals, _)>()?;
+                Self::Simple { selection, term }
+            },
+        )
     }
 }
 
@@ -650,14 +654,12 @@ pub enum SimpleSelection {
 impl Parse for SimpleSelection {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(res) = s.parse_if::<(_, Dot, _)>() {
-            let (column, _, field) = res?;
+        Ok(if let Some((column, _, field)) = s.parse::<Option<(_, Dot, _)>>()? {
             Self::Field(column, field)
-        } else if let Some(res) = s.parse_from_if::<(Name, Brackets<Term>)>() {
-            let (column, term) = res?;
+        } else if let Some((column, term)) = s.parse_from::<Option<(Name, Brackets<Term>)>>()? {
             Self::Term(column, term)
         } else {
-            Self::Column(s.parse::<Name>()?)
+            Self::Column(s.parse()?)
         })
     }
 }
@@ -703,7 +705,7 @@ impl Parse for IfClause {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<IF>()?;
-        Ok(if s.parse_if::<EXISTS>().is_some() {
+        Ok(if s.parse::<Option<EXISTS>>()?.is_some() {
             IfClause::Exists
         } else {
             IfClause::Conditions(s.parse_from::<List<Condition, AND>>()?)
@@ -736,6 +738,7 @@ impl Display for IfClause {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(strip_option))]
 pub struct DeleteStatement {
     #[builder(default)]
     pub selections: Option<Vec<SimpleSelection>>,
@@ -752,14 +755,17 @@ impl Parse for DeleteStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<DELETE>()?;
         let mut res = DeleteStatementBuilder::default();
-        res.selections(s.parse_from::<Option<List<SimpleSelection, Comma>>>()?)
-            .from(s.parse()?)
-            .using(
-                s.parse_from::<Option<(USING, List<UpdateParameter, AND>)>>()?
-                    .map(|(_, v)| v),
-            )
-            .where_clause(s.parse()?)
-            .if_clause(s.parse()?);
+        if let Some(s) = s.parse_from::<Option<List<SimpleSelection, Comma>>>()? {
+            res.selections(s);
+        }
+        res.from(s.parse()?);
+        if let Some(u) = s.parse_from::<If<USING, List<UpdateParameter, AND>>>()? {
+            res.using(u);
+        }
+        res.where_clause(s.parse()?);
+        if let Some(i) = s.parse::<Option<IfClause>>()? {
+            res.if_clause(i);
+        }
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -842,8 +848,8 @@ impl Parse for BatchStatement {
                 .map(|(_, v)| v),
         );
         let mut statements = Vec::new();
-        while let Some(res) = s.parse_if::<ModificationStatement>() {
-            statements.push(res?);
+        while let Some(res) = s.parse::<Option<ModificationStatement>>()? {
+            statements.push(res);
         }
         res.statements(statements);
         s.parse::<(APPLY, BATCH)>()?;
@@ -941,9 +947,9 @@ pub enum BatchKind {
 impl Parse for BatchKind {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if s.parse_if::<UNLOGGED>().is_some() {
+        Ok(if s.parse::<Option<UNLOGGED>>()?.is_some() {
             BatchKind::Unlogged
-        } else if s.parse_if::<COUNTER>().is_some() {
+        } else if s.parse::<Option<COUNTER>>()?.is_some() {
             BatchKind::Counter
         } else {
             BatchKind::Logged
@@ -1084,8 +1090,8 @@ pub enum Limit {
 impl Parse for Limit {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if let Some(bind) = s.parse_if::<BindMarker>() {
-            Ok(Limit::BindMarker(bind?))
+        if let Some(bind) = s.parse::<Option<BindMarker>>()? {
+            Ok(Limit::BindMarker(bind))
         } else {
             Ok(Limit::Literal(s.parse::<i32>()?))
         }
@@ -1116,9 +1122,9 @@ pub enum ColumnDefault {
 impl Parse for ColumnDefault {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if s.parse_if::<NULL>().is_some() {
+        if s.parse::<Option<NULL>>()?.is_some() {
             Ok(ColumnDefault::Null)
-        } else if s.parse_if::<UNSET>().is_some() {
+        } else if s.parse::<Option<UNSET>>()?.is_some() {
             Ok(ColumnDefault::Unset)
         } else {
             anyhow::bail!("Invalid column default: {}", s.parse_from::<Token>()?)

@@ -21,12 +21,17 @@ use super::{
 use crate::{
     Alpha,
     KeyspaceQualifiedName,
+    LitStr,
 };
 use chrono::{
     DateTime,
     NaiveDate,
     NaiveTime,
     Utc,
+};
+use derive_more::{
+    From,
+    TryInto,
 };
 use scylla_parse_macros::ParseFromStr;
 use std::{
@@ -134,13 +139,13 @@ impl Display for Operator {
 impl Parse for Operator {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if s.parse_if::<(CONTAINS, KEY)>().is_some() {
+        if s.parse::<Option<(CONTAINS, KEY)>>()?.is_some() {
             Ok(Operator::ContainsKey)
-        } else if s.parse_if::<CONTAINS>().is_some() {
+        } else if s.parse::<Option<CONTAINS>>()?.is_some() {
             Ok(Operator::Contains)
-        } else if s.parse_if::<IN>().is_some() {
+        } else if s.parse::<Option<IN>>()?.is_some() {
             Ok(Operator::In)
-        } else if s.parse_if::<LIKE>().is_some() {
+        } else if s.parse::<Option<LIKE>>()?.is_some() {
             Ok(Operator::Like)
         } else if let (Some(first), second) = (s.next(), s.peek()) {
             Ok(match (first, second) {
@@ -303,43 +308,38 @@ pub enum Term {
 impl Parse for Term {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        Ok(if let Some(c) = s.parse_if() {
-            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
-                let (op, rhs) = res?;
+        Ok(if let Some(c) = s.parse()? {
+            if let Some((op, rhs)) = s.parse::<Option<(ArithmeticOp, Term)>>()? {
                 Self::ArithmeticOp {
-                    lhs: Some(Box::new(Self::Constant(c?))),
+                    lhs: Some(Box::new(Self::Constant(c))),
                     op,
                     rhs: Box::new(rhs),
                 }
             } else {
-                Self::Constant(c?)
+                Self::Constant(c)
             }
-        } else if let Some(lit) = s.parse_if() {
-            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
-                let (op, rhs) = res?;
+        } else if let Some(lit) = s.parse()? {
+            if let Some((op, rhs)) = s.parse::<Option<(ArithmeticOp, Term)>>()? {
                 Self::ArithmeticOp {
-                    lhs: Some(Box::new(Self::Literal(lit?))),
+                    lhs: Some(Box::new(Self::Literal(lit))),
                     op,
                     rhs: Box::new(rhs),
                 }
             } else {
-                Self::Literal(lit?)
+                Self::Literal(lit)
             }
-        } else if let Some(f) = s.parse_if() {
-            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
-                let (op, rhs) = res?;
+        } else if let Some(f) = s.parse()? {
+            if let Some((op, rhs)) = s.parse::<Option<(ArithmeticOp, Term)>>()? {
                 Self::ArithmeticOp {
-                    lhs: Some(Box::new(Self::FunctionCall(f?))),
+                    lhs: Some(Box::new(Self::FunctionCall(f))),
                     op,
                     rhs: Box::new(rhs),
                 }
             } else {
-                Self::FunctionCall(f?)
+                Self::FunctionCall(f)
             }
-        } else if let Some(res) = s.parse_if() {
-            let (hint, ident) = res?;
-            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
-                let (op, rhs) = res?;
+        } else if let Some((hint, ident)) = s.parse()? {
+            if let Some((op, rhs)) = s.parse::<Option<(ArithmeticOp, Term)>>()? {
                 Self::ArithmeticOp {
                     lhs: Some(Box::new(Self::TypeHint { hint, ident })),
                     op,
@@ -348,19 +348,17 @@ impl Parse for Term {
             } else {
                 Self::TypeHint { hint, ident }
             }
-        } else if let Some(b) = s.parse_if() {
-            if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
-                let (op, rhs) = res?;
+        } else if let Some(b) = s.parse()? {
+            if let Some((op, rhs)) = s.parse::<Option<(ArithmeticOp, Term)>>()? {
                 Self::ArithmeticOp {
-                    lhs: Some(Box::new(Self::BindMarker(b?))),
+                    lhs: Some(Box::new(Self::BindMarker(b))),
                     op,
                     rhs: Box::new(rhs),
                 }
             } else {
-                Self::BindMarker(b?)
+                Self::BindMarker(b)
             }
-        } else if let Some(res) = s.parse_if::<(ArithmeticOp, Term)>() {
-            let (op, rhs) = res?;
+        } else if let Some((op, rhs)) = s.parse::<Option<(ArithmeticOp, Term)>>()? {
             Self::ArithmeticOp {
                 lhs: None,
                 op,
@@ -399,10 +397,94 @@ impl Display for Term {
     }
 }
 
+impl TryInto<LitStr> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<LitStr> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<i32> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<i32> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<i64> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<i64> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<f32> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<f32> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<f64> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<f64> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<bool> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<bool> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<Uuid> for Term {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<Uuid> {
+        if let Self::Constant(c) = self {
+            c.try_into()
+        } else {
+            Err(anyhow::anyhow!("Expected constant, found {}", self))
+        }
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug)]
 pub enum Constant {
     Null,
-    String(String),
+    String(LitStr),
     Integer(String),
     Float(String),
     Boolean(bool),
@@ -414,23 +496,23 @@ pub enum Constant {
 impl Parse for Constant {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if s.parse_if::<NULL>().is_some() {
+        Ok(if s.parse::<Option<NULL>>()?.is_some() {
             Constant::Null
-        } else if let Some(ss) = s.parse_if() {
-            Constant::String(ss?)
-        } else if let Some(f) = s.parse_from_if::<Float>() {
-            Constant::Float(f?)
-        } else if let Some(i) = s.parse_from_if::<SignedNumber>() {
-            Constant::Integer(i?)
-        } else if let Some(b) = s.parse_if() {
-            Constant::Boolean(b?)
-        } else if let Some(u) = s.parse_if() {
-            Constant::Uuid(u?)
+        } else if let Some(ss) = s.parse()? {
+            Constant::String(ss)
+        } else if let Some(f) = s.parse_from::<Option<Float>>()? {
+            Constant::Float(f)
+        } else if let Some(i) = s.parse_from::<Option<SignedNumber>>()? {
+            Constant::Integer(i)
+        } else if let Some(b) = s.parse()? {
+            Constant::Boolean(b)
+        } else if let Some(u) = s.parse()? {
+            Constant::Uuid(u)
         } else if s.peekn(2).map(|s| s.to_lowercase().as_str() == "0x").unwrap_or(false) {
             s.nextn(2);
             Constant::Blob(s.parse_from::<Hex>()?)
-        } else if let Some(h) = s.parse_from_if::<Hex>() {
-            Constant::Hex(h?)
+        } else if let Some(h) = s.parse_from::<Option<Hex>>()? {
+            Constant::Hex(h)
         } else {
             anyhow::bail!("Invalid constant: {}", s.parse_from::<Token>()?)
         })
@@ -439,7 +521,7 @@ impl Parse for Constant {
 impl Peek for Constant {
     fn peek(mut s: StatementStream<'_>) -> bool {
         s.check::<NULL>()
-            || s.check::<String>()
+            || s.check::<LitStr>()
             || s.check::<SignedNumber>()
             || s.check::<Float>()
             || s.check::<bool>()
@@ -453,7 +535,7 @@ impl Display for Constant {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Null => write!(f, "NULL"),
-            Self::String(s) => write!(f, "'{}'", s),
+            Self::String(s) => s.fmt(f),
             Self::Integer(s) => s.fmt(f),
             Self::Float(s) => s.fmt(f),
             Self::Boolean(b) => b.to_string().to_uppercase().fmt(f),
@@ -464,7 +546,91 @@ impl Display for Constant {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+impl TryInto<LitStr> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<LitStr> {
+        if let Self::String(s) = self {
+            Ok(s)
+        } else {
+            Err(anyhow::anyhow!("Expected string constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<i32> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<i32> {
+        if let Self::Integer(i) = self {
+            Ok(i.parse()?)
+        } else {
+            Err(anyhow::anyhow!("Expected integer constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<i64> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<i64> {
+        if let Self::Integer(i) = self {
+            Ok(i.parse()?)
+        } else {
+            Err(anyhow::anyhow!("Expected integer constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<f32> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<f32> {
+        if let Self::Float(f) = self {
+            Ok(f.parse()?)
+        } else {
+            Err(anyhow::anyhow!("Expected float constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<f64> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<f64> {
+        if let Self::Float(f) = self {
+            Ok(f.parse()?)
+        } else {
+            Err(anyhow::anyhow!("Expected float constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<bool> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<bool> {
+        if let Self::Boolean(b) = self {
+            Ok(b)
+        } else {
+            Err(anyhow::anyhow!("Expected boolean constant, found {}", self))
+        }
+    }
+}
+
+impl TryInto<Uuid> for Constant {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> anyhow::Result<Uuid> {
+        if let Self::Uuid(u) = self {
+            Ok(u)
+        } else {
+            Err(anyhow::anyhow!("Expected UUID constant, found {}", self))
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
 pub enum Literal {
     Collection(CollectionTypeLiteral),
     UserDefined(UserDefinedTypeLiteral),
@@ -474,12 +640,12 @@ pub enum Literal {
 impl Parse for Literal {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(c) = s.parse_if() {
-            Self::Collection(c?)
-        } else if let Some(u) = s.parse_if() {
-            Self::UserDefined(u?)
-        } else if let Some(t) = s.parse_if() {
-            Self::Tuple(t?)
+        Ok(if let Some(c) = s.parse()? {
+            Self::Collection(c)
+        } else if let Some(u) = s.parse()? {
+            Self::UserDefined(u)
+        } else if let Some(t) = s.parse()? {
+            Self::Tuple(t)
         } else {
             anyhow::bail!("Invalid CQL literal type: {}", s.parse_from::<Token>()?)
         })
@@ -507,7 +673,7 @@ pub enum CqlType {
     Collection(CollectionType),
     UserDefined(UserDefinedType),
     Tuple(Vec<CqlType>),
-    Custom(String),
+    Custom(LitStr),
 }
 
 impl Parse for CqlType {
@@ -516,16 +682,16 @@ impl Parse for CqlType {
     where
         Self: Sized,
     {
-        Ok(if let Some(c) = s.parse_if() {
-            Self::Collection(c?)
-        } else if s.parse_if::<TUPLE>().is_some() {
+        Ok(if let Some(c) = s.parse()? {
+            Self::Collection(c)
+        } else if s.parse::<Option<TUPLE>>()?.is_some() {
             Self::Tuple(s.parse_from::<Angles<List<CqlType, Comma>>>()?)
-        } else if let Some(n) = s.parse_if() {
-            Self::Native(n?)
-        } else if let Some(udt) = s.parse_if() {
-            Self::UserDefined(udt?)
-        } else if let Some(c) = s.parse_if() {
-            Self::Custom(c?)
+        } else if let Some(n) = s.parse()? {
+            Self::Native(n)
+        } else if let Some(udt) = s.parse()? {
+            Self::UserDefined(udt)
+        } else if let Some(c) = s.parse()? {
+            Self::Custom(c)
         } else {
             anyhow::bail!("Invalid CQL Type: {}", s.parse_from::<Token>()?)
         })
@@ -537,7 +703,7 @@ impl Peek for CqlType {
             || s.check::<TUPLE>()
             || s.check::<NativeType>()
             || s.check::<UserDefinedType>()
-            || s.check::<String>()
+            || s.check::<LitStr>()
     }
 }
 
@@ -676,12 +842,12 @@ pub enum CollectionTypeLiteral {
 impl Parse for CollectionTypeLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(l) = s.parse_if() {
-            Self::List(l?)
-        } else if let Some(s) = s.parse_if() {
-            Self::Set(s?)
-        } else if let Some(m) = s.parse_if() {
-            Self::Map(m?)
+        Ok(if let Some(l) = s.parse()? {
+            Self::List(l)
+        } else if let Some(s) = s.parse()? {
+            Self::Set(s)
+        } else if let Some(m) = s.parse()? {
+            Self::Map(m)
         } else {
             anyhow::bail!("Invalid collection literal type: {}", s.parse_from::<Token>()?)
         })
@@ -716,12 +882,12 @@ impl Parse for CollectionType {
     where
         Self: Sized,
     {
-        Ok(if s.parse_if::<MAP>().is_some() {
+        Ok(if s.parse::<Option<MAP>>()?.is_some() {
             let (t1, _, t2) = s.parse_from::<Angles<(CqlType, Comma, CqlType)>>()?;
             Self::Map(Box::new(t1), Box::new(t2))
-        } else if s.parse_if::<SET>().is_some() {
+        } else if s.parse::<Option<SET>>()?.is_some() {
             Self::Set(Box::new(s.parse_from::<Angles<CqlType>>()?))
-        } else if s.parse_if::<LIST>().is_some() {
+        } else if s.parse::<Option<LIST>>()?.is_some() {
             Self::List(Box::new(s.parse_from::<Angles<CqlType>>()?))
         } else {
             anyhow::bail!("Invalid collection type: {}", s.parse_from::<Token>()?)
@@ -892,10 +1058,12 @@ pub struct TimestampLiteral(i64);
 impl Parse for TimestampLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if let Some(res) = s.parse_if::<String>() {
-            let ts = res?;
+        if let Some(ts) = s.parse::<Option<LitStr>>()? {
             Ok(Self(
-                ts.parse::<DateTime<Utc>>().map_err(|e| anyhow::anyhow!(e))?.timestamp(),
+                ts.value
+                    .parse::<DateTime<Utc>>()
+                    .map_err(|e| anyhow::anyhow!(e))?
+                    .timestamp(),
             ))
         } else {
             Ok(Self(s.parse::<u64>()? as i64))
@@ -908,9 +1076,8 @@ pub struct DateLiteral(u32);
 impl Parse for DateLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if let Some(res) = s.parse_if::<String>() {
-            let d = res?;
-            let dur = d.parse::<NaiveDate>().map_err(|e| anyhow::anyhow!(e))? - NaiveDate::from_ymd(1970, 1, 1);
+        if let Some(d) = s.parse::<Option<LitStr>>()? {
+            let dur = d.value.parse::<NaiveDate>().map_err(|e| anyhow::anyhow!(e))? - NaiveDate::from_ymd(1970, 1, 1);
             Ok(Self(dur.num_days() as u32))
         } else {
             Ok(Self(s.parse::<u32>()?))
@@ -923,9 +1090,8 @@ pub struct TimeLiteral(i64);
 impl Parse for TimeLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if let Some(res) = s.parse_from_if::<String>() {
-            let t = res?;
-            let t = t.parse::<NaiveTime>().map_err(|e| anyhow::anyhow!(e))? - NaiveTime::from_hms(0, 0, 0);
+        if let Some(t) = s.parse::<Option<LitStr>>()? {
+            let t = t.value.parse::<NaiveTime>().map_err(|e| anyhow::anyhow!(e))? - NaiveTime::from_hms(0, 0, 0);
             Ok(Self(
                 t.num_nanoseconds()
                     .ok_or_else(|| anyhow::anyhow!("Invalid time literal!"))?,
@@ -947,9 +1113,9 @@ impl Parse for DurationLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(
-            if let Some(v) = s.parse_from_if::<List<(Number, TimeUnit), Nothing>>() {
+            if let Some(v) = s.parse_from::<Option<List<(Number, TimeUnit), Nothing>>>()? {
                 let mut res = DurationLiteral::default();
-                for (n, u) in v? {
+                for (n, u) in v {
                     match u {
                         TimeUnit::Nanos => res.nanos += n.parse::<i64>()?,
                         TimeUnit::Micros => res.nanos += n.parse::<i64>()? * 1000,

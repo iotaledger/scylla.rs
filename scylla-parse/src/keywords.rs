@@ -197,6 +197,7 @@ keyword!(ORDER);
 keyword!(PARTITION);
 keyword!(PASSWORD);
 keyword!(PER);
+keyword!(PERCENTILE);
 keyword!(PERMISSION);
 keyword!(PERMISSIONS);
 keyword!(PRIMARY);

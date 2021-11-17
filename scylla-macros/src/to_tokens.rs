@@ -493,7 +493,8 @@ impl ToTokens for Tokenable<&CqlType> {
                 quote! {CqlType::Tuple(#t)}
             }
             CqlType::Custom(c) => {
-                quote! {CqlType::Custom(#c.to_string())}
+                let c = Tokenable(c);
+                quote! {CqlType::Custom(#c)}
             }
         });
     }
@@ -510,7 +511,10 @@ impl ToTokens for Tokenable<&Constant> {
     fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
         tokens.extend(match self.0 {
             Constant::Null => quote! {Constant::Null},
-            Constant::String(s) => quote! {Constant::String(#s.to_string())},
+            Constant::String(s) => {
+                let s = Tokenable(s);
+                quote! {Constant::String(#s)}
+            }
             Constant::Integer(i) => quote! {Constant::Integer(#i.to_string())},
             Constant::Float(f) => quote! {Constant::Float(#f.to_string())},
             Constant::Boolean(b) => quote! {Constant::Boolean(#b)},
@@ -668,8 +672,8 @@ impl ToTokens for Tokenable<&InsertKind> {
                 quote! {InsertKind::NameValue {names: #names, values: #values}}
             }
             InsertKind::Json { json, default } => {
-                let default = Tokenable(default);
-                quote! {InsertKind::Json {json: #json.to_string(), default: #default}}
+                let (json, default) = (Tokenable(json), Tokenable(default));
+                quote! {InsertKind::Json {json: #json, default: #default}}
             }
         })
     }
@@ -785,6 +789,22 @@ impl ToTokens for Tokenable<&ModificationStatement> {
                 let d = Tokenable(d);
                 quote! {ModificationStatement::Delete(#d)}
             }
+        })
+    }
+}
+
+impl ToTokens for Tokenable<&LitStr> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let (kind, value) = (Tokenable(&self.0.kind), &self.0.value);
+        tokens.extend(quote! {LitStr{kind: #kind, value: #value.to_string()}});
+    }
+}
+
+impl ToTokens for Tokenable<&LitStrKind> {
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self.0 {
+            LitStrKind::Escaped => quote! {LitStrKind::Escaped},
+            LitStrKind::Quoted => quote! {LitStrKind::Quoted},
         })
     }
 }

@@ -3,12 +3,14 @@ use crate::{
     Brackets,
     Caching,
     ColumnOrder,
+    Compaction,
     CompactionType,
     Compression,
     CqlType,
     If,
     KeyspaceQualifiedName,
     List,
+    LitStr,
     MapLiteral,
     Name,
     Nothing,
@@ -20,7 +22,6 @@ use crate::{
     SetLiteral,
     SpeculativeRetry,
     StatementOpt,
-    StatementOptValue,
     StatementStream,
     TableOpts,
     Term,
@@ -33,7 +34,6 @@ use derive_more::{
 };
 use scylla_parse_macros::ParseFromStr;
 use std::{
-    collections::HashMap,
     convert::TryFrom,
     fmt::{
         Display,
@@ -115,26 +115,26 @@ impl Parse for Statement {
     type Output = Statement;
 
     fn parse(s: &mut crate::StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse_if() {
-            Self::DataDefinition(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::DataManipulation(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::SecondaryIndex(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::MaterializedView(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::Role(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::Permission(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::User(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::UserDefinedFunction(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::UserDefinedType(stmt?)
-        } else if let Some(stmt) = s.parse_if() {
-            Self::Trigger(stmt?)
+        Ok(if let Some(stmt) = s.parse()? {
+            Self::DataDefinition(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::DataManipulation(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::SecondaryIndex(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::MaterializedView(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::Role(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::Permission(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::User(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::UserDefinedFunction(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::UserDefinedType(stmt)
+        } else if let Some(stmt) = s.parse()? {
+            Self::Trigger(stmt)
         } else {
             anyhow::bail!("Invalid statement: {}", s.parse_from::<Token>()?)
         })
@@ -153,8 +153,14 @@ pub trait WhereExt {
 }
 
 pub trait KeyspaceOptionsExt {
-    fn set_replication(&mut self, replication: Replication);
-    fn set_durable_writes(&mut self, durable_writes: bool);
+    fn keyspace_opts(&self) -> &KeyspaceOpts;
+    fn keyspace_opts_mut(&mut self) -> &mut KeyspaceOpts;
+    fn set_replication(&mut self, replication: Replication) {
+        self.keyspace_opts_mut().replication = replication;
+    }
+    fn set_durable_writes(&mut self, durable_writes: bool) {
+        self.keyspace_opts_mut().durable_writes.replace(durable_writes);
+    }
 
     fn with_replication(mut self, replication: Replication) -> Self
     where
@@ -170,24 +176,18 @@ pub trait KeyspaceOptionsExt {
         self.set_durable_writes(durable_writes);
         self
     }
+
+    fn get_replication(&self) -> &Replication {
+        &self.keyspace_opts().replication
+    }
+    fn get_durable_writes(&self) -> Option<bool> {
+        self.keyspace_opts().durable_writes
+    }
 }
 
 pub trait TableOptionsExt {
     fn table_opts(&self) -> &Option<TableOpts>;
     fn table_opts_mut(&mut self) -> &mut Option<TableOpts>;
-    fn statement_opts(&self) -> Option<&HashMap<Name, StatementOptValue>> {
-        self.table_opts().as_ref().and_then(|o| o.options.as_ref())
-    }
-    fn statement_opts_mut(&mut self) -> Option<&mut HashMap<Name, StatementOptValue>> {
-        self.table_opts_mut().as_mut().and_then(|o| o.options.as_mut())
-    }
-    fn add_option(&mut self, option: StatementOpt) {
-        self.table_opts_mut()
-            .get_or_insert_with(Default::default)
-            .options
-            .get_or_insert_with(Default::default)
-            .insert(option.name, option.value);
-    }
     fn set_compact_storage(&mut self, compact_storage: bool) {
         self.table_opts_mut()
             .get_or_insert_with(Default::default)
@@ -200,90 +200,81 @@ pub trait TableOptionsExt {
             .replace(clustering_order);
     }
     fn set_comment(&mut self, comment: &str) {
-        self.add_option(
-            StatementStream::new(&format!("comment = '{}'", comment))
-                .parse()
-                .unwrap(),
-        )
+        let c = comment.to_string().into();
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .comment
+            .replace(c);
     }
 
     fn set_speculative_retry(&mut self, speculative_retry: SpeculativeRetry) {
-        self.add_option(
-            StatementStream::new(&format!("speculative_retry = {}", speculative_retry))
-                .parse()
-                .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .speculative_retry
+            .replace(speculative_retry);
     }
 
     fn set_change_data_capture(&mut self, cdc: bool) {
-        self.add_option(StatementStream::new(&format!("cdc = {}", cdc)).parse().unwrap())
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .change_data_capture
+            .replace(cdc);
     }
 
     fn set_gc_grace_seconds(&mut self, gc_grace_seconds: i32) {
-        self.add_option(
-            StatementStream::new(&format!("gc_grace_seconds = {}", gc_grace_seconds))
-                .parse()
-                .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .gc_grace_seconds
+            .replace(gc_grace_seconds);
     }
 
     fn set_bloom_filter_fp_chance(&mut self, bloom_filter_fp_chance: f32) {
-        self.add_option(
-            StatementStream::new(&format!("bloom_filter_fp_chance = {}", bloom_filter_fp_chance))
-                .parse()
-                .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .bloom_filter_fp_chance
+            .replace(bloom_filter_fp_chance);
     }
 
     fn set_default_time_to_live(&mut self, default_time_to_live: i32) {
-        self.add_option(
-            StatementStream::new(&format!("default_time_to_live = {}", default_time_to_live))
-                .parse()
-                .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .default_time_to_live
+            .replace(default_time_to_live);
     }
 
     fn set_compaction(&mut self, compaction: impl CompactionType) {
-        println!("compaction: {}", compaction);
-        self.add_option(
-            StatementStream::new(&format!("compaction = {}", compaction))
-                .parse()
-                .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .compaction
+            .replace(compaction.into());
     }
 
     fn set_compression(&mut self, compression: Compression) {
-        self.add_option(
-            StatementStream::new(&format!("compression = {}", compression))
-                .parse()
-                .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .compression
+            .replace(compression);
     }
 
     fn set_caching(&mut self, caching: Caching) {
-        self.add_option(StatementStream::new(&format!("caching = {}", caching)).parse().unwrap())
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .caching
+            .replace(caching);
     }
 
     fn set_memtable_flush_period_in_ms(&mut self, memtable_flush_period_in_ms: i32) {
-        self.add_option(
-            StatementStream::new(&format!(
-                "memtable_flush_period_in_ms = {}",
-                memtable_flush_period_in_ms
-            ))
-            .parse()
-            .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .memtable_flush_period_in_ms
+            .replace(memtable_flush_period_in_ms);
     }
 
     fn set_read_repair(&mut self, read_repair: bool) {
-        self.add_option(
-            StatementStream::new(&format!(
-                "read_repair = '{}'",
-                if read_repair { "BLOCKING" } else { "NONE" }
-            ))
-            .parse()
-            .unwrap(),
-        )
+        self.table_opts_mut()
+            .get_or_insert_with(Default::default)
+            .read_repair
+            .replace(read_repair);
     }
     fn set_additional_write_policy(&mut self, speculative_retry: SpeculativeRetry) {
         self.set_speculative_retry(speculative_retry)
@@ -386,5 +377,50 @@ pub trait TableOptionsExt {
     {
         self.set_read_repair(read_repair);
         self
+    }
+
+    fn get_compact_storage(&self) -> Option<&bool> {
+        self.table_opts().as_ref().map(|t| &t.compact_storage)
+    }
+    fn get_clustering_order(&self) -> Option<&Vec<ColumnOrder>> {
+        self.table_opts().as_ref().and_then(|t| t.clustering_order.as_ref())
+    }
+    fn get_comment(&self) -> Option<&String> {
+        self.table_opts()
+            .as_ref()
+            .and_then(|t| t.comment.as_ref().map(|s| &s.value))
+    }
+    fn get_speculative_retry(&self) -> Option<&SpeculativeRetry> {
+        self.table_opts().as_ref().and_then(|t| t.speculative_retry.as_ref())
+    }
+    fn get_change_data_capture(&self) -> Option<bool> {
+        self.table_opts().as_ref().and_then(|t| t.change_data_capture)
+    }
+    fn get_additional_write_policy(&self) -> Option<&SpeculativeRetry> {
+        self.table_opts().as_ref().and_then(|t| t.speculative_retry.as_ref())
+    }
+    fn get_gc_grace_seconds(&self) -> Option<i32> {
+        self.table_opts().as_ref().and_then(|t| t.gc_grace_seconds)
+    }
+    fn get_bloom_filter_fp_chance(&self) -> Option<f32> {
+        self.table_opts().as_ref().and_then(|t| t.bloom_filter_fp_chance)
+    }
+    fn get_default_time_to_live(&self) -> Option<i32> {
+        self.table_opts().as_ref().and_then(|t| t.default_time_to_live)
+    }
+    fn get_compaction(&self) -> Option<&Compaction> {
+        self.table_opts().as_ref().and_then(|t| t.compaction.as_ref())
+    }
+    fn get_compression(&self) -> Option<&Compression> {
+        self.table_opts().as_ref().and_then(|t| t.compression.as_ref())
+    }
+    fn get_caching(&self) -> Option<&Caching> {
+        self.table_opts().as_ref().and_then(|t| t.caching.as_ref())
+    }
+    fn get_memtable_flush_period_in_ms(&self) -> Option<i32> {
+        self.table_opts().as_ref().and_then(|t| t.memtable_flush_period_in_ms)
+    }
+    fn get_read_repair(&self) -> Option<bool> {
+        self.table_opts().as_ref().and_then(|t| t.read_repair)
     }
 }

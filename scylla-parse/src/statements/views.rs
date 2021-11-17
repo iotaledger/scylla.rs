@@ -12,15 +12,17 @@ pub enum MaterializedViewStatement {
 impl Parse for MaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse_if::<CreateMaterializedViewStatement>() {
-            Self::Create(stmt?)
-        } else if let Some(stmt) = s.parse_if::<AlterMaterializedViewStatement>() {
-            Self::Alter(stmt?)
-        } else if let Some(stmt) = s.parse_if::<DropMaterializedViewStatement>() {
-            Self::Drop(stmt?)
-        } else {
-            anyhow::bail!("Invalid MATERIALIZED VIEW statement!")
-        })
+        Ok(
+            if let Some(stmt) = s.parse::<Option<CreateMaterializedViewStatement>>()? {
+                Self::Create(stmt)
+            } else if let Some(stmt) = s.parse::<Option<AlterMaterializedViewStatement>>()? {
+                Self::Alter(stmt)
+            } else if let Some(stmt) = s.parse::<Option<DropMaterializedViewStatement>>()? {
+                Self::Drop(stmt)
+            } else {
+                anyhow::bail!("Invalid MATERIALIZED VIEW statement!")
+            },
+        )
     }
 }
 
@@ -36,6 +38,7 @@ impl Peek for MaterializedViewStatement {
 pub struct CreateMaterializedViewStatement {
     #[builder(default)]
     pub if_not_exists: bool,
+    #[builder(setter(into))]
     pub name: Name,
     pub select_statement: SelectStatement,
     pub primary_key: PrimaryKey,
@@ -48,10 +51,11 @@ impl Parse for CreateMaterializedViewStatement {
         s.parse::<(CREATE, MATERIALIZED, VIEW)>()?;
         let mut res = CreateMaterializedViewStatementBuilder::default();
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse()?)
+            .name(s.parse::<Name>()?)
             .select_statement(s.parse::<(AS, _)>()?.1)
             .primary_key(s.parse_from::<((PRIMARY, KEY), Parens<PrimaryKey>)>()?.1)
             .table_opts(s.parse_from::<(WITH, TableOpts)>()?.1);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE MATERIALIZED VIEW statement: {}", e))?)
@@ -76,6 +80,7 @@ impl Parse for AlterMaterializedViewStatement {
         s.parse::<(ALTER, MATERIALIZED, VIEW)>()?;
         let mut res = AlterMaterializedViewStatementBuilder::default();
         res.name(s.parse()?).table_opts(s.parse_from::<(WITH, TableOpts)>()?.1);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid ALTER MATERIALIZED VIEW statement: {}", e))?)
@@ -101,6 +106,7 @@ impl Parse for DropMaterializedViewStatement {
         let mut res = DropMaterializedViewStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .name(s.parse()?);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP MATERIALIZED VIEW statement: {}", e))?)

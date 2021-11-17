@@ -9,10 +9,10 @@ pub enum TriggerStatement {
 impl Parse for TriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse_if::<CreateTriggerStatement>() {
-            Self::Create(stmt?)
-        } else if let Some(stmt) = s.parse_if::<DropTriggerStatement>() {
-            Self::Drop(stmt?)
+        Ok(if let Some(stmt) = s.parse::<Option<CreateTriggerStatement>>()? {
+            Self::Create(stmt)
+        } else if let Some(stmt) = s.parse::<Option<DropTriggerStatement>>()? {
+            Self::Drop(stmt)
         } else {
             anyhow::bail!("Invalid TRIGGER statement!")
         })
@@ -29,9 +29,10 @@ impl Peek for TriggerStatement {
 pub struct CreateTriggerStatement {
     #[builder(default)]
     pub if_not_exists: bool,
+    #[builder(setter(into))]
     pub name: Name,
     pub table: KeyspaceQualifiedName,
-    pub using: String,
+    pub using: LitStr,
 }
 
 impl Parse for CreateTriggerStatement {
@@ -40,9 +41,10 @@ impl Parse for CreateTriggerStatement {
         s.parse::<(CREATE, TRIGGER)>()?;
         let mut res = CreateTriggerStatementBuilder::default();
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse()?)
+            .name(s.parse::<Name>()?)
             .table(s.parse::<(ON, _)>()?.1)
             .using(s.parse::<(USING, _)>()?.1);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE TRIGGER statement: {}", e))?)
@@ -59,6 +61,7 @@ impl Peek for CreateTriggerStatement {
 pub struct DropTriggerStatement {
     #[builder(default)]
     pub if_exists: bool,
+    #[builder(setter(into))]
     pub name: Name,
     pub table: KeyspaceQualifiedName,
 }
@@ -69,8 +72,9 @@ impl Parse for DropTriggerStatement {
         s.parse::<(DROP, TRIGGER)>()?;
         let mut res = DropTriggerStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse()?)
+            .name(s.parse::<Name>()?)
             .table(s.parse::<(ON, _)>()?.1);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP TRIGGER statement: {}", e))?)

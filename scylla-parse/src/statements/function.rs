@@ -73,14 +73,14 @@ pub enum UserDefinedFunctionStatement {
 impl Parse for UserDefinedFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse_if::<CreateFunctionStatement>() {
-            Self::Create(stmt?)
-        } else if let Some(stmt) = s.parse_if::<DropFunctionStatement>() {
-            Self::Drop(stmt?)
-        } else if let Some(stmt) = s.parse_if::<CreateAggregateFunctionStatement>() {
-            Self::CreateAggregate(stmt?)
-        } else if let Some(stmt) = s.parse_if::<DropAggregateFunctionStatement>() {
-            Self::DropAggregate(stmt?)
+        Ok(if let Some(stmt) = s.parse::<Option<CreateFunctionStatement>>()? {
+            Self::Create(stmt)
+        } else if let Some(stmt) = s.parse::<Option<DropFunctionStatement>>()? {
+            Self::Drop(stmt)
+        } else if let Some(stmt) = s.parse::<Option<CreateAggregateFunctionStatement>>()? {
+            Self::CreateAggregate(stmt)
+        } else if let Some(stmt) = s.parse::<Option<DropAggregateFunctionStatement>>()? {
+            Self::DropAggregate(stmt)
         } else {
             anyhow::bail!("Expected a data manipulation statement!")
         })
@@ -105,8 +105,9 @@ pub struct CreateFunctionStatement {
     pub func: FunctionDeclaration,
     pub on_null_input: OnNullInput,
     pub return_type: CqlType,
+    #[builder(setter(into))]
     pub language: Name,
-    pub body: String,
+    pub body: LitStr,
 }
 
 impl Parse for CreateFunctionStatement {
@@ -119,9 +120,12 @@ impl Parse for CreateFunctionStatement {
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .func(s.parse()?)
             .on_null_input(s.parse()?)
-            .return_type(s.parse()?)
-            .language(s.parse()?)
-            .body(s.parse()?);
+            .return_type(s.parse()?);
+        if let Some(l) = s.parse::<Option<Name>>()? {
+            res.language(l);
+        }
+        res.body(s.parse()?);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE FUNCTION statement: {}", e))?)
@@ -181,6 +185,7 @@ impl Parse for DropFunctionStatement {
         let mut res = DropFunctionStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .func(s.parse()?);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP FUNCTION statement: {}", e))?)
@@ -194,6 +199,7 @@ impl Peek for DropFunctionStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(strip_option))]
 pub struct CreateAggregateFunctionStatement {
     #[builder(default)]
     pub or_replace: bool,
@@ -218,9 +224,14 @@ impl Parse for CreateAggregateFunctionStatement {
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .func(s.parse()?)
             .state_modifying_fn(s.parse::<(SFUNC, _)>()?.1)
-            .state_value_type(s.parse::<(STYPE, _)>()?.1)
-            .final_fn(s.parse::<Option<(FINALFUNC, _)>>()?.map(|i| i.1))
-            .init_condition(s.parse::<Option<(INITCOND, _)>>()?.map(|i| i.1));
+            .state_value_type(s.parse::<(STYPE, _)>()?.1);
+        if let Some(f) = s.parse_from::<If<FINALFUNC, FunctionName>>()? {
+            res.final_fn(f);
+        }
+        if let Some(i) = s.parse_from::<If<INITCOND, Term>>()? {
+            res.init_condition(i);
+        }
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE AGGREGATE FUNCTION statement: {}", e))?)
@@ -247,6 +258,7 @@ impl Parse for DropAggregateFunctionStatement {
         let mut res = DropAggregateFunctionStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .func(s.parse()?);
+        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP AGGREGATE statement: {}", e))?)

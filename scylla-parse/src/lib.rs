@@ -1,7 +1,15 @@
 use derive_builder::Builder;
+use derive_more::{
+    From,
+    TryInto,
+};
 use scylla_parse_macros::ParseFromStr;
 use std::{
     collections::HashMap,
+    convert::{
+        TryFrom,
+        TryInto,
+    },
     fmt::{
         Display,
         Formatter,
@@ -111,14 +119,6 @@ impl<'a> StatementStream<'a> {
         P::parse(&mut this).ok()
     }
 
-    pub fn parse_if<P: Peek + Parse<Output = P>>(&mut self) -> Option<anyhow::Result<P>> {
-        self.parse::<Option<P>>().transpose()
-    }
-
-    pub fn parse_from_if<P: Peek + Parse>(&mut self) -> Option<anyhow::Result<P::Output>> {
-        self.parse_from::<Option<P>>().transpose()
-    }
-
     pub fn parse<P: Parse<Output = P>>(&mut self) -> anyhow::Result<P> {
         self.skip_whitespace();
         P::parse(self)
@@ -144,7 +144,7 @@ macro_rules! peek_parse_tuple {
         impl<$($t: Peek + Parse),+> Peek for ($($t),+,) {
             fn peek(mut s: StatementStream<'_>) -> bool {
                 $(
-                    if s.parse_from_if::<$t>().is_none() {
+                    if s.parse_from::<Option<$t>>().transpose().is_none() {
                         return false;
                     }
                 )+
@@ -193,9 +193,9 @@ impl Peek for char {
 impl Parse for bool {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if s.parse_if::<TRUE>().is_some() {
+        Ok(if s.parse::<Option<TRUE>>()?.is_some() {
             true
-        } else if s.parse_if::<FALSE>().is_some() {
+        } else if s.parse::<Option<FALSE>>()?.is_some() {
             false
         } else {
             anyhow::bail!("Expected boolean!")
@@ -272,7 +272,7 @@ impl<T: Parse, Delim: Parse + Peek> Parse for List<T, Delim> {
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = vec![s.parse_from::<T>()?];
-        while s.parse_from_if::<Delim>().is_some() {
+        while s.parse_from::<Option<Delim>>()?.is_some() {
             res.push(s.parse_from::<T>()?);
         }
         Ok(res)
@@ -314,41 +314,6 @@ impl Parse for Whitespace {
 impl Peek for Whitespace {
     fn peek(mut s: StatementStream<'_>) -> bool {
         s.peek().map(|c| c.is_whitespace()).unwrap_or(false)
-    }
-}
-
-impl Parse for String {
-    type Output = Self;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        let mut res = String::new();
-        let mut dollars = false;
-        if s.peek() == Some('\'') {
-            s.next();
-        } else if s.peekn(2).map(|s| s.as_str() == "$$").unwrap_or(false) {
-            dollars = true;
-            s.nextn(2);
-        } else {
-            return Err(anyhow::anyhow!("Expected opening quote!"));
-        }
-        while let Some(c) = s.next() {
-            if dollars && c == '$' && s.peek().map(|c| c == '$').unwrap_or(false) {
-                s.next();
-                return Ok(res);
-            } else if !dollars && c == '\'' {
-                return Ok(res);
-            } else {
-                res.push(c);
-            }
-        }
-        if res.is_empty() {
-            anyhow::bail!("End of statement!")
-        }
-        Ok(res)
-    }
-}
-impl Peek for String {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -562,6 +527,9 @@ impl Parse for Float {
                 break;
             }
         }
+        if !has_dot {
+            anyhow::bail!("Invalid float: Missing decimal point")
+        }
         if res.is_empty() {
             anyhow::bail!("End of statement!")
         }
@@ -601,8 +569,10 @@ parse_peek_group!(Angles, LeftAngle, RightAngle);
 parse_peek_group!(SingleQuoted, SingleQuote, SingleQuote);
 parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
 pub enum BindMarker {
+    #[from(ignore)]
+    #[try_into(ignore)]
     Anonymous,
     Named(Name),
 }
@@ -610,7 +580,7 @@ pub enum BindMarker {
 impl Parse for BindMarker {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if s.parse_if::<Question>().is_some() {
+        Ok(if s.parse::<Option<Question>>()?.is_some() {
             BindMarker::Anonymous
         } else {
             let (_, id) = s.parse::<(Colon, Name)>()?;
@@ -659,8 +629,8 @@ pub enum Identifier {
 impl Parse for Identifier {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(keyword) = s.parse_if::<ReservedKeyword>() {
-            Ok(Identifier::Keyword(keyword?))
+        if let Some(keyword) = s.parse::<Option<ReservedKeyword>>()? {
+            Ok(Identifier::Keyword(keyword))
         } else {
             Ok(Identifier::Name(s.parse::<Name>()?))
         }
@@ -670,6 +640,81 @@ impl Parse for Identifier {
 impl Peek for Identifier {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<ReservedKeyword>() || s.check::<Name>()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LitStrKind {
+    Quoted,
+    Escaped,
+}
+
+#[derive(Clone, Debug)]
+pub struct LitStr {
+    pub kind: LitStrKind,
+    pub value: String,
+}
+
+impl Parse for LitStr {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let mut res = String::new();
+        let mut kind = LitStrKind::Quoted;
+        if s.peek() == Some('\'') {
+            s.next();
+        } else if s.peekn(2).map(|s| s.as_str() == "$$").unwrap_or(false) {
+            kind = LitStrKind::Escaped;
+            s.nextn(2);
+        } else {
+            return Err(anyhow::anyhow!("Expected opening quote!"));
+        }
+        while let Some(c) = s.next() {
+            if kind == LitStrKind::Escaped && c == '$' && s.peek().map(|c| c == '$').unwrap_or(false) {
+                s.next();
+                return Ok(LitStr { kind, value: res });
+            } else if kind == LitStrKind::Quoted && c == '\'' {
+                return Ok(LitStr { kind, value: res });
+            } else {
+                res.push(c);
+            }
+        }
+        anyhow::bail!("End of statement!")
+    }
+}
+impl Peek for LitStr {
+    fn peek(mut s: StatementStream<'_>) -> bool {
+        s.parse::<Self>().is_ok()
+    }
+}
+
+impl Display for LitStr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            LitStrKind::Quoted => write!(f, "'{}'", self.value),
+            LitStrKind::Escaped => write!(f, "$${}$$", self.value),
+        }
+    }
+}
+
+impl From<String> for LitStr {
+    fn from(s: String) -> Self {
+        if s.contains('\'') {
+            LitStr {
+                kind: LitStrKind::Escaped,
+                value: s,
+            }
+        } else {
+            LitStr {
+                kind: LitStrKind::Quoted,
+                value: s,
+            }
+        }
+    }
+}
+
+impl From<&str> for LitStr {
+    fn from(s: &str) -> Self {
+        s.to_string().into()
     }
 }
 
@@ -723,6 +768,18 @@ impl Display for Name {
             Self::Quoted(s) => write!(f, "\"{}\"", s),
             Self::Unquoted(s) => s.fmt(f),
         }
+    }
+}
+
+impl From<String> for Name {
+    fn from(s: String) -> Self {
+        Self::Quoted(s)
+    }
+}
+
+impl From<&str> for Name {
+    fn from(s: &str) -> Self {
+        Self::Quoted(s.to_string())
     }
 }
 
@@ -790,12 +847,12 @@ pub enum StatementOptValue {
 impl Parse for StatementOptValue {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(map) = s.parse_if::<MapLiteral>() {
-            Ok(StatementOptValue::Map(map?))
-        } else if let Some(constant) = s.parse_if::<Constant>() {
-            Ok(StatementOptValue::Constant(constant?))
-        } else if let Some(identifier) = s.parse_if::<Name>() {
-            Ok(StatementOptValue::Identifier(identifier?))
+        if let Some(map) = s.parse::<Option<MapLiteral>>()? {
+            Ok(StatementOptValue::Map(map))
+        } else if let Some(constant) = s.parse::<Option<Constant>>()? {
+            Ok(StatementOptValue::Constant(constant))
+        } else if let Some(identifier) = s.parse::<Option<Name>>()? {
+            Ok(StatementOptValue::Identifier(identifier))
         } else {
             anyhow::bail!("Invalid statement option value: {}", s.parse_from::<Token>()?)
         }
@@ -814,6 +871,7 @@ impl Display for StatementOptValue {
 
 #[derive(Builder, Clone, Debug)]
 pub struct ColumnDefinition {
+    #[builder(setter(into))]
     pub name: Name,
     pub data_type: CqlType,
     #[builder(default)]
@@ -903,13 +961,15 @@ pub struct PartitionKey {
 impl Parse for PartitionKey {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        Ok(if let Some(columns) = s.parse_from_if::<Parens<List<Name, Comma>>>() {
-            Self { columns: columns? }
-        } else {
-            Self {
-                columns: vec![s.parse::<Name>()?],
-            }
-        })
+        Ok(
+            if let Some(columns) = s.parse_from::<Option<Parens<List<Name, Comma>>>>()? {
+                Self { columns }
+            } else {
+                Self {
+                    columns: vec![s.parse::<Name>()?],
+                }
+            },
+        )
     }
 }
 
@@ -935,11 +995,22 @@ impl Display for PartitionKey {
 
 // TODO: Scylla encryption opts and caching?
 #[derive(Builder, Clone, Debug, Default)]
-#[builder(default)]
+#[builder(setter(strip_option), default)]
 pub struct TableOpts {
     pub compact_storage: bool,
     pub clustering_order: Option<Vec<ColumnOrder>>,
-    pub options: Option<HashMap<Name, StatementOptValue>>,
+    #[builder(setter(into))]
+    pub comment: Option<LitStr>,
+    pub speculative_retry: Option<SpeculativeRetry>,
+    pub change_data_capture: Option<bool>,
+    pub gc_grace_seconds: Option<i32>,
+    pub bloom_filter_fp_chance: Option<f32>,
+    pub default_time_to_live: Option<i32>,
+    pub compaction: Option<Compaction>,
+    pub compression: Option<Compression>,
+    pub caching: Option<Caching>,
+    pub memtable_flush_period_in_ms: Option<i32>,
+    pub read_repair: Option<bool>,
 }
 
 impl Parse for TableOpts {
@@ -947,7 +1018,7 @@ impl Parse for TableOpts {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         let mut res = TableOptsBuilder::default();
         loop {
-            if s.parse_if::<(COMPACT, STORAGE)>().is_some() {
+            if s.parse::<Option<(COMPACT, STORAGE)>>()?.is_some() {
                 if res.compact_storage.is_some() {
                     anyhow::bail!("Duplicate compact storage option");
                 }
@@ -955,21 +1026,126 @@ impl Parse for TableOpts {
                 if s.parse::<Option<AND>>()?.is_none() {
                     break;
                 }
-            } else if s.parse_if::<(CLUSTERING, ORDER, BY)>().is_some() {
+            } else if s.parse::<Option<(CLUSTERING, ORDER, BY)>>()?.is_some() {
                 if res.clustering_order.is_some() {
                     anyhow::bail!("Duplicate clustering order option");
                 }
-                res.clustering_order(Some(s.parse_from::<Parens<List<ColumnOrder, Comma>>>()?));
+                res.clustering_order(s.parse_from::<Parens<List<ColumnOrder, Comma>>>()?);
                 if s.parse::<Option<AND>>()?.is_none() {
                     break;
                 }
             } else {
-                res.options(s.parse_from::<Option<List<StatementOpt, AND>>>()?.map(|i| {
-                    i.into_iter().fold(HashMap::new(), |mut acc, opt| {
-                        acc.insert(opt.name, opt.value);
-                        acc
-                    })
-                }));
+                if let Some(v) = s.parse_from::<Option<List<StatementOpt, AND>>>()? {
+                    for StatementOpt { name, value } in v {
+                        let (Name::Quoted(n) | Name::Unquoted(n)) = &name;
+                        match n.as_str() {
+                            "comment" => {
+                                if res.comment.is_some() {
+                                    anyhow::bail!("Duplicate comment option");
+                                } else if let StatementOptValue::Constant(Constant::String(s)) = value {
+                                    res.comment(s);
+                                } else {
+                                    anyhow::bail!("Invalid comment value: {}", value);
+                                }
+                            }
+                            "speculative_retry" => {
+                                if res.speculative_retry.is_some() {
+                                    anyhow::bail!("Duplicate speculative retry option");
+                                } else if let StatementOptValue::Constant(Constant::String(s)) = value {
+                                    res.speculative_retry(s.to_string().parse()?);
+                                } else {
+                                    anyhow::bail!("Invalid speculative retry value: {}", value);
+                                }
+                            }
+                            "cdc" => {
+                                if res.change_data_capture.is_some() {
+                                    anyhow::bail!("Duplicate change data capture option");
+                                } else if let StatementOptValue::Constant(Constant::Boolean(b)) = value {
+                                    res.change_data_capture(b);
+                                } else {
+                                    anyhow::bail!("Invalid change data capture value: {}", value);
+                                }
+                            }
+                            "gc_grace_seconds" => {
+                                if res.gc_grace_seconds.is_some() {
+                                    anyhow::bail!("Duplicate gc_grace_seconds option");
+                                } else if let StatementOptValue::Constant(Constant::Integer(i)) = value {
+                                    res.gc_grace_seconds(i.parse()?);
+                                } else {
+                                    anyhow::bail!("Invalid gc_grace_seconds value: {}", value);
+                                }
+                            }
+                            "bloom_filter_fp_chance" => {
+                                if res.bloom_filter_fp_chance.is_some() {
+                                    anyhow::bail!("Duplicate bloom_filter_fp_chance option");
+                                } else if let StatementOptValue::Constant(Constant::Float(f)) = value {
+                                    res.bloom_filter_fp_chance(f.parse()?);
+                                } else {
+                                    anyhow::bail!("Invalid bloom_filter_fp_chance value: {}", value);
+                                }
+                            }
+                            "default_time_to_live" => {
+                                if res.default_time_to_live.is_some() {
+                                    anyhow::bail!("Duplicate default_time_to_live option");
+                                } else if let StatementOptValue::Constant(Constant::Integer(i)) = value {
+                                    res.default_time_to_live(i.parse()?);
+                                } else {
+                                    anyhow::bail!("Invalid default_time_to_live value: {}", value);
+                                }
+                            }
+                            "compaction" => {
+                                if res.compaction.is_some() {
+                                    anyhow::bail!("Duplicate compaction option");
+                                } else if let StatementOptValue::Map(m) = value {
+                                    res.compaction(m.try_into()?);
+                                } else {
+                                    anyhow::bail!("Invalid compaction value: {}", value);
+                                }
+                            }
+                            "compression" => {
+                                if res.compression.is_some() {
+                                    anyhow::bail!("Duplicate compression option");
+                                } else if let StatementOptValue::Map(m) = value {
+                                    res.compression(m.try_into()?);
+                                } else {
+                                    anyhow::bail!("Invalid compression value: {}", value);
+                                }
+                            }
+                            "caching" => {
+                                if res.caching.is_some() {
+                                    anyhow::bail!("Duplicate caching option");
+                                } else if let StatementOptValue::Map(m) = value {
+                                    res.caching(m.try_into()?);
+                                } else {
+                                    anyhow::bail!("Invalid caching value: {}", value);
+                                }
+                            }
+                            "memtable_flush_period_in_ms" => {
+                                if res.memtable_flush_period_in_ms.is_some() {
+                                    anyhow::bail!("Duplicate memtable_flush_period_in_ms option");
+                                } else if let StatementOptValue::Constant(Constant::Integer(i)) = value {
+                                    res.memtable_flush_period_in_ms(i.parse()?);
+                                } else {
+                                    anyhow::bail!("Invalid memtable_flush_period_in_ms value: {}", value);
+                                }
+                            }
+                            "read_repair" => {
+                                if res.read_repair.is_some() {
+                                    anyhow::bail!("Duplicate read_repair option");
+                                } else if let StatementOptValue::Constant(Constant::String(s)) = value {
+                                    res.read_repair(match s.value.to_uppercase().as_str() {
+                                        "BLOCKING" => true,
+                                        "NONE" => false,
+                                        _ => anyhow::bail!("Invalid read_repair value: {}", s),
+                                    });
+                                } else {
+                                    anyhow::bail!("Invalid read_repair value: {}", value);
+                                }
+                            }
+                            _ => anyhow::bail!("Invalid table option: {}", name),
+                        }
+                    }
+                }
                 break;
             }
         }
@@ -981,54 +1157,50 @@ impl Parse for TableOpts {
 
 impl Display for TableOpts {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match (
-            self.compact_storage,
-            self.clustering_order.as_ref(),
-            self.options.as_ref(),
-        ) {
-            (true, None, None) => write!(f, "COMPACT STORAGE"),
-            (true, None, Some(opts)) => write!(
-                f,
-                "COMPACT STORAGE AND {}",
-                opts.iter()
-                    .map(|(name, value)| format!("{} = {}", name, value))
-                    .collect::<Vec<_>>()
-                    .join(" AND ")
-            ),
-            (true, Some(c), None) => write!(
-                f,
+        let mut res = Vec::new();
+        if self.compact_storage {
+            res.push("COMPACT STORAGE".to_string());
+        }
+        if let Some(ref c) = self.clustering_order {
+            res.push(format!(
                 "COMPACT STORAGE AND {}",
                 c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
-            ),
-            (true, Some(c), Some(opts)) => write!(
-                f,
-                "COMPACT STORAGE AND {} AND {}",
-                c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
-                opts.iter()
-                    .map(|(name, value)| format!("{} = {}", name, value))
-                    .collect::<Vec<_>>()
-                    .join(" AND ")
-            ),
-            (false, None, Some(opts)) => write!(
-                f,
-                "{}",
-                opts.iter()
-                    .map(|(name, value)| format!("{} = {}", name, value))
-                    .collect::<Vec<_>>()
-                    .join(" AND ")
-            ),
-            (false, Some(c), None) => write!(f, "{}", c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
-            (false, Some(c), Some(opts)) => write!(
-                f,
-                "{} AND {}",
-                c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
-                opts.iter()
-                    .map(|(name, value)| format!("{} = {}", name, value))
-                    .collect::<Vec<_>>()
-                    .join(" AND ")
-            ),
-            (false, None, None) => panic!("Invalid table options!"),
+            ));
         }
+        if let Some(ref c) = self.comment {
+            res.push(format!("comment = {}", c));
+        }
+        if let Some(ref c) = self.speculative_retry {
+            res.push(format!("speculative_retry = {}", c));
+        }
+        if let Some(ref c) = self.change_data_capture {
+            res.push(format!("cdc = {}", c));
+        }
+        if let Some(ref c) = self.gc_grace_seconds {
+            res.push(format!("gc_grace_seconds = {}", c));
+        }
+        if let Some(ref c) = self.bloom_filter_fp_chance {
+            res.push(format!("bloom_filter_fp_chance = {}", c));
+        }
+        if let Some(ref c) = self.default_time_to_live {
+            res.push(format!("default_time_to_live = {}", c));
+        }
+        if let Some(ref c) = self.compaction {
+            res.push(format!("compaction = {}", c));
+        }
+        if let Some(ref c) = self.compression {
+            res.push(format!("compression = {}", c));
+        }
+        if let Some(ref c) = self.caching {
+            res.push(format!("caching = {}", c));
+        }
+        if let Some(ref c) = self.memtable_flush_period_in_ms {
+            res.push(format!("memtable_flush_period_in_ms = {}", c));
+        }
+        if let Some(ref c) = self.read_repair {
+            res.push(format!("read_repair = {}", c));
+        }
+        write!(f, "{}", res.join(" AND "))
     }
 }
 
@@ -1061,9 +1233,9 @@ pub enum Order {
 impl Parse for Order {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        if s.parse_if::<ASC>().is_some() {
+        if s.parse::<Option<ASC>>()?.is_some() {
             Ok(Order::Ascending)
-        } else if s.parse_if::<DESC>().is_some() {
+        } else if s.parse::<Option<DESC>>()?.is_some() {
             Ok(Order::Descending)
         } else {
             anyhow::bail!("Invalid sort order: {}", s.parse_from::<Token>()?)
@@ -1108,7 +1280,7 @@ pub enum Relation {
 impl Parse for Relation {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        Ok(if s.parse_if::<TOKEN>().is_some() {
+        Ok(if s.parse::<Option<TOKEN>>()?.is_some() {
             let (columns, operator, term) = s.parse_from::<(Parens<List<Name, Comma>>, Operator, Term)>()?;
             Relation::Token {
                 columns,
@@ -1192,17 +1364,103 @@ impl Display for Replication {
     }
 }
 
-#[derive(Clone, Debug)]
+impl TryFrom<MapLiteral> for Replication {
+    type Error = anyhow::Error;
+
+    fn try_from(value: MapLiteral) -> Result<Self, Self::Error> {
+        let mut class = None;
+        let v = value
+            .elements
+            .into_iter()
+            .filter(|(k, v)| {
+                if let Term::Constant(Constant::String(s)) = k {
+                    if s.value.to_lowercase().as_str() == "class" {
+                        class = Some(v.clone());
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect::<Vec<_>>();
+        let class = class.ok_or_else(|| anyhow::anyhow!("No class in replication map literal!"))?;
+        match class {
+            Term::Constant(Constant::String(s)) => {
+                if s.value.ends_with("SimpleStrategy") {
+                    if v.len() > 1 {
+                        anyhow::bail!(
+                            "SimpleStrategy map literal should only contain a single 'replication_factor' key!"
+                        )
+                    } else if v.is_empty() {
+                        anyhow::bail!("SimpleStrategy map literal should contain a 'replication_factor' key!")
+                    }
+                    let (k, v) = &v[0];
+                    if let Term::Constant(Constant::String(s)) = k {
+                        if s.value.to_lowercase().as_str() == "replication_factor" {
+                            if let Term::Constant(Constant::Integer(i)) = v {
+                                return Ok(Replication::SimpleStrategy(i.parse()?));
+                            } else {
+                                anyhow::bail!("Invalid replication factor value: {}", v)
+                            }
+                        } else {
+                            anyhow::bail!("SimpleStrategy map literal should only contain a 'class' and 'replication_factor' key!")
+                        }
+                    } else {
+                        anyhow::bail!("Invalid key: {}", k)
+                    }
+                } else if s.value.ends_with("NetworkTopologyStrategy") {
+                    let mut map = HashMap::new();
+                    for (k, v) in v {
+                        if let Term::Constant(Constant::String(s)) = k {
+                            if let Term::Constant(Constant::Integer(i)) = v {
+                                map.insert(s.value, i.parse()?);
+                            } else {
+                                anyhow::bail!("Invalid replication factor value: {}", v)
+                            }
+                        } else {
+                            anyhow::bail!("Invalid key in replication map literal!");
+                        }
+                    }
+                    return Ok(Replication::NetworkTopologyStrategy(map));
+                } else {
+                    return Err(anyhow::anyhow!("Unknown replication class: {}", s));
+                }
+            }
+            _ => anyhow::bail!("Invalid class: {}", class),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
 pub enum SpeculativeRetry {
     None,
     Always,
     Percentile(f32),
-    Custom(String),
+    Custom(LitStr),
 }
 
 impl Default for SpeculativeRetry {
     fn default() -> Self {
         SpeculativeRetry::Percentile(99.0)
+    }
+}
+
+impl Parse for SpeculativeRetry {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        let token = s.parse::<LitStr>()?;
+        Ok(
+            if let Ok(res) = StatementStream::new(&token.value).parse_from::<(Float, PERCENTILE)>() {
+                SpeculativeRetry::Percentile(res.0.parse()?)
+            } else if let Ok(res) = StatementStream::new(&token.value).parse_from::<(Number, PERCENTILE)>() {
+                SpeculativeRetry::Percentile(res.0.parse()?)
+            } else {
+                match token.value.to_uppercase().as_str() {
+                    "NONE" => SpeculativeRetry::None,
+                    "ALWAYS" => SpeculativeRetry::Always,
+                    _ => SpeculativeRetry::Custom(token),
+                }
+            },
+        )
     }
 }
 
@@ -1212,184 +1470,214 @@ impl Display for SpeculativeRetry {
             SpeculativeRetry::None => write!(f, "'NONE'"),
             SpeculativeRetry::Always => write!(f, "'ALWAYS'"),
             SpeculativeRetry::Percentile(p) => write!(f, "'{:.1}PERCENTILE'", p),
-            SpeculativeRetry::Custom(s) => write!(f, "'{}'", s),
+            SpeculativeRetry::Custom(s) => s.fmt(f),
         }
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug)]
-#[builder(default)]
+#[derive(Builder, Copy, Clone, Debug, Default)]
+#[builder(setter(strip_option), default)]
 pub struct SizeTieredCompactionStrategy {
-    enabled: bool,
-    tombstone_threshhold: f32,
-    tombsone_compaction_interval: i32,
-    log_all: bool,
-    unchecked_tombstone_compaction: bool,
-    only_purge_repaired_tombstone: bool,
-    min_threshold: i32,
-    max_threshold: i32,
-    min_sstable_size: i32,
-    bucket_low: f32,
-    bucket_high: f32,
+    enabled: Option<bool>,
+    tombstone_threshhold: Option<f32>,
+    tombsone_compaction_interval: Option<i32>,
+    log_all: Option<bool>,
+    unchecked_tombstone_compaction: Option<bool>,
+    only_purge_repaired_tombstone: Option<bool>,
+    min_threshold: Option<i32>,
+    max_threshold: Option<i32>,
+    min_sstable_size: Option<i32>,
+    bucket_low: Option<f32>,
+    bucket_high: Option<f32>,
 }
 
 impl CompactionType for SizeTieredCompactionStrategy {}
 
-impl Default for SizeTieredCompactionStrategy {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            tombstone_threshhold: 0.2,
-            tombsone_compaction_interval: 86400,
-            log_all: false,
-            unchecked_tombstone_compaction: false,
-            only_purge_repaired_tombstone: false,
-            min_threshold: 4,
-            max_threshold: 32,
-            min_sstable_size: 50,
-            bucket_low: 0.5,
-            bucket_high: 1.5,
-        }
-    }
-}
-
 impl Display for SizeTieredCompactionStrategy {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{{'class': 'SizeTieredCompactionStrategy', 'enabled': {}, 'tombstone_threshold': {}, 'tombstone_compaction_interval': {}, \
-            'log_all': {}, 'unchecked_tombstone_compaction': {}, 'only_purge_repaired_tombstone': {}, 'min_threshold': {}, \
-            'max_threshold': {}, 'min_sstable_size': {}, 'bucket_low': {:.1}, 'bucket_high': {:.1}}}",
-            self.enabled,
-            self.tombstone_threshhold,
-            self.tombsone_compaction_interval,
-            self.log_all,
-            self.unchecked_tombstone_compaction,
-            self.only_purge_repaired_tombstone,
-            self.min_threshold,
-            self.max_threshold,
-            self.min_sstable_size,
-            self.bucket_low,
-            self.bucket_high
-        )
+        let mut res = vec![format!("'class': 'SizeTieredCompactionStrategy'")];
+        if let Some(enabled) = self.enabled {
+            res.push(format!("'enabled': {}", enabled));
+        }
+        if let Some(tombstone_threshhold) = self.tombstone_threshhold {
+            res.push(format!("'tombstone_threshhold': {:.1}", tombstone_threshhold));
+        }
+        if let Some(tombsone_compaction_interval) = self.tombsone_compaction_interval {
+            res.push(format!(
+                "'tombsone_compaction_interval': {}",
+                tombsone_compaction_interval
+            ));
+        }
+        if let Some(log_all) = self.log_all {
+            res.push(format!("'log_all': {}", log_all));
+        }
+        if let Some(unchecked_tombstone_compaction) = self.unchecked_tombstone_compaction {
+            res.push(format!(
+                "'unchecked_tombstone_compaction': {}",
+                unchecked_tombstone_compaction
+            ));
+        }
+        if let Some(only_purge_repaired_tombstone) = self.only_purge_repaired_tombstone {
+            res.push(format!(
+                "'only_purge_repaired_tombstone': {}",
+                only_purge_repaired_tombstone
+            ));
+        }
+        if let Some(min_threshold) = self.min_threshold {
+            res.push(format!("'min_threshold': {}", min_threshold));
+        }
+        if let Some(max_threshold) = self.max_threshold {
+            res.push(format!("'max_threshold': {}", max_threshold));
+        }
+        if let Some(min_sstable_size) = self.min_sstable_size {
+            res.push(format!("'min_sstable_size': {}", min_sstable_size));
+        }
+        if let Some(bucket_low) = self.bucket_low {
+            res.push(format!("'bucket_low': {:.1}", bucket_low));
+        }
+        if let Some(bucket_high) = self.bucket_high {
+            res.push(format!("'bucket_high': {:.1}", bucket_high));
+        }
+        write!(f, "{{{}}}", res.join(", "))
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug)]
-#[builder(default)]
+#[derive(Builder, Copy, Clone, Debug, Default)]
+#[builder(setter(strip_option), default)]
 pub struct LeveledCompactionStrategy {
-    enabled: bool,
-    tombstone_threshhold: f32,
-    tombsone_compaction_interval: i32,
-    log_all: bool,
-    unchecked_tombstone_compaction: bool,
-    only_purge_repaired_tombstone: bool,
-    min_threshold: i32,
-    max_threshold: i32,
-    sstable_size_in_mb: i32,
-    fanout_size: i32,
+    enabled: Option<bool>,
+    tombstone_threshhold: Option<f32>,
+    tombsone_compaction_interval: Option<i32>,
+    log_all: Option<bool>,
+    unchecked_tombstone_compaction: Option<bool>,
+    only_purge_repaired_tombstone: Option<bool>,
+    min_threshold: Option<i32>,
+    max_threshold: Option<i32>,
+    sstable_size_in_mb: Option<i32>,
+    fanout_size: Option<i32>,
 }
 
 impl CompactionType for LeveledCompactionStrategy {}
 
-impl Default for LeveledCompactionStrategy {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            tombstone_threshhold: 0.2,
-            tombsone_compaction_interval: 86400,
-            log_all: false,
-            unchecked_tombstone_compaction: false,
-            only_purge_repaired_tombstone: false,
-            min_threshold: 4,
-            max_threshold: 32,
-            sstable_size_in_mb: 160,
-            fanout_size: 10,
-        }
-    }
-}
-
 impl Display for LeveledCompactionStrategy {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{{'class': 'LeveledCompactionStrategy', 'enabled': {}, 'tombstone_threshold': {:.1}, 'tombstone_compaction_interval': {}, \
-            'log_all': {}, 'unchecked_tombstone_compaction': {}, 'only_purge_repaired_tombstone': {}, 'min_threshold': {}, \
-            'max_threshold': {}, 'sstable_size_in_mb': {}, 'fanout_size': {}}}",
-            self.enabled,
-            self.tombstone_threshhold,
-            self.tombsone_compaction_interval,
-            self.log_all,
-            self.unchecked_tombstone_compaction,
-            self.only_purge_repaired_tombstone,
-            self.min_threshold,
-            self.max_threshold,
-            self.sstable_size_in_mb,
-            self.fanout_size
-        )
+        let mut res = vec![format!("'class': 'SizeTieredCompactionStrategy'")];
+        if let Some(enabled) = self.enabled {
+            res.push(format!("'enabled': {}", enabled));
+        }
+        if let Some(tombstone_threshhold) = self.tombstone_threshhold {
+            res.push(format!("'tombstone_threshhold': {:.1}", tombstone_threshhold));
+        }
+        if let Some(tombsone_compaction_interval) = self.tombsone_compaction_interval {
+            res.push(format!(
+                "'tombsone_compaction_interval': {}",
+                tombsone_compaction_interval
+            ));
+        }
+        if let Some(log_all) = self.log_all {
+            res.push(format!("'log_all': {}", log_all));
+        }
+        if let Some(unchecked_tombstone_compaction) = self.unchecked_tombstone_compaction {
+            res.push(format!(
+                "'unchecked_tombstone_compaction': {}",
+                unchecked_tombstone_compaction
+            ));
+        }
+        if let Some(only_purge_repaired_tombstone) = self.only_purge_repaired_tombstone {
+            res.push(format!(
+                "'only_purge_repaired_tombstone': {}",
+                only_purge_repaired_tombstone
+            ));
+        }
+        if let Some(min_threshold) = self.min_threshold {
+            res.push(format!("'min_threshold': {}", min_threshold));
+        }
+        if let Some(max_threshold) = self.max_threshold {
+            res.push(format!("'max_threshold': {}", max_threshold));
+        }
+        if let Some(sstable_size_in_mb) = self.sstable_size_in_mb {
+            res.push(format!("'sstable_size_in_mb': {}", sstable_size_in_mb));
+        }
+        if let Some(fanout_size) = self.fanout_size {
+            res.push(format!("'fanout_size': {}", fanout_size));
+        }
+        write!(f, "{{{}}}", res.join(", "))
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug)]
-#[builder(default)]
+#[derive(Builder, Copy, Clone, Debug, Default)]
+#[builder(setter(strip_option), default)]
 pub struct TimeWindowCompactionStrategy {
-    enabled: bool,
-    tombstone_threshhold: f32,
-    tombsone_compaction_interval: i32,
-    log_all: bool,
-    unchecked_tombstone_compaction: bool,
-    only_purge_repaired_tombstone: bool,
-    min_threshold: i32,
-    max_threshold: i32,
-    compaction_window_unit: JavaTimeUnit,
-    compaction_window_size: i32,
-    unsafe_aggressive_sstable_expiration: bool,
+    enabled: Option<bool>,
+    tombstone_threshhold: Option<f32>,
+    tombsone_compaction_interval: Option<i32>,
+    log_all: Option<bool>,
+    unchecked_tombstone_compaction: Option<bool>,
+    only_purge_repaired_tombstone: Option<bool>,
+    min_threshold: Option<i32>,
+    max_threshold: Option<i32>,
+    compaction_window_unit: Option<JavaTimeUnit>,
+    compaction_window_size: Option<i32>,
+    unsafe_aggressive_sstable_expiration: Option<bool>,
 }
 
 impl CompactionType for TimeWindowCompactionStrategy {}
 
-impl Default for TimeWindowCompactionStrategy {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            tombstone_threshhold: 0.2,
-            tombsone_compaction_interval: 86400,
-            log_all: false,
-            unchecked_tombstone_compaction: false,
-            only_purge_repaired_tombstone: false,
-            min_threshold: 4,
-            max_threshold: 32,
-            compaction_window_unit: JavaTimeUnit::Days,
-            compaction_window_size: 1,
-            unsafe_aggressive_sstable_expiration: false,
-        }
-    }
-}
-
 impl Display for TimeWindowCompactionStrategy {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{{'class': 'TimeWindowCompactionStrategy', 'enabled': {}, 'tombstone_threshold': {:.1}, 'tombstone_compaction_interval': {}, \
-            'log_all': {}, 'unchecked_tombstone_compaction': {}, 'only_purge_repaired_tombstone': {}, 'min_threshold': {}, \
-            'max_threshold': {}, 'compaction_window_unit': '{}', 'compaction_window_size': {}, 'unsafe_aggressive_sstable_expiration': {}}}",
-            self.enabled,
-            self.tombstone_threshhold,
-            self.tombsone_compaction_interval,
-            self.log_all,
-            self.unchecked_tombstone_compaction,
-            self.only_purge_repaired_tombstone,
-            self.min_threshold,
-            self.max_threshold,
-            self.compaction_window_unit,
-            self.compaction_window_size,
-            self.unsafe_aggressive_sstable_expiration,
-        )
+        let mut res = vec![format!("'class': 'SizeTieredCompactionStrategy'")];
+        if let Some(enabled) = self.enabled {
+            res.push(format!("'enabled': {}", enabled));
+        }
+        if let Some(tombstone_threshhold) = self.tombstone_threshhold {
+            res.push(format!("'tombstone_threshhold': {:.1}", tombstone_threshhold));
+        }
+        if let Some(tombsone_compaction_interval) = self.tombsone_compaction_interval {
+            res.push(format!(
+                "'tombsone_compaction_interval': {}",
+                tombsone_compaction_interval
+            ));
+        }
+        if let Some(log_all) = self.log_all {
+            res.push(format!("'log_all': {}", log_all));
+        }
+        if let Some(unchecked_tombstone_compaction) = self.unchecked_tombstone_compaction {
+            res.push(format!(
+                "'unchecked_tombstone_compaction': {}",
+                unchecked_tombstone_compaction
+            ));
+        }
+        if let Some(only_purge_repaired_tombstone) = self.only_purge_repaired_tombstone {
+            res.push(format!(
+                "'only_purge_repaired_tombstone': {}",
+                only_purge_repaired_tombstone
+            ));
+        }
+        if let Some(min_threshold) = self.min_threshold {
+            res.push(format!("'min_threshold': {}", min_threshold));
+        }
+        if let Some(max_threshold) = self.max_threshold {
+            res.push(format!("'max_threshold': {}", max_threshold));
+        }
+        if let Some(compaction_window_unit) = self.compaction_window_unit {
+            res.push(format!("'compaction_window_unit': {}", compaction_window_unit));
+        }
+        if let Some(compaction_window_size) = self.compaction_window_size {
+            res.push(format!("'compaction_window_size': {}", compaction_window_size));
+        }
+        if let Some(unsafe_aggressive_sstable_expiration) = self.unsafe_aggressive_sstable_expiration {
+            res.push(format!(
+                "'unsafe_aggressive_sstable_expiration': {}",
+                unsafe_aggressive_sstable_expiration
+            ));
+        }
+        write!(f, "{{{}}}", res.join(", "))
     }
 }
 
-pub trait CompactionType: Display {}
+pub trait CompactionType: Display + Into<Compaction> {}
 
+#[derive(Clone, Debug, From, TryInto)]
 pub enum Compaction {
     SizeTiered(SizeTieredCompactionStrategy),
     Leveled(LeveledCompactionStrategy),
@@ -1419,6 +1707,149 @@ impl Compaction {
     }
 }
 
+impl TryFrom<MapLiteral> for Compaction {
+    type Error = anyhow::Error;
+
+    fn try_from(value: MapLiteral) -> Result<Self, Self::Error> {
+        let mut class = None;
+        let v = value
+            .elements
+            .into_iter()
+            .filter(|(k, v)| {
+                if let Term::Constant(Constant::String(s)) = k {
+                    if s.value.to_lowercase().as_str() == "class" {
+                        class = Some(v.clone());
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect::<Vec<_>>();
+        let class = class.ok_or_else(|| anyhow::anyhow!("No class in compaction map literal!"))?;
+        Ok(match class {
+            Term::Constant(Constant::String(s)) => {
+                let mut map = HashMap::new();
+                for (k, v) in v {
+                    if let Term::Constant(Constant::String(s)) = k {
+                        map.insert(s.value.to_lowercase(), v);
+                    } else {
+                        anyhow::bail!("Invalid key in compaction map literal!");
+                    }
+                }
+                if s.value.ends_with("SizeTieredCompactionStrategy") {
+                    let mut builder = Self::size_tiered();
+                    if let Some(t) = map.remove("enabled") {
+                        builder.enabled(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("tombstone_threshold") {
+                        builder.tombstone_threshhold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("tombstone_compaction_interval") {
+                        builder.tombsone_compaction_interval(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("log_all") {
+                        builder.log_all(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("unchecked_tombstone_compaction") {
+                        builder.unchecked_tombstone_compaction(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("only_purge_repaired_tombstone") {
+                        builder.only_purge_repaired_tombstone(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("min_threshold") {
+                        builder.min_threshold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("max_threshold") {
+                        builder.max_threshold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("min_sstable_size") {
+                        builder.min_sstable_size(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("bucket_low") {
+                        builder.bucket_low(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("bucket_high") {
+                        builder.bucket_high(t.try_into()?);
+                    }
+                    Compaction::SizeTiered(builder.build()?)
+                } else if s.value.ends_with("LeveledCompactionStrategy") {
+                    let mut builder = Self::leveled();
+                    if let Some(t) = map.remove("enabled") {
+                        builder.enabled(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("tombstone_threshold") {
+                        builder.tombstone_threshhold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("tombstone_compaction_interval") {
+                        builder.tombsone_compaction_interval(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("log_all") {
+                        builder.log_all(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("unchecked_tombstone_compaction") {
+                        builder.unchecked_tombstone_compaction(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("only_purge_repaired_tombstone") {
+                        builder.only_purge_repaired_tombstone(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("min_threshold") {
+                        builder.min_threshold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("max_threshold") {
+                        builder.max_threshold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("sstable_size_in_mb") {
+                        builder.sstable_size_in_mb(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("fanout_size") {
+                        builder.fanout_size(t.try_into()?);
+                    }
+                    Compaction::Leveled(builder.build()?)
+                } else if s.value.ends_with("TimeWindowCompactionStrategy") {
+                    let mut builder = Self::time_window();
+                    if let Some(t) = map.remove("enabled") {
+                        builder.enabled(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("tombstone_threshold") {
+                        builder.tombstone_threshhold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("tombstone_compaction_interval") {
+                        builder.tombsone_compaction_interval(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("log_all") {
+                        builder.log_all(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("unchecked_tombstone_compaction") {
+                        builder.unchecked_tombstone_compaction(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("only_purge_repaired_tombstone") {
+                        builder.only_purge_repaired_tombstone(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("min_threshold") {
+                        builder.min_threshold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("max_threshold") {
+                        builder.max_threshold(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("compaction_window_unit") {
+                        builder.compaction_window_unit(TryInto::<LitStr>::try_into(t)?.value.parse()?);
+                    }
+                    if let Some(t) = map.remove("compaction_window_size") {
+                        builder.compaction_window_size(t.try_into()?);
+                    }
+                    if let Some(t) = map.remove("unsafe_aggressive_sstable_expiration") {
+                        builder.unsafe_aggressive_sstable_expiration(t.try_into()?);
+                    }
+                    Compaction::TimeWindow(builder.build()?)
+                } else {
+                    return Err(anyhow::anyhow!("Unknown compaction class: {}", s));
+                }
+            }
+            _ => anyhow::bail!("Invalid class: {}", class),
+        })
+    }
+}
+
 impl Display for Compaction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1436,6 +1867,27 @@ pub enum JavaTimeUnit {
     Days,
 }
 
+impl FromStr for JavaTimeUnit {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "MINUTES" => Ok(JavaTimeUnit::Minutes),
+            "HOURS" => Ok(JavaTimeUnit::Hours),
+            "DAYS" => Ok(JavaTimeUnit::Days),
+            _ => Err(anyhow::anyhow!("Invalid time unit: {}", s)),
+        }
+    }
+}
+
+impl Parse for JavaTimeUnit {
+    type Output = Self;
+
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        s.parse::<LitStr>()?.value.parse()
+    }
+}
+
 impl Display for JavaTimeUnit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1446,15 +1898,15 @@ impl Display for JavaTimeUnit {
     }
 }
 
-#[derive(Builder, Clone, Debug)]
-#[builder(default)]
+#[derive(Builder, Clone, Debug, Default)]
+#[builder(setter(strip_option), default)]
 pub struct Compression {
-    #[builder(default = "default_compressor()")]
-    class: String,
-    enabled: bool,
-    chunk_length_in_kb: i32,
-    crc_check_chance: f32,
-    compression_level: i32,
+    #[builder(setter(into))]
+    class: Option<LitStr>,
+    enabled: Option<bool>,
+    chunk_length_in_kb: Option<i32>,
+    crc_check_chance: Option<f32>,
+    compression_level: Option<i32>,
 }
 
 impl Compression {
@@ -1463,37 +1915,65 @@ impl Compression {
     }
 }
 
-impl Default for Compression {
-    fn default() -> Self {
-        Self {
-            class: default_compressor(),
-            enabled: true,
-            chunk_length_in_kb: 64,
-            crc_check_chance: 1.0,
-            compression_level: 3,
-        }
-    }
-}
-
 impl Display for Compression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{{'class': '{}', 'enabled': {}, 'chunk_length_in_kb': {}, 'crc_check_chance': {:.1}, 'compression_level': {}}}",
-            self.class, self.enabled, self.chunk_length_in_kb, self.crc_check_chance, self.compression_level
-        )
+        let mut res = Vec::new();
+        if let Some(class) = &self.class {
+            res.push(format!("'class': {}", class));
+        }
+        if let Some(enabled) = &self.enabled {
+            res.push(format!("'enabled': {}", enabled));
+        }
+        if let Some(chunk_length_in_kb) = &self.chunk_length_in_kb {
+            res.push(format!("'chunk_length_in_kb': {}", chunk_length_in_kb));
+        }
+        if let Some(crc_check_chance) = &self.crc_check_chance {
+            res.push(format!("'crc_check_chance': {:.1}", crc_check_chance));
+        }
+        if let Some(compression_level) = &self.compression_level {
+            res.push(format!("'compression_level': {}", compression_level));
+        }
+        write!(f, "{{{}}}", res.join(", "))
     }
 }
 
-fn default_compressor() -> String {
-    "LZ4Compressor".to_string()
+impl TryFrom<MapLiteral> for Compression {
+    type Error = anyhow::Error;
+
+    fn try_from(value: MapLiteral) -> Result<Self, Self::Error> {
+        let mut map = HashMap::new();
+        for (k, v) in value.elements {
+            if let Term::Constant(Constant::String(s)) = k {
+                map.insert(s.value.to_lowercase(), v);
+            } else {
+                anyhow::bail!("Invalid key in compaction map literal!");
+            }
+        }
+        let mut builder = Self::build();
+        if let Some(t) = map.remove("class") {
+            builder.class(TryInto::<LitStr>::try_into(t)?);
+        }
+        if let Some(t) = map.remove("enabled") {
+            builder.enabled(t.try_into()?);
+        }
+        if let Some(t) = map.remove("chunk_length_in_kb") {
+            builder.chunk_length_in_kb(t.try_into()?);
+        }
+        if let Some(t) = map.remove("crc_check_chance") {
+            builder.crc_check_chance(t.try_into()?);
+        }
+        if let Some(t) = map.remove("compression_level") {
+            builder.compression_level(t.try_into()?);
+        }
+        Ok(builder.build()?)
+    }
 }
 
-#[derive(Builder, Clone, Debug)]
-#[builder(default)]
+#[derive(Builder, Clone, Debug, Default)]
+#[builder(setter(strip_option), default)]
 pub struct Caching {
-    keys: Keys,
-    rows_per_partition: RowsPerPartition,
+    keys: Option<Keys>,
+    rows_per_partition: Option<RowsPerPartition>,
 }
 
 impl Caching {
@@ -1502,22 +1982,39 @@ impl Caching {
     }
 }
 
-impl Default for Caching {
-    fn default() -> Self {
-        Self {
-            keys: Keys::All,
-            rows_per_partition: RowsPerPartition::None,
+impl Display for Caching {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut res = Vec::new();
+        if let Some(keys) = &self.keys {
+            res.push(format!("'keys': {}", keys));
         }
+        if let Some(rows_per_partition) = &self.rows_per_partition {
+            res.push(format!("'rows_per_partition': {}", rows_per_partition));
+        }
+        write!(f, "{{{}}}", res.join(", "))
     }
 }
 
-impl Display for Caching {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{{'keys': {}, 'rows_per_partition': {}}}",
-            self.keys, self.rows_per_partition
-        )
+impl TryFrom<MapLiteral> for Caching {
+    type Error = anyhow::Error;
+
+    fn try_from(value: MapLiteral) -> Result<Self, Self::Error> {
+        let mut map = HashMap::new();
+        for (k, v) in value.elements {
+            if let Term::Constant(Constant::String(s)) = k {
+                map.insert(s.value.to_lowercase(), v);
+            } else {
+                anyhow::bail!("Invalid key in compaction map literal!");
+            }
+        }
+        let mut builder = Self::build();
+        if let Some(t) = map.remove("keys") {
+            builder.keys(TryInto::<LitStr>::try_into(t)?.value.parse()?);
+        }
+        if let Some(t) = map.remove("rows_per_partition") {
+            builder.rows_per_partition(t.to_string().parse()?);
+        }
+        Ok(builder.build()?)
     }
 }
 
@@ -1525,6 +2022,25 @@ impl Display for Caching {
 pub enum Keys {
     All,
     None,
+}
+
+impl FromStr for Keys {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "ALL" => Ok(Keys::All),
+            "NONE" => Ok(Keys::None),
+            _ => Err(anyhow::anyhow!("Invalid keys: {}", s)),
+        }
+    }
+}
+
+impl Parse for Keys {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        s.parse::<LitStr>()?.value.parse()
+    }
 }
 
 impl Display for Keys {
@@ -1536,11 +2052,26 @@ impl Display for Keys {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(ParseFromStr, Copy, Clone, Debug)]
 pub enum RowsPerPartition {
     All,
     None,
     Count(i32),
+}
+
+impl Parse for RowsPerPartition {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(if let Some(ss) = s.parse::<Option<LitStr>>()? {
+            match ss.value.to_uppercase().as_str() {
+                "ALL" => RowsPerPartition::All,
+                "NONE" => RowsPerPartition::None,
+                _ => anyhow::bail!("Invalid rows_per_partition: {}", ss),
+            }
+        } else {
+            Self::Count(s.parse()?)
+        })
+    }
 }
 
 impl Display for RowsPerPartition {
