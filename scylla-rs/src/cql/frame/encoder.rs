@@ -377,7 +377,7 @@ pub trait TokenEncoder {
     }
 }
 
-macro_rules! impl_token_col_encoder {
+macro_rules! impl_token_encoder {
     ($($t:ty),*) => {
         $(
             impl TokenEncoder for $t {
@@ -387,9 +387,21 @@ macro_rules! impl_token_col_encoder {
             }
         )*
     };
+    (@tuple ($($t:tt),*)) => {
+        impl<$($t: TokenEncoder),*> TokenEncoder for ($($t,)*) {
+            fn encode_token(&self) -> TokenEncodeChain {
+                let ($($t,)*) = self;
+                let mut token_chain = TokenEncodeChain::default();
+                $(
+                    token_chain.append($t);
+                )*
+                token_chain
+            }
+        }
+    };
 }
 
-impl_token_col_encoder!(
+impl_token_encoder!(
     i8,
     i16,
     i32,
@@ -407,6 +419,11 @@ impl_token_col_encoder!(
     Unset,
     Null
 );
+
+impl_token_encoder!(@tuple (T));
+impl_token_encoder!(@tuple (T,TT));
+impl_token_encoder!(@tuple (T, TT, TTT));
+impl_token_encoder!(@tuple (T, TT, TTT, TTTT));
 
 impl<T: TokenEncoder + ?Sized> TokenEncoder for &T {
     fn encode_token(&self) -> TokenEncodeChain {
