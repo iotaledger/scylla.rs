@@ -62,10 +62,10 @@ where
         }
     }
 
-    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let Some(id) = cql_error.take_unprepared_id() {
+            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
                 handle_unprepared_error(self, id, reporter).or_else(|worker| {
                     error!("Error trying to reprepare query: {}", worker.request().statement());
                     worker.handle.handle_error(error)

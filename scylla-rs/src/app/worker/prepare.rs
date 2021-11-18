@@ -43,7 +43,7 @@ impl Worker for PrepareWorker {
         );
         Ok(())
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!(
             "Failed to prepare statement: {}, error: {}",
             Request::statement(&self.request),
@@ -104,7 +104,7 @@ where
             Err(e) => self.handle.handle_error(WorkerError::Other(e)),
         }
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
         match self.retry() {
             Ok(_) => Ok(()),

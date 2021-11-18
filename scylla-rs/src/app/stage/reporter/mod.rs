@@ -116,7 +116,7 @@ where
                     } else {
                         // Send overload to the worker in-case we don't have anymore streams
                         worker
-                            .handle_error(WorkerError::Overload, rt.handle())
+                            .handle_error(WorkerError::Overload, Some(rt.handle()))
                             .unwrap_or_else(|e| log::error!("{}", e));
                     }
                 }
@@ -151,7 +151,7 @@ impl Reporter {
                     let error = Decoder::try_from(payload)
                         .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
                         .unwrap_or_else(|e| WorkerError::Other(e));
-                    worker.handle_error(error, handle)?;
+                    worker.handle_error(error, Some(handle))?;
                 } else {
                     worker.handle_response(payload)?;
                 }
@@ -176,7 +176,7 @@ impl Reporter {
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.
             if let Some(_payload) = payloads[stream as usize].as_mut().take() {
-                worker.handle_error(error, handle)?;
+                worker.handle_error(error, Some(handle))?;
             } else {
                 log::error!("No payload found while handling error for stream {}!", stream);
             }
@@ -192,7 +192,7 @@ impl Reporter {
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
             worker_id
-                .handle_error(WorkerError::Lost, handle)
+                .handle_error(WorkerError::Lost, Some(handle))
                 .unwrap_or_else(|e| log::error!("{}", e));
         }
     }
