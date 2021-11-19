@@ -3,6 +3,7 @@ use super::{
     Parse,
     Peek,
     StatementStream,
+    StreamInfo,
 };
 use scylla_parse_macros::ParseFromStr;
 use std::{
@@ -80,7 +81,15 @@ macro_rules! keyword {
                 let this = stringify!($t);
                 if let Some(token) = s.nextn(this.len()) {
                     if token.to_uppercase().as_str() != this {
-                        anyhow::bail!("Expected keyword '{}', found '{}'", this, token)
+                        anyhow::bail!(
+                            "Expected keyword '{}', found {}",
+                            this,
+                            StreamInfo {
+                                next_token: token,
+                                pos: s.current_pos(),
+                                len: s.remaining()
+                            }
+                        )
                     }
                 }
                 Ok($t)
@@ -168,6 +177,7 @@ keyword!(INPUT);
 keyword!(INSERT);
 keyword!(INT);
 keyword!(INTO);
+keyword!(IS);
 keyword!(JSON);
 keyword!(KEY);
 keyword!(KEYS);
@@ -409,7 +419,15 @@ macro_rules! punctuation {
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 let c = s.parse::<char>()?;
                 if c != $c {
-                    anyhow::bail!("Expected '{}', found '{}'", $c, c);
+                    anyhow::bail!(
+                        "Expected '{}', found {}",
+                        $c,
+                        StreamInfo {
+                            next_token: c.to_string(),
+                            pos: s.current_pos(),
+                            len: s.remaining()
+                        }
+                    );
                 }
                 Ok($t)
             }
@@ -445,4 +463,4 @@ punctuation!(Question, '?');
 punctuation!(Colon, ':');
 punctuation!(Dot, '.');
 punctuation!(SingleQuote, '\'');
-punctuation!(DoubleQuote, '"');
+punctuation!(DoubleQuote, '\"');

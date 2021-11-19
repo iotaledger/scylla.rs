@@ -41,6 +41,7 @@ pub struct CreateMaterializedViewStatement {
     #[builder(setter(into))]
     pub name: Name,
     pub select_statement: SelectStatement,
+    #[builder(setter(into))]
     pub primary_key: PrimaryKey,
     pub table_opts: TableOpts,
 }
@@ -68,8 +69,23 @@ impl Peek for CreateMaterializedViewStatement {
     }
 }
 
+impl Display for CreateMaterializedViewStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CREATE MATERIALIZED VIEW{} {} AS {} PRIMARY KEY ({}) WITH {}",
+            if self.if_not_exists { " IF NOT EXISTS" } else { "" },
+            self.name,
+            self.select_statement,
+            self.primary_key,
+            self.table_opts
+        )
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct AlterMaterializedViewStatement {
+    #[builder(setter(into))]
     pub name: Name,
     pub table_opts: TableOpts,
 }
@@ -79,7 +95,8 @@ impl Parse for AlterMaterializedViewStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, MATERIALIZED, VIEW)>()?;
         let mut res = AlterMaterializedViewStatementBuilder::default();
-        res.name(s.parse()?).table_opts(s.parse_from::<(WITH, TableOpts)>()?.1);
+        res.name(s.parse::<Name>()?)
+            .table_opts(s.parse_from::<(WITH, TableOpts)>()?.1);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -93,9 +110,16 @@ impl Peek for AlterMaterializedViewStatement {
     }
 }
 
+impl Display for AlterMaterializedViewStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ALTER MATERIALIZED VIEW {} WITH {}", self.name, self.table_opts)
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct DropMaterializedViewStatement {
     pub if_exists: bool,
+    #[builder(setter(into))]
     pub name: Name,
 }
 
@@ -105,7 +129,7 @@ impl Parse for DropMaterializedViewStatement {
         s.parse::<(DROP, MATERIALIZED, VIEW)>()?;
         let mut res = DropMaterializedViewStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse()?);
+            .name(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -116,5 +140,81 @@ impl Parse for DropMaterializedViewStatement {
 impl Peek for DropMaterializedViewStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(DROP, MATERIALIZED, VIEW)>()
+    }
+}
+
+impl Display for DropMaterializedViewStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DROP MATERIALIZED VIEW{} {}",
+            if self.if_exists { " IF EXISTS" } else { "" },
+            self.name
+        )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::TableOptsBuilder;
+
+    #[test]
+    fn test_parse_create_mv() {
+        let stmt = "
+            CREATE MATERIALIZED VIEW monkeySpecies_by_population AS
+            SELECT * FROM monkeySpecies
+            WHERE population IS NOT NULL AND species IS NOT NULL
+            PRIMARY KEY (population, species)
+            WITH comment='Allow query by population instead of species';";
+        let parsed = stmt.parse::<CreateMaterializedViewStatement>().unwrap();
+        let test = CreateMaterializedViewStatementBuilder::default()
+            .name("monkeySpecies_by_population")
+            .select_statement(
+                SelectStatementBuilder::default()
+                    .select_clause(SelectClauseKind::All)
+                    .from("monkeySpecies")
+                    .where_clause(vec![
+                        Relation::is_not_null("population"),
+                        Relation::is_not_null("species"),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .primary_key(vec!["population", "species"])
+            .table_opts(
+                TableOptsBuilder::default()
+                    .comment("Allow query by population instead of species")
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap();
+        assert_eq!(parsed.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_alter_mv() {
+        let stmt = "
+            ALTER MATERIALIZED VIEW monkeySpecies_by_population WITH default_time_to_live=100;";
+        let parsed = stmt.parse::<AlterMaterializedViewStatement>().unwrap();
+        let test = AlterMaterializedViewStatementBuilder::default()
+            .name("monkeySpecies_by_population")
+            .table_opts(TableOptsBuilder::default().default_time_to_live(100).build().unwrap())
+            .build()
+            .unwrap();
+        assert_eq!(parsed.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_drop_mv() {
+        let stmt = "DROP MATERIALIZED VIEW IF EXISTS monkeySpecies_by_population;";
+        let parsed = stmt.parse::<DropMaterializedViewStatement>().unwrap();
+        let test = DropMaterializedViewStatementBuilder::default()
+            .if_exists(true)
+            .name("monkeySpecies_by_population")
+            .build()
+            .unwrap();
+        assert_eq!(parsed.to_string(), test.to_string());
     }
 }

@@ -645,7 +645,7 @@ impl<T> Deref for DecodeResult<T> {
     }
 }
 
-#[doc(hidden)]
+#[cfg(test)]
 pub mod tests {
     use scylla_rs_macros::parse_statement;
 

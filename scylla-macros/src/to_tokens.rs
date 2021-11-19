@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{
+    BTreeMap,
+    HashMap,
+};
 
 use quote::{
     quote,
@@ -218,6 +221,20 @@ where
     }
 }
 
+impl<'a, K: 'static, V: 'static> ToTokens for Tokenable<&'a BTreeMap<K, V>>
+where
+    Tokenable<&'a K>: ToTokens,
+    Tokenable<&'a V>: ToTokens,
+{
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        let t = self.0.iter().map(|(k, v)| {
+            let (k, v) = (Tokenable(k), Tokenable(v));
+            quote! {#k => #v}
+        });
+        tokens.extend(quote! { btreemap![#(#t),*]});
+    }
+}
+
 impl ToTokens for Tokenable<&SelectClauseKind> {
     fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
         match self.0 {
@@ -346,6 +363,10 @@ impl ToTokens for Tokenable<&Relation> {
                     }
                 });
             }
+            Relation::MVExclusion { column } => {
+                let column = Tokenable(column);
+                tokens.extend(quote! {Relation::MVExclusion {column: #column}});
+            }
         }
     }
 }
@@ -447,13 +468,6 @@ impl ToTokens for Tokenable<&Term> {
                 quote! {Term::BindMarker(#b)}
             }
         });
-    }
-}
-
-impl ToTokens for Tokenable<&(Term, Term)> {
-    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
-        let (t1, t2) = (Tokenable(&self.0 .0), Tokenable(&self.0 .1));
-        tokens.extend(quote! {(#t1, #t2)});
     }
 }
 

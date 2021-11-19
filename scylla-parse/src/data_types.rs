@@ -16,7 +16,6 @@ use super::{
     Peek,
     SignedNumber,
     StatementStream,
-    Token,
 };
 use crate::{
     Alpha,
@@ -35,7 +34,10 @@ use derive_more::{
 };
 use scylla_parse_macros::ParseFromStr;
 use std::{
-    collections::HashMap,
+    collections::{
+        BTreeMap,
+        HashMap,
+    },
     convert::{
         TryFrom,
         TryInto,
@@ -48,7 +50,7 @@ use std::{
 };
 use uuid::Uuid;
 
-#[derive(ParseFromStr, Copy, Clone, Debug)]
+#[derive(ParseFromStr, Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum ArithmeticOp {
     Add,
     Sub,
@@ -174,7 +176,7 @@ impl Parse for Operator {
                 ),
             })
         } else {
-            anyhow::bail!("Invalid token for operator: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid token for operator: {}", s.info())
         }
     }
 }
@@ -277,7 +279,7 @@ impl Parse for TimeUnit {
                 ),
             })
         } else {
-            anyhow::bail!("Invalid token for time unit: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid token for time unit: {}", s.info())
         }
     }
 }
@@ -288,7 +290,7 @@ impl Peek for TimeUnit {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum Term {
     Constant(Constant),
     Literal(Literal),
@@ -365,7 +367,7 @@ impl Parse for Term {
                 rhs: Box::new(rhs),
             }
         } else {
-            anyhow::bail!("Invalid term: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid term: {}", s.info())
         })
     }
 }
@@ -481,7 +483,25 @@ impl TryInto<Uuid> for Term {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+macro_rules! impl_from_constant_to_term {
+    ($t:ty) => {
+        impl From<$t> for Term {
+            fn from(t: $t) -> Self {
+                Self::Constant(t.into())
+            }
+        }
+    };
+}
+
+impl_from_constant_to_term!(LitStr);
+impl_from_constant_to_term!(i32);
+impl_from_constant_to_term!(i64);
+impl_from_constant_to_term!(f32);
+impl_from_constant_to_term!(f64);
+impl_from_constant_to_term!(bool);
+impl_from_constant_to_term!(Uuid);
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum Constant {
     Null,
     String(LitStr),
@@ -514,7 +534,7 @@ impl Parse for Constant {
         } else if let Some(h) = s.parse_from::<Option<Hex>>()? {
             Constant::Hex(h)
         } else {
-            anyhow::bail!("Invalid constant: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid constant: {}", s.info())
         })
     }
 }
@@ -630,7 +650,49 @@ impl TryInto<Uuid> for Constant {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+impl From<LitStr> for Constant {
+    fn from(s: LitStr) -> Self {
+        Self::String(s)
+    }
+}
+
+impl From<i32> for Constant {
+    fn from(i: i32) -> Self {
+        Self::Integer(i.to_string())
+    }
+}
+
+impl From<i64> for Constant {
+    fn from(i: i64) -> Self {
+        Self::Integer(i.to_string())
+    }
+}
+
+impl From<f32> for Constant {
+    fn from(f: f32) -> Self {
+        Self::Float(f.to_string())
+    }
+}
+
+impl From<f64> for Constant {
+    fn from(f: f64) -> Self {
+        Self::Float(f.to_string())
+    }
+}
+
+impl From<bool> for Constant {
+    fn from(b: bool) -> Self {
+        Self::Boolean(b)
+    }
+}
+
+impl From<Uuid> for Constant {
+    fn from(u: Uuid) -> Self {
+        Self::Uuid(u)
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum Literal {
     Collection(CollectionTypeLiteral),
     UserDefined(UserDefinedTypeLiteral),
@@ -647,7 +709,7 @@ impl Parse for Literal {
         } else if let Some(t) = s.parse()? {
             Self::Tuple(t)
         } else {
-            anyhow::bail!("Invalid CQL literal type: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid CQL literal type: {}", s.info())
         })
     }
 }
@@ -667,7 +729,7 @@ impl Display for Literal {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, From)]
 pub enum CqlType {
     Native(NativeType),
     Collection(CollectionType),
@@ -693,7 +755,7 @@ impl Parse for CqlType {
         } else if let Some(c) = s.parse()? {
             Self::Custom(c)
         } else {
-            anyhow::bail!("Invalid CQL Type: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid CQL Type: {}", s.info())
         })
     }
 }
@@ -723,7 +785,7 @@ impl Display for CqlType {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum NativeType {
     Ascii,
     Bigint,
@@ -832,7 +894,7 @@ impl Peek for NativeType {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum CollectionTypeLiteral {
     List(ListLiteral),
     Set(SetLiteral),
@@ -849,7 +911,7 @@ impl Parse for CollectionTypeLiteral {
         } else if let Some(m) = s.parse()? {
             Self::Map(m)
         } else {
-            anyhow::bail!("Invalid collection literal type: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid collection literal type: {}", s.info())
         })
     }
 }
@@ -869,7 +931,7 @@ impl Display for CollectionTypeLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum CollectionType {
     List(Box<CqlType>),
     Set(Box<CqlType>),
@@ -890,7 +952,7 @@ impl Parse for CollectionType {
         } else if s.parse::<Option<LIST>>()?.is_some() {
             Self::List(Box::new(s.parse_from::<Angles<CqlType>>()?))
         } else {
-            anyhow::bail!("Invalid collection type: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid collection type: {}", s.info())
         })
     }
 }
@@ -911,9 +973,9 @@ impl Display for CollectionType {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct MapLiteral {
-    pub elements: Vec<(Term, Term)>,
+    pub elements: BTreeMap<Term, Term>,
 }
 
 impl Parse for MapLiteral {
@@ -951,7 +1013,15 @@ impl Display for MapLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+impl<T: Into<Term>> From<HashMap<T, T>> for MapLiteral {
+    fn from(m: HashMap<T, T>) -> Self {
+        Self {
+            elements: m.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct TupleLiteral {
     pub elements: Vec<Term>,
 }
@@ -987,7 +1057,15 @@ impl Display for TupleLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+impl<T: Into<Term>> From<Vec<T>> for TupleLiteral {
+    fn from(elements: Vec<T>) -> Self {
+        Self {
+            elements: elements.into_iter().map(|t| t.into()).collect(),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct SetLiteral {
     pub elements: Vec<Term>,
 }
@@ -1020,7 +1098,15 @@ impl Display for SetLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+impl<T: Into<Term>> From<Vec<T>> for SetLiteral {
+    fn from(elements: Vec<T>) -> Self {
+        Self {
+            elements: elements.into_iter().map(|t| t.into()).collect(),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ListLiteral {
     pub elements: Vec<Term>,
 }
@@ -1050,6 +1136,14 @@ impl Display for ListLiteral {
                 .collect::<Vec<_>>()
                 .join(", ")
         )
+    }
+}
+
+impl<T: Into<Term>> From<Vec<T>> for ListLiteral {
+    fn from(elements: Vec<T>) -> Self {
+        Self {
+            elements: elements.into_iter().map(|t| t.into()).collect(),
+        }
     }
 }
 
@@ -1157,9 +1251,9 @@ impl Display for DurationLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct UserDefinedTypeLiteral {
-    pub fields: HashMap<Name, Term>,
+    pub fields: BTreeMap<Name, Term>,
 }
 
 impl Parse for UserDefinedTypeLiteral {
@@ -1172,7 +1266,7 @@ impl Parse for UserDefinedTypeLiteral {
             fields: s
                 .parse_from::<Braces<List<(Name, Colon, Term), Comma>>>()?
                 .into_iter()
-                .fold(HashMap::new(), |mut acc, (k, _, v)| {
+                .fold(BTreeMap::new(), |mut acc, (k, _, v)| {
                     acc.insert(k, v);
                     acc
                 }),

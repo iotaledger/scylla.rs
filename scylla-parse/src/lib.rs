@@ -1,3 +1,7 @@
+use anymap::{
+    AnyMap,
+    Map,
+};
 use derive_builder::Builder;
 use derive_more::{
     From,
@@ -5,7 +9,11 @@ use derive_more::{
 };
 use scylla_parse_macros::ParseFromStr;
 use std::{
-    collections::HashMap,
+    cell::RefCell,
+    collections::{
+        BTreeMap,
+        HashMap,
+    },
     convert::{
         TryFrom,
         TryInto,
@@ -15,6 +23,7 @@ use std::{
         Formatter,
     },
     marker::PhantomData,
+    rc::Rc,
     str::FromStr,
 };
 use uuid::Uuid;
@@ -31,30 +40,82 @@ pub use data_types::*;
 mod regex;
 pub use self::regex::*;
 
+pub struct StreamInfo {
+    pub next_token: String,
+    pub pos: usize,
+    pub len: usize,
+}
+
+impl Display for StreamInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{ next token: '{}', current pos: {}, remaining: {} }}",
+            self.next_token, self.pos, self.len
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Cached<T: Parse> {
+    pub value: T::Output,
+    pub len: usize,
+}
+
+impl<T: Parse> Clone for Cached<T>
+where
+    T::Output: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            len: self.len,
+        }
+    }
+}
+
+impl<T: Parse> Cached<T> {
+    pub fn new(value: T::Output, len: usize) -> Self {
+        Self { value, len }
+    }
+}
+
 #[derive(Clone)]
 pub struct StatementStream<'a> {
     cursor: std::iter::Peekable<std::str::Chars<'a>>,
+    pos: usize,
+    len: usize,
+    cache: Rc<RefCell<HashMap<usize, AnyMap>>>,
 }
 
 impl<'a> StatementStream<'a> {
     pub fn new(statement: &'a str) -> Self {
         Self {
             cursor: statement.chars().peekable(),
+            pos: 0,
+            len: statement.len(),
+            cache: Default::default(),
         }
+    }
+
+    pub fn info(&self) -> StreamInfo {
+        StreamInfo {
+            next_token: self.clone().parse_from::<Token>().unwrap_or_default(),
+            pos: self.pos,
+            len: self.len,
+        }
+    }
+
+    pub fn current_pos(&self) -> usize {
+        self.pos
     }
 
     pub fn remaining(&self) -> usize {
-        self.cursor.clone().count()
+        self.len
     }
 
     pub fn nremaining(&self, n: usize) -> bool {
-        let mut cursor = self.cursor.clone();
-        for _ in 0..n {
-            if cursor.next().is_none() {
-                return false;
-            }
-        }
-        true
+        self.len >= n
     }
 
     pub fn peek(&mut self) -> Option<char> {
@@ -74,11 +135,16 @@ impl<'a> StatementStream<'a> {
         Some(res)
     }
 
-    pub fn next(&mut self) -> Option<char> {
-        self.cursor.next()
+    pub(crate) fn next(&mut self) -> Option<char> {
+        let res = self.cursor.next();
+        if res.is_some() {
+            self.pos += 1;
+            self.len -= 1;
+        }
+        res
     }
 
-    pub fn nextn(&mut self, n: usize) -> Option<String> {
+    pub(crate) fn nextn(&mut self, n: usize) -> Option<String> {
         if self.nremaining(n) {
             let mut res = String::new();
             for _ in 0..n {
@@ -101,36 +167,93 @@ impl<'a> StatementStream<'a> {
         }
     }
 
-    pub fn check<P: Peek>(&self) -> bool {
+    fn check_cache<P: 'static + Parse>(&self) -> bool {
+        self.cache
+            .borrow()
+            .get(&self.pos)
+            .and_then(|m| m.get::<Cached<P>>())
+            .is_some()
+    }
+
+    fn retrieve_cache<P: 'static + Parse>(&self) -> Option<Cached<P>>
+    where
+        P::Output: Clone,
+    {
+        self.cache
+            .borrow()
+            .get(&self.pos)
+            .and_then(|m| m.get::<Cached<P>>().cloned())
+    }
+
+    fn set_cache<P: 'static + Parse>(&self, value: P::Output, prev_pos: usize) -> P::Output
+    where
+        P::Output: Clone,
+    {
+        let mut cache = self.cache.borrow_mut();
+        let map = cache.entry(prev_pos).or_insert_with(Map::new);
+        map.entry::<Cached<P>>()
+            .or_insert(Cached::new(value, self.pos - prev_pos))
+            .value
+            .clone()
+    }
+
+    pub fn check<P: 'static + Peek>(&self) -> bool {
+        if self.check_cache::<P>() {
+            return true;
+        }
         let mut this = self.clone();
         this.skip_whitespace();
         P::peek(this)
     }
 
-    pub fn find<P: Parse<Output = P>>(&self) -> Option<P> {
+    pub fn find<P: 'static + Parse<Output = P> + Clone>(&self) -> Option<P> {
+        let pos = self.pos;
+        if let Some(cached) = self.retrieve_cache::<P>() {
+            return Some(cached.value);
+        }
         let mut this = self.clone();
         this.skip_whitespace();
-        P::parse(&mut this).ok()
+        P::parse(&mut this).ok().map(|p| self.set_cache::<P>(p, pos))
     }
 
-    pub fn find_from<P: Parse>(&self) -> Option<P::Output> {
+    pub fn find_from<P: 'static + Parse>(&self) -> Option<P::Output>
+    where
+        P::Output: 'static + Clone,
+    {
+        let pos = self.pos;
+        if let Some(cached) = self.retrieve_cache::<P>() {
+            return Some(cached.value);
+        }
         let mut this = self.clone();
         this.skip_whitespace();
-        P::parse(&mut this).ok()
+        P::parse(&mut this).ok().map(|p| self.set_cache::<P>(p, pos))
     }
 
-    pub fn parse<P: Parse<Output = P>>(&mut self) -> anyhow::Result<P> {
+    pub fn parse<P: 'static + Parse<Output = P> + Clone>(&mut self) -> anyhow::Result<P> {
+        let pos = self.pos;
+        if let Some(cached) = self.retrieve_cache::<P>() {
+            self.nextn(cached.len);
+            return Ok(cached.value);
+        }
         self.skip_whitespace();
-        P::parse(self)
+        P::parse(self).map(|p| self.set_cache::<P>(p, pos))
     }
 
-    pub fn parse_from<P: Parse>(&mut self) -> anyhow::Result<P::Output> {
+    pub fn parse_from<P: 'static + Parse>(&mut self) -> anyhow::Result<P::Output>
+    where
+        P::Output: 'static + Clone,
+    {
+        let pos = self.pos;
+        if let Some(cached) = self.retrieve_cache::<P>() {
+            self.nextn(cached.len);
+            return Ok(cached.value);
+        }
         self.skip_whitespace();
-        P::parse(self)
+        P::parse(self).map(|p| self.set_cache::<P>(p, pos))
     }
 }
 
-pub trait Peek {
+pub trait Peek: Parse {
     fn peek(s: StatementStream<'_>) -> bool;
 }
 
@@ -141,7 +264,11 @@ pub trait Parse {
 
 macro_rules! peek_parse_tuple {
     ($($t:ident),+) => {
-        impl<$($t: Peek + Parse),+> Peek for ($($t),+,) {
+        impl<$($t: Peek + Parse),+> Peek for ($($t),+,)
+        where
+            $($t: 'static  + Clone),+,
+            $($t::Output: 'static  + Clone),+
+        {
             fn peek(mut s: StatementStream<'_>) -> bool {
                 $(
                     if s.parse_from::<Option<$t>>().transpose().is_none() {
@@ -152,7 +279,11 @@ macro_rules! peek_parse_tuple {
             }
         }
 
-        impl<$($t: Parse),+> Parse for ($($t),+,) {
+        impl<$($t: Parse),+> Parse for ($($t),+,)
+        where
+            $($t: 'static  + Clone),+,
+            $($t::Output: 'static + Clone),+
+        {
             type Output = ($($t::Output),+,);
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 Ok(($(
@@ -198,7 +329,7 @@ impl Parse for bool {
         } else if s.parse::<Option<FALSE>>()?.is_some() {
             false
         } else {
-            anyhow::bail!("Expected boolean!")
+            anyhow::bail!("Expected boolean, found {}", s.info())
         })
     }
 }
@@ -239,8 +370,14 @@ peek_parse_number!(u64, Number);
 peek_parse_number!(f32, Float);
 peek_parse_number!(f64, Float);
 
+#[derive(Debug)]
 pub struct If<Cond, Res>(PhantomData<fn(Cond, Res) -> (Cond, Res)>);
-impl<Cond: Peek + Parse, Res: Parse> Parse for If<Cond, Res> {
+impl<Cond: Peek + Parse, Res: 'static + Parse> Parse for If<Cond, Res>
+where
+    Cond: 'static + Clone,
+    Cond::Output: 'static + Clone,
+    Res::Output: 'static + Clone,
+{
     type Output = Option<Res::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         match s.parse_from::<Option<Cond>>()? {
@@ -250,13 +387,19 @@ impl<Cond: Peek + Parse, Res: Parse> Parse for If<Cond, Res> {
     }
 }
 
-impl<T: Peek> Peek for Option<T> {
+impl<T: 'static + Peek + Clone> Peek for Option<T>
+where
+    T::Output: 'static + Clone,
+{
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<T>()
     }
 }
 
-impl<T: Parse + Peek> Parse for Option<T> {
+impl<T: 'static + Parse + Peek + Clone> Parse for Option<T>
+where
+    T::Output: 'static + Clone,
+{
     type Output = Option<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if s.check::<T>() {
@@ -267,8 +410,13 @@ impl<T: Parse + Peek> Parse for Option<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct List<T, Delim>(PhantomData<fn(T, Delim) -> (T, Delim)>);
-impl<T: Parse, Delim: Parse + Peek> Parse for List<T, Delim> {
+impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone> Parse for List<T, Delim>
+where
+    Delim::Output: 'static + Clone,
+    T::Output: 'static + Clone,
+{
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = vec![s.parse_from::<T>()?];
@@ -278,12 +426,23 @@ impl<T: Parse, Delim: Parse + Peek> Parse for List<T, Delim> {
         Ok(res)
     }
 }
-impl<T: Parse, Delim: Parse + Peek> Peek for List<T, Delim> {
+impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone> Peek for List<T, Delim>
+where
+    T::Output: 'static + Clone,
+    Delim::Output: 'static + Clone,
+{
     fn peek(mut s: StatementStream<'_>) -> bool {
         s.parse_from::<Self>().is_ok()
     }
 }
 
+impl<T, Delim> Clone for List<T, Delim> {
+    fn clone(&self) -> Self {
+        Self(PhantomData)
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct Nothing;
 impl Parse for Nothing {
     type Output = Self;
@@ -297,6 +456,7 @@ impl Peek for Nothing {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Whitespace;
 impl Parse for Whitespace {
     type Output = Self;
@@ -317,6 +477,7 @@ impl Peek for Whitespace {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Token;
 impl Parse for Token {
     type Output = String;
@@ -341,6 +502,7 @@ impl Peek for Token {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Alpha;
 impl Parse for Alpha {
     type Output = String;
@@ -366,6 +528,7 @@ impl Peek for Alpha {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Hex;
 impl Parse for Hex {
     type Output = Vec<u8>;
@@ -391,6 +554,7 @@ impl Peek for Hex {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Alphanumeric;
 impl Parse for Alphanumeric {
     type Output = String;
@@ -416,6 +580,7 @@ impl Peek for Alphanumeric {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Number;
 impl Parse for Number {
     type Output = String;
@@ -441,6 +606,7 @@ impl Peek for Number {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct SignedNumber;
 impl Parse for SignedNumber {
     type Output = String;
@@ -475,6 +641,7 @@ impl Peek for SignedNumber {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Float;
 impl Parse for Float {
     type Output = String;
@@ -544,8 +711,12 @@ impl Peek for Float {
 
 macro_rules! parse_peek_group {
     ($g:ident, $l:ident, $r:ident) => {
+        #[derive(Clone, Debug)]
         pub struct $g<T>(T);
-        impl<T: Parse> Parse for $g<T> {
+        impl<T: 'static + Parse> Parse for $g<T>
+        where
+            T::Output: 'static + Clone,
+        {
             type Output = T::Output;
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 s.parse_from::<$l>()?;
@@ -554,7 +725,10 @@ macro_rules! parse_peek_group {
                 Ok(res)
             }
         }
-        impl<T> Peek for $g<T> {
+        impl<T: 'static + Parse> Peek for $g<T>
+        where
+            T::Output: 'static + Clone,
+        {
             fn peek(s: StatementStream<'_>) -> bool {
                 s.check::<$l>()
             }
@@ -569,7 +743,7 @@ parse_peek_group!(Angles, LeftAngle, RightAngle);
 parse_peek_group!(SingleQuoted, SingleQuote, SingleQuote);
 parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum BindMarker {
     #[from(ignore)]
     #[try_into(ignore)]
@@ -610,7 +784,7 @@ impl Parse for Uuid {
         if let Some(u) = s.nextn(36) {
             Ok(Uuid::parse_str(&u)?)
         } else {
-            anyhow::bail!("Invalid UUID: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid UUID: {}", s.info())
         }
     }
 }
@@ -643,16 +817,32 @@ impl Peek for Identifier {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum LitStrKind {
     Quoted,
     Escaped,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct LitStr {
     pub kind: LitStrKind,
     pub value: String,
+}
+
+impl LitStr {
+    pub fn quoted(value: &str) -> Self {
+        Self {
+            kind: LitStrKind::Quoted,
+            value: value.to_string(),
+        }
+    }
+
+    pub fn escaped(value: &str) -> Self {
+        Self {
+            kind: LitStrKind::Escaped,
+            value: value.to_string(),
+        }
+    }
 }
 
 impl Parse for LitStr {
@@ -666,7 +856,10 @@ impl Parse for LitStr {
             kind = LitStrKind::Escaped;
             s.nextn(2);
         } else {
-            return Err(anyhow::anyhow!("Expected opening quote!"));
+            return Err(anyhow::anyhow!(
+                "Expected opening quote for LitStr, found: {}",
+                s.info()
+            ));
         }
         while let Some(c) = s.next() {
             if kind == LitStrKind::Escaped && c == '$' && s.peek().map(|c| c == '$').unwrap_or(false) {
@@ -718,19 +911,38 @@ impl From<&str> for LitStr {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Name {
     Quoted(String),
     Unquoted(String),
+}
+
+impl Name {
+    pub fn quoted(s: &str) -> Self {
+        Name::Quoted(s.to_string())
+    }
+
+    pub fn unquoted(s: &str) -> Self {
+        Name::Unquoted(s.to_string())
+    }
+
+    pub fn term(self, term: impl Into<Term>) -> SimpleSelection {
+        SimpleSelection::Term(self, term.into())
+    }
+
+    pub fn field(self, field: impl Into<Name>) -> SimpleSelection {
+        SimpleSelection::Field(self, field.into())
+    }
 }
 
 impl Parse for Name {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         let mut res = String::new();
-        if s.peek().map(|c| c == '"').unwrap_or(false) {
+        if s.peek().map(|c| c == '\"').unwrap_or(false) {
+            s.next();
             while let Some(c) = s.next() {
-                if c == '"' {
+                if c == '\"' {
                     return Ok(Self::Quoted(res));
                 } else {
                     res.push(c);
@@ -773,17 +985,43 @@ impl Display for Name {
 
 impl From<String> for Name {
     fn from(s: String) -> Self {
-        Self::Quoted(s)
+        if s.contains('\"') || s.contains(char::is_whitespace) {
+            Self::Quoted(s)
+        } else {
+            Self::Unquoted(s)
+        }
     }
 }
 
 impl From<&str> for Name {
     fn from(s: &str) -> Self {
-        Self::Quoted(s.to_string())
+        s.to_string().into()
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+pub trait KeyspaceQualifyExt {
+    fn dot(self, other: impl Into<Name>) -> KeyspaceQualifiedName;
+
+    fn with_keyspace(self, keyspace: impl Into<Name>) -> KeyspaceQualifiedName;
+}
+
+impl<N: Into<Name>> KeyspaceQualifyExt for N {
+    fn dot(self, other: impl Into<Name>) -> KeyspaceQualifiedName {
+        KeyspaceQualifiedName {
+            keyspace: Some(self.into()),
+            name: other.into(),
+        }
+    }
+
+    fn with_keyspace(self, keyspace: impl Into<Name>) -> KeyspaceQualifiedName {
+        KeyspaceQualifiedName {
+            keyspace: Some(keyspace.into()),
+            name: self.into(),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct KeyspaceQualifiedName {
     pub keyspace: Option<Name>,
     pub name: Name,
@@ -814,6 +1052,24 @@ impl Display for KeyspaceQualifiedName {
             self.name.fmt(f)?;
         }
         Ok(())
+    }
+}
+
+impl From<String> for KeyspaceQualifiedName {
+    fn from(s: String) -> Self {
+        Self {
+            keyspace: None,
+            name: s.into(),
+        }
+    }
+}
+
+impl From<&str> for KeyspaceQualifiedName {
+    fn from(s: &str) -> Self {
+        Self {
+            keyspace: None,
+            name: s.into(),
+        }
     }
 }
 
@@ -854,7 +1110,7 @@ impl Parse for StatementOptValue {
         } else if let Some(identifier) = s.parse::<Option<Name>>()? {
             Ok(StatementOptValue::Identifier(identifier))
         } else {
-            anyhow::bail!("Invalid statement option value: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid statement option value: {}", s.info())
         }
     }
 }
@@ -873,6 +1129,7 @@ impl Display for StatementOptValue {
 pub struct ColumnDefinition {
     #[builder(setter(into))]
     pub name: Name,
+    #[builder(setter(into))]
     pub data_type: CqlType,
     #[builder(default)]
     pub static_column: bool,
@@ -923,6 +1180,22 @@ pub struct PrimaryKey {
     pub clustering_columns: Option<Vec<Name>>,
 }
 
+impl PrimaryKey {
+    pub fn partition_key(partition_key: impl Into<PartitionKey>) -> Self {
+        PrimaryKey {
+            partition_key: partition_key.into(),
+            clustering_columns: None,
+        }
+    }
+
+    pub fn clustering_columns(self, clustering_columns: Vec<impl Into<Name>>) -> Self {
+        PrimaryKey {
+            partition_key: self.partition_key,
+            clustering_columns: Some(clustering_columns.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
 impl Parse for PrimaryKey {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
@@ -950,6 +1223,17 @@ impl Display for PrimaryKey {
             )?;
         }
         Ok(())
+    }
+}
+
+impl<N: Into<Name>> From<Vec<N>> for PrimaryKey {
+    fn from(names: Vec<N>) -> Self {
+        let mut names = names.into_iter().map(Into::into);
+        let partition_key = names.next().unwrap().into();
+        PrimaryKey {
+            partition_key,
+            clustering_columns: Some(names.collect()),
+        }
     }
 }
 
@@ -989,6 +1273,22 @@ impl Display for PartitionKey {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+        }
+    }
+}
+
+impl<N: Into<Name>> From<Vec<N>> for PartitionKey {
+    fn from(columns: Vec<N>) -> Self {
+        Self {
+            columns: columns.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl<N: Into<Name>> From<N> for PartitionKey {
+    fn from(column: N) -> Self {
+        Self {
+            columns: vec![column.into()],
         }
     }
 }
@@ -1238,7 +1538,7 @@ impl Parse for Order {
         } else if s.parse::<Option<DESC>>()?.is_some() {
             Ok(Order::Descending)
         } else {
-            anyhow::bail!("Invalid sort order: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid sort order: {}", s.info())
         }
     }
 }
@@ -1275,30 +1575,67 @@ pub enum Relation {
         operator: Operator,
         term: Term,
     },
+    MVExclusion {
+        column: Name,
+    },
+}
+
+impl Relation {
+    pub fn normal(column: impl Into<Name>, operator: Operator, term: impl Into<Term>) -> Self {
+        Self::Normal {
+            column: column.into(),
+            operator,
+            term: term.into(),
+        }
+    }
+
+    pub fn tuple(columns: Vec<impl Into<Name>>, operator: Operator, tuple_literal: Vec<impl Into<Term>>) -> Self {
+        Self::Tuple {
+            columns: columns.into_iter().map(Into::into).collect(),
+            operator,
+            tuple_literal: tuple_literal.into_iter().map(Into::into).collect::<Vec<_>>().into(),
+        }
+    }
+
+    pub fn token(columns: Vec<impl Into<Name>>, operator: Operator, term: impl Into<Term>) -> Self {
+        Self::Token {
+            columns: columns.into_iter().map(Into::into).collect(),
+            operator,
+            term: term.into(),
+        }
+    }
+
+    pub fn is_not_null(column: impl Into<Name>) -> Self {
+        Self::MVExclusion { column: column.into() }
+    }
 }
 
 impl Parse for Relation {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        Ok(if s.parse::<Option<TOKEN>>()?.is_some() {
-            let (columns, operator, term) = s.parse_from::<(Parens<List<Name, Comma>>, Operator, Term)>()?;
-            Relation::Token {
-                columns,
-                operator,
-                term,
-            }
-        } else if s.check::<LeftParen>() {
-            let (columns, operator, tuple_literal) =
-                s.parse_from::<(Parens<List<Name, Comma>>, Operator, TupleLiteral)>()?;
-            Relation::Tuple {
-                columns,
-                operator,
-                tuple_literal,
-            }
-        } else {
-            let (column, operator, term) = s.parse()?;
-            Relation::Normal { column, operator, term }
-        })
+        Ok(
+            if let Some((column, _, _, _)) = s.parse::<Option<(Name, IS, NOT, NULL)>>()? {
+                Relation::MVExclusion { column }
+            } else if s.parse::<Option<TOKEN>>()?.is_some() {
+                let (columns, operator, term) = s.parse_from::<(Parens<List<Name, Comma>>, Operator, Term)>()?;
+                Relation::Token {
+                    columns,
+                    operator,
+                    term,
+                }
+            } else if s.check::<LeftParen>() {
+                let (columns, operator, tuple_literal) =
+                    s.parse_from::<(Parens<List<Name, Comma>>, Operator, TupleLiteral)>()?;
+                Relation::Tuple {
+                    columns,
+                    operator,
+                    tuple_literal,
+                }
+            } else {
+                let (column, operator, term) = s.parse()?;
+                Relation::Normal { column, operator, term }
+            },
+        )
     }
 }
 
@@ -1328,14 +1665,15 @@ impl Display for Relation {
                 operator,
                 term
             ),
+            Relation::MVExclusion { column } => write!(f, "{} IS NOT NULL", column),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, From)]
 pub enum Replication {
     SimpleStrategy(i32),
-    NetworkTopologyStrategy(HashMap<String, i32>),
+    NetworkTopologyStrategy(BTreeMap<String, i32>),
 }
 
 impl Replication {
@@ -1343,7 +1681,7 @@ impl Replication {
         Replication::SimpleStrategy(replication_factor)
     }
 
-    pub fn network_topology(replication_map: HashMap<String, i32>) -> Self {
+    pub fn network_topology(replication_map: BTreeMap<String, i32>) -> Self {
         Replication::NetworkTopologyStrategy(replication_map)
     }
 }
@@ -1408,7 +1746,7 @@ impl TryFrom<MapLiteral> for Replication {
                         anyhow::bail!("Invalid key: {}", k)
                     }
                 } else if s.value.ends_with("NetworkTopologyStrategy") {
-                    let mut map = HashMap::new();
+                    let mut map = BTreeMap::new();
                     for (k, v) in v {
                         if let Term::Constant(Constant::String(s)) = k {
                             if let Term::Constant(Constant::Integer(i)) = v {

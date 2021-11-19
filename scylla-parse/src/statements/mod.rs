@@ -25,7 +25,6 @@ use crate::{
     StatementStream,
     TableOpts,
     Term,
-    Token,
 };
 use derive_builder::Builder;
 use derive_more::{
@@ -136,8 +135,45 @@ impl Parse for Statement {
         } else if let Some(stmt) = s.parse()? {
             Self::Trigger(stmt)
         } else {
-            anyhow::bail!("Invalid statement: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid statement: {}", s.info())
         })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug)]
+pub struct FieldDefinition {
+    pub name: Name,
+    pub data_type: CqlType,
+}
+
+impl Parse for FieldDefinition {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        Ok(Self {
+            name: s.parse()?,
+            data_type: s.parse()?,
+        })
+    }
+}
+
+impl Peek for FieldDefinition {
+    fn peek(s: StatementStream<'_>) -> bool {
+        s.check::<(Name, CqlType)>()
+    }
+}
+
+impl Display for FieldDefinition {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.data_type)
+    }
+}
+
+impl<N: Into<Name>, T: Into<CqlType>> From<(N, T)> for FieldDefinition {
+    fn from((name, data_type): (N, T)) -> Self {
+        Self {
+            name: name.into(),
+            data_type: data_type.into(),
+        }
     }
 }
 

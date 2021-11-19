@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From)]
@@ -26,7 +28,7 @@ impl Parse for RoleStatement {
         } else if let Some(stmt) = s.parse::<Option<ListRolesStatement>>()? {
             Self::List(stmt)
         } else {
-            anyhow::bail!("Expected a role statement!")
+            anyhow::bail!("Expected a role statement, found {}", s.info())
         })
     }
 }
@@ -42,7 +44,7 @@ impl Peek for RoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, Ord, PartialOrd, Eq)]
 pub enum RoleOpt {
     Password(LitStr),
     Login(bool),
@@ -52,6 +54,12 @@ pub enum RoleOpt {
     AccessToAllDatacenters,
 }
 
+impl PartialEq for RoleOpt {
+    fn eq(&self, other: &Self) -> bool {
+        core::mem::discriminant(self) == core::mem::discriminant(other)
+    }
+}
+
 impl Parse for RoleOpt {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
@@ -59,17 +67,76 @@ impl Parse for RoleOpt {
             Self::AccessToAllDatacenters
         } else if s.parse::<Option<(ACCESS, TO, DATACENTERS)>>()?.is_some() {
             Self::AccessToDatacenters(s.parse()?)
-        } else if s.parse::<Option<OPTIONS>>()?.is_some() {
-            Self::Options(s.parse()?)
-        } else if s.parse::<Option<LOGIN>>()?.is_some() {
-            Self::Login(s.parse()?)
-        } else if s.parse::<Option<SUPERUSER>>()?.is_some() {
-            Self::Superuser(s.parse()?)
-        } else if s.parse::<Option<PASSWORD>>()?.is_some() {
-            Self::Password(s.parse()?)
+        } else if let Some(m) = s.parse_from::<If<(OPTIONS, Equals), MapLiteral>>()? {
+            Self::Options(m)
+        } else if let Some(b) = s.parse_from::<If<(LOGIN, Equals), bool>>()? {
+            Self::Login(b)
+        } else if let Some(b) = s.parse_from::<If<(SUPERUSER, Equals), bool>>()? {
+            Self::Superuser(b)
+        } else if let Some(p) = s.parse_from::<If<(PASSWORD, Equals), LitStr>>()? {
+            Self::Password(p)
         } else {
-            anyhow::bail!("Expected a role option!")
+            anyhow::bail!("Expected a role option, found {}", s.info())
         })
+    }
+}
+
+impl Display for RoleOpt {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Password(s) => write!(f, "PASSWORD = {}", s),
+            Self::Login(b) => write!(f, "LOGIN = {}", b),
+            Self::Superuser(b) => write!(f, "SUPERUSER = {}", b),
+            Self::Options(m) => write!(f, "OPTIONS = {}", m),
+            Self::AccessToDatacenters(s) => write!(f, "ACCESS TO DATACENTERS {}", s),
+            Self::AccessToAllDatacenters => write!(f, "ACCESS TO ALL DATACENTERS"),
+        }
+    }
+}
+
+pub trait RoleOptBuilderExt {
+    fn role_opts(&mut self) -> &mut Option<BTreeSet<RoleOpt>>;
+
+    fn password(&mut self, p: impl Into<LitStr>) -> &mut Self {
+        self.role_opts()
+            .get_or_insert_with(Default::default)
+            .insert(RoleOpt::Password(p.into()));
+        self
+    }
+
+    fn login(&mut self, b: bool) -> &mut Self {
+        self.role_opts()
+            .get_or_insert_with(Default::default)
+            .insert(RoleOpt::Login(b));
+        self
+    }
+
+    fn superuser(&mut self, b: bool) -> &mut Self {
+        self.role_opts()
+            .get_or_insert_with(Default::default)
+            .insert(RoleOpt::Superuser(b));
+        self
+    }
+
+    fn role_options(&mut self, m: impl Into<MapLiteral>) -> &mut Self {
+        self.role_opts()
+            .get_or_insert_with(Default::default)
+            .insert(RoleOpt::Options(m.into()));
+        self
+    }
+
+    fn access_to_datacenters(&mut self, s: impl Into<SetLiteral>) -> &mut Self {
+        self.role_opts()
+            .get_or_insert_with(Default::default)
+            .insert(RoleOpt::AccessToDatacenters(s.into()));
+        self
+    }
+
+    fn access_to_all_datacenters(&mut self) -> &mut Self {
+        self.role_opts()
+            .get_or_insert_with(Default::default)
+            .insert(RoleOpt::AccessToAllDatacenters);
+        self
     }
 }
 
@@ -81,7 +148,7 @@ pub struct CreateRoleStatement {
     #[builder(setter(into))]
     pub name: Name,
     #[builder(default)]
-    pub options: Option<Vec<RoleOpt>>,
+    pub options: Option<BTreeSet<RoleOpt>>,
 }
 
 impl Parse for CreateRoleStatement {
@@ -92,7 +159,15 @@ impl Parse for CreateRoleStatement {
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?);
         if let Some(o) = s.parse_from::<If<WITH, List<RoleOpt, AND>>>()? {
-            res.options(o);
+            let mut opts = BTreeSet::new();
+            for opt in o {
+                if opts.contains(&opt) {
+                    anyhow::bail!("Duplicate option: {}", opt);
+                } else {
+                    opts.insert(opt);
+                }
+            }
+            res.options(opts);
         }
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -107,10 +182,42 @@ impl Peek for CreateRoleStatement {
     }
 }
 
+impl Display for CreateRoleStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CREATE ROLE{} {}{}",
+            if self.if_not_exists { "IF NOT EXISTS" } else { "" },
+            self.name,
+            if let Some(ref opts) = self.options {
+                format!(
+                    " WITH {}",
+                    opts.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" AND ")
+                )
+            } else {
+                String::new()
+            }
+        )
+    }
+}
+
+impl RoleOptBuilderExt for CreateRoleStatementBuilder {
+    fn role_opts(&mut self) -> &mut Option<BTreeSet<RoleOpt>> {
+        match self.options {
+            Some(ref mut opts) => opts,
+            None => {
+                self.options = Some(Some(BTreeSet::new()));
+                self.options.as_mut().unwrap()
+            }
+        }
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct AlterRoleStatement {
+    #[builder(setter(into))]
     pub name: Name,
-    pub options: Vec<RoleOpt>,
+    pub options: BTreeSet<RoleOpt>,
 }
 
 impl Parse for AlterRoleStatement {
@@ -118,8 +225,17 @@ impl Parse for AlterRoleStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, ROLE)>()?;
         let mut res = AlterRoleStatementBuilder::default();
-        res.name(s.parse()?)
-            .options(s.parse_from::<(WITH, List<RoleOpt, AND>)>()?.1);
+        res.name(s.parse::<Name>()?);
+        let o = s.parse_from::<(WITH, List<RoleOpt, AND>)>()?.1;
+        let mut opts = BTreeSet::new();
+        for opt in o {
+            if opts.contains(&opt) {
+                anyhow::bail!("Duplicate option: {}", opt);
+            } else {
+                opts.insert(opt);
+            }
+        }
+        res.options(opts);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -130,6 +246,27 @@ impl Parse for AlterRoleStatement {
 impl Peek for AlterRoleStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(ALTER, ROLE)>()
+    }
+}
+
+impl Display for AlterRoleStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ALTER ROLE {} WITH {}",
+            self.name,
+            self.options
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        )
+    }
+}
+
+impl RoleOptBuilderExt for AlterRoleStatementBuilder {
+    fn role_opts(&mut self) -> &mut Option<BTreeSet<RoleOpt>> {
+        &mut self.options
     }
 }
 
@@ -146,9 +283,20 @@ impl Parse for DropRoleStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, ROLE)>()?;
         let mut res = DropRoleStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?);
-        s.parse::<Option<Semicolon>>()?;
+        loop {
+            if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
+                break;
+            }
+            if s.parse::<Option<(IF, EXISTS)>>()?.is_some() {
+                res.if_exists(true);
+            } else if let Some(n) = s.parse::<Option<Name>>()? {
+                res.name(n);
+            } else {
+                return Ok(res
+                    .build()
+                    .map_err(|_| anyhow::anyhow!("Invalid tokens in DROP ROLE statement: {}", s.info()))?);
+            }
+        }
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP ROLE statement: {}", e))?)
@@ -158,6 +306,17 @@ impl Parse for DropRoleStatement {
 impl Peek for DropRoleStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(DROP, ROLE)>()
+    }
+}
+
+impl Display for DropRoleStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DROP ROLE{} {}",
+            if self.if_exists { " IF EXISTS" } else { "" },
+            self.name
+        )
     }
 }
 
@@ -188,6 +347,12 @@ impl Peek for GrantRoleStatement {
     }
 }
 
+impl Display for GrantRoleStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GRANT {} TO {}", self.name, self.to)
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct RevokeRoleStatement {
     pub name: Name,
@@ -212,6 +377,12 @@ impl Parse for RevokeRoleStatement {
 impl Peek for RevokeRoleStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(REVOKE, Name, FROM)>()
+    }
+}
+
+impl Display for RevokeRoleStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "REVOKE {} FROM {}", self.name, self.from)
     }
 }
 
@@ -246,6 +417,21 @@ impl Peek for ListRolesStatement {
     }
 }
 
+impl Display for ListRolesStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LIST ROLES{}{}",
+            if let Some(n) = &self.name {
+                format!(" OF {}", n)
+            } else {
+                String::new()
+            },
+            if self.no_recursive { " NORECURSIVE" } else { "" },
+        )
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug)]
 pub enum Permission {
     Create,
@@ -261,7 +447,7 @@ pub enum Permission {
 impl Parse for Permission {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(match s.parse::<ReservedKeyword>()? {
+        Ok(match s.parse::<(ReservedKeyword, Option<PERMISSION>)>()?.0 {
             ReservedKeyword::CREATE => Permission::Create,
             ReservedKeyword::ALTER => Permission::Alter,
             ReservedKeyword::DROP => Permission::Drop,
@@ -272,6 +458,25 @@ impl Parse for Permission {
             ReservedKeyword::EXECUTE => Permission::Execute,
             p @ _ => anyhow::bail!("Invalid permission: {}", p),
         })
+    }
+}
+
+impl Display for Permission {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Permission::Create => "CREATE",
+                Permission::Alter => "ALTER",
+                Permission::Drop => "DROP",
+                Permission::Select => "SELECT",
+                Permission::Modify => "MODIFY",
+                Permission::Authorize => "AUTHORIZE",
+                Permission::Describe => "DESCRIBE",
+                Permission::Execute => "EXECUTE",
+            }
+        )
     }
 }
 
@@ -298,6 +503,21 @@ impl Peek for PermissionKind {
     }
 }
 
+impl Display for PermissionKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PermissionKind::All => write!(f, "ALL PERMISSIONS"),
+            PermissionKind::One(p) => write!(f, "{} PERMISSION", p),
+        }
+    }
+}
+
+impl From<Permission> for PermissionKind {
+    fn from(p: Permission) -> Self {
+        PermissionKind::One(p)
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug)]
 pub enum Resource {
     AllKeyspaces,
@@ -309,6 +529,46 @@ pub enum Resource {
     Function(FunctionReference),
     AllMBeans,
     MBean(LitStr),
+}
+
+impl Resource {
+    pub fn all_keyspaces() -> Self {
+        Resource::AllKeyspaces
+    }
+
+    pub fn keyspace(name: impl Into<Name>) -> Self {
+        Resource::Keyspace(name.into())
+    }
+
+    pub fn table(name: impl Into<KeyspaceQualifiedName>) -> Self {
+        Resource::Table(name.into())
+    }
+
+    pub fn all_roles() -> Self {
+        Resource::AllRoles
+    }
+
+    pub fn role(name: impl Into<Name>) -> Self {
+        Resource::Role(name.into())
+    }
+
+    pub fn all_functions(keyspace: impl Into<Option<Name>>) -> Self {
+        Resource::AllFunctions {
+            keyspace: keyspace.into(),
+        }
+    }
+
+    pub fn function(name: impl Into<FunctionReference>) -> Self {
+        Resource::Function(name.into())
+    }
+
+    pub fn all_mbeans() -> Self {
+        Resource::AllMBeans
+    }
+
+    pub fn mbean(name: impl Into<LitStr>) -> Self {
+        Resource::MBean(name.into())
+    }
 }
 
 impl Parse for Resource {
@@ -334,10 +594,12 @@ impl Parse for Resource {
             Self::MBean(s.parse()?)
         } else if s.parse::<Option<MBEANS>>()?.is_some() {
             Self::MBean(s.parse()?)
-        } else if let Some(name) = s.parse::<Option<(Option<TABLE>, _)>>()? {
-            Self::Table(name.1)
+        } else if let Some(t) = s.parse_from::<If<TABLE, KeyspaceQualifiedName>>()? {
+            Self::Table(t)
+        } else if let Some(name) = s.parse::<Option<KeyspaceQualifiedName>>()? {
+            Self::Table(name)
         } else {
-            anyhow::bail!("Invalid resource: {}", s.parse_from::<Token>()?)
+            anyhow::bail!("Invalid resource: {}", s.info())
         })
     }
 }
@@ -354,6 +616,28 @@ impl Peek for Resource {
             || s.check::<MBEAN>()
             || s.check::<MBEANS>()
             || s.check::<(Option<TABLE>, KeyspaceQualifiedName)>()
+    }
+}
+
+impl Display for Resource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Resource::AllKeyspaces => write!(f, "ALL KEYSPACES"),
+            Resource::Keyspace(n) => write!(f, "KEYSPACE {}", n),
+            Resource::Table(n) => write!(f, "TABLE {}", n),
+            Resource::AllRoles => write!(f, "ALL ROLES"),
+            Resource::Role(n) => write!(f, "ROLE {}", n),
+            Resource::AllFunctions { keyspace } => {
+                write!(f, "ALL FUNCTIONS")?;
+                if let Some(k) = keyspace {
+                    write!(f, " IN KEYSPACE {}", k)?;
+                }
+                Ok(())
+            }
+            Resource::Function(r) => write!(f, "FUNCTION {}", r),
+            Resource::AllMBeans => write!(f, "ALL MBEANS"),
+            Resource::MBean(n) => write!(f, "MBEAN {}", n),
+        }
     }
 }
 
@@ -374,7 +658,7 @@ impl Parse for PermissionStatement {
         } else if let Some(stmt) = s.parse::<Option<ListPermissionsStatement>>()? {
             Self::List(stmt)
         } else {
-            anyhow::bail!("Expected a permission statement!")
+            anyhow::bail!("Expected a permission statement, found {}", s.info())
         })
     }
 }
@@ -388,8 +672,9 @@ impl Peek for PermissionStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(into))]
 pub struct GrantPermissionStatement {
-    pub permissions: PermissionKind,
+    pub permission: PermissionKind,
     pub resource: Resource,
     pub to: Name,
 }
@@ -399,11 +684,11 @@ impl Parse for GrantPermissionStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<GRANT>()?;
         let mut res = GrantPermissionStatementBuilder::default();
-        res.permissions(s.parse()?);
+        res.permission(s.parse::<PermissionKind>()?);
         s.parse::<ON>()?;
-        res.resource(s.parse()?);
+        res.resource(s.parse::<Resource>()?);
         s.parse::<TO>()?;
-        res.to(s.parse()?);
+        res.to(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -417,9 +702,16 @@ impl Peek for GrantPermissionStatement {
     }
 }
 
+impl Display for GrantPermissionStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GRANT {} ON {} TO {}", self.permission, self.resource, self.to)
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug)]
+#[builder(setter(into))]
 pub struct RevokePermissionStatement {
-    pub permissions: PermissionKind,
+    pub permission: PermissionKind,
     pub resource: Resource,
     pub from: Name,
 }
@@ -429,11 +721,11 @@ impl Parse for RevokePermissionStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<REVOKE>()?;
         let mut res = RevokePermissionStatementBuilder::default();
-        res.permissions(s.parse()?);
+        res.permission(s.parse::<PermissionKind>()?);
         s.parse::<ON>()?;
-        res.resource(s.parse()?);
+        res.resource(s.parse::<Resource>()?);
         s.parse::<FROM>()?;
-        res.from(s.parse()?);
+        res.from(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -447,14 +739,21 @@ impl Peek for RevokePermissionStatement {
     }
 }
 
+impl Display for RevokePermissionStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "REVOKE {} ON {} FROM {}", self.permission, self.resource, self.from)
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug)]
 #[builder(setter(strip_option))]
 pub struct ListPermissionsStatement {
-    pub permissions: PermissionKind,
-    #[builder(default)]
+    #[builder(setter(into))]
+    pub permission: PermissionKind,
+    #[builder(setter(into), default)]
     pub resource: Option<Resource>,
     #[builder(setter(into), default)]
-    pub role: Option<Name>,
+    pub of: Option<Name>,
     #[builder(default)]
     pub no_recursive: bool,
 }
@@ -464,23 +763,27 @@ impl Parse for ListPermissionsStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<LIST>()?;
         let mut res = ListPermissionsStatementBuilder::default();
-        res.permissions(s.parse()?);
+        res.permission(s.parse::<PermissionKind>()?);
         loop {
+            if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
+                break;
+            }
             if let Some(resource) = s.parse_from::<If<ON, Resource>>()? {
                 if res.resource.is_some() {
                     anyhow::bail!("Duplicate ON RESOURCE clause!");
                 }
                 res.resource(resource);
             } else if let Some(role) = s.parse_from::<If<OF, Name>>()? {
-                if res.role.is_some() {
+                if res.of.is_some() {
                     anyhow::bail!("Duplicate OF ROLE clause!");
                 }
-                res.role(role).no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
+                res.of(role).no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
             } else {
-                break;
+                return Ok(res
+                    .build()
+                    .map_err(|_| anyhow::anyhow!("Invalid tokens in LIST PERMISSION statement: {}", s.info()))?);
             }
         }
-        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid LIST PERMISSION statement: {}", e))?)
@@ -490,6 +793,28 @@ impl Parse for ListPermissionsStatement {
 impl Peek for ListPermissionsStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(LIST, PermissionKind)>()
+    }
+}
+
+impl Display for ListPermissionsStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LIST {}{}",
+            self.permission,
+            if let Some(resource) = &self.resource {
+                format!(" ON {}", resource)
+            } else {
+                String::new()
+            }
+        )?;
+        if let Some(role) = &self.of {
+            write!(f, " OF {}", role)?;
+            if self.no_recursive {
+                write!(f, " NORECURSIVE")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -513,7 +838,7 @@ impl Parse for UserStatement {
         } else if let Some(stmt) = s.parse::<Option<ListUsersStatement>>()? {
             Self::List(stmt)
         } else {
-            anyhow::bail!("Expected a user statement!")
+            anyhow::bail!("Expected a user statement, found {}", s.info())
         })
     }
 }
@@ -537,7 +862,7 @@ pub struct CreateUserStatement {
     #[builder(setter(into), default)]
     pub with_password: Option<LitStr>,
     #[builder(default)]
-    pub superuser: bool,
+    pub superuser: Option<bool>,
 }
 
 impl Parse for CreateUserStatement {
@@ -548,6 +873,9 @@ impl Parse for CreateUserStatement {
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?);
         loop {
+            if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
+                break;
+            }
             if let Some(password) = s.parse_from::<If<(WITH, PASSWORD), LitStr>>()? {
                 if res.with_password.is_some() {
                     anyhow::bail!("Duplicate WITH PASSWORD clause!");
@@ -564,10 +892,11 @@ impl Parse for CreateUserStatement {
                 }
                 res.superuser(false);
             } else {
-                break;
+                return Ok(res
+                    .build()
+                    .map_err(|_| anyhow::anyhow!("Invalid tokens in CREATE USER statement: {}", s.info()))?);
             }
         }
-        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE USER statement: {}", e))?)
@@ -577,6 +906,24 @@ impl Parse for CreateUserStatement {
 impl Peek for CreateUserStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(CREATE, USER)>()
+    }
+}
+
+impl Display for CreateUserStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CREATE USER{} {}",
+            if self.if_not_exists { " IF NOT EXISTS" } else { "" },
+            self.name
+        )?;
+        if let Some(password) = &self.with_password {
+            write!(f, " WITH PASSWORD {}", password)?;
+        }
+        if let Some(superuser) = self.superuser {
+            write!(f, " {}", if superuser { "SUPERUSER" } else { "NOSUPERUSER" })?;
+        }
+        Ok(())
     }
 }
 
@@ -598,6 +945,9 @@ impl Parse for AlterUserStatement {
         let mut res = AlterUserStatementBuilder::default();
         res.name(s.parse::<Name>()?);
         loop {
+            if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
+                break;
+            }
             if let Some(password) = s.parse_from::<If<(WITH, PASSWORD), LitStr>>()? {
                 if res.with_password.is_some() {
                     anyhow::bail!("Duplicate WITH PASSWORD clause!");
@@ -614,10 +964,11 @@ impl Parse for AlterUserStatement {
                 }
                 res.superuser(false);
             } else {
-                break;
+                return Ok(res
+                    .build()
+                    .map_err(|_| anyhow::anyhow!("Invalid tokens in ALTER USER statement: {}", s.info()))?);
             }
         }
-        s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid ALTER USER statement: {}", e))?)
@@ -627,6 +978,19 @@ impl Parse for AlterUserStatement {
 impl Peek for AlterUserStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(ALTER, USER)>()
+    }
+}
+
+impl Display for AlterUserStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ALTER USER {}", self.name)?;
+        if let Some(password) = &self.with_password {
+            write!(f, " WITH PASSWORD {}", password)?;
+        }
+        if let Some(superuser) = self.superuser {
+            write!(f, " {}", if superuser { "SUPERUSER" } else { "NOSUPERUSER" })?;
+        }
+        Ok(())
     }
 }
 
@@ -658,6 +1022,17 @@ impl Peek for DropUserStatement {
     }
 }
 
+impl Display for DropUserStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DROP USER{} {}",
+            if self.if_exists { " IF EXISTS" } else { "" },
+            self.name
+        )
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct ListUsersStatement;
 
@@ -672,6 +1047,12 @@ impl Parse for ListUsersStatement {
 impl Peek for ListUsersStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(LIST, USERS)>()
+    }
+}
+
+impl Display for ListUsersStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LIST USERS")
     }
 }
 
@@ -736,25 +1117,15 @@ impl Peek for CreateUserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
-pub struct FieldDefinition {
-    pub name: Name,
-    pub data_type: CqlType,
-}
-
-impl Parse for FieldDefinition {
-    type Output = Self;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        Ok(Self {
-            name: s.parse()?,
-            data_type: s.parse()?,
-        })
-    }
-}
-
-impl Peek for FieldDefinition {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(Name, CqlType)>()
+impl Display for CreateUserDefinedTypeStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CREATE TYPE{} {} ({})",
+            if self.if_not_exists { " IF NOT EXISTS" } else { "" },
+            self.name,
+            self.fields.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", ")
+        )
     }
 }
 
@@ -783,6 +1154,12 @@ impl Peek for AlterUserDefinedTypeStatement {
     }
 }
 
+impl Display for AlterUserDefinedTypeStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ALTER TYPE {} {}", self.name, self.instruction)
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug)]
 pub enum AlterTypeInstruction {
     Add(FieldDefinition),
@@ -804,6 +1181,21 @@ impl Parse for AlterTypeInstruction {
         } else {
             anyhow::bail!("Invalid ALTER TYPE instruction!");
         })
+    }
+}
+
+impl Display for AlterTypeInstruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Add(d) => write!(f, "ADD {}", d),
+            Self::Rename(renames) => {
+                let renames = renames
+                    .iter()
+                    .map(|(a, b)| format!(" {} TO {}", a, b))
+                    .collect::<String>();
+                write!(f, "RENAME{}", renames)
+            }
+        }
     }
 }
 
@@ -831,5 +1223,102 @@ impl Parse for DropUserDefinedTypeStatement {
 impl Peek for DropUserDefinedTypeStatement {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(DROP, TYPE)>()
+    }
+}
+
+impl Display for DropUserDefinedTypeStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DROP TYPE{} {}",
+            if self.if_exists { " IF EXISTS" } else { "" },
+            self.name
+        )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_create_role() {
+        let s = "CREATE ROLE IF NOT EXISTS admin WITH PASSWORD = 'admin' AND SUPERUSER = true AND LOGIN = true";
+        let stmt = s.parse::<CreateRoleStatement>().unwrap();
+        let test = CreateRoleStatementBuilder::default()
+            .if_not_exists(true)
+            .name("admin")
+            .password("admin")
+            .superuser(true)
+            .login(true)
+            .build()
+            .unwrap();
+        assert_eq!(stmt.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_alter_role() {
+        let s = "ALTER ROLE admin WITH PASSWORD = 'admin' AND SUPERUSER = true AND LOGIN = true";
+        let stmt = s.parse::<AlterRoleStatement>().unwrap();
+        let test = AlterRoleStatementBuilder::default()
+            .name("admin")
+            .password("admin")
+            .superuser(true)
+            .login(true)
+            .build()
+            .unwrap();
+        assert_eq!(stmt.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_drop_role() {
+        let s = "DROP ROLE admin IF EXISTS";
+        let stmt = s.parse::<DropRoleStatement>().unwrap();
+        let test = DropRoleStatementBuilder::default()
+            .if_exists(true)
+            .name("admin")
+            .build()
+            .unwrap();
+        assert_eq!(stmt.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_grant_permission() {
+        let s = "GRANT MODIFY PERMISSION ON KEYSPACE test TO admin";
+        let stmt = s.parse::<GrantPermissionStatement>().unwrap();
+        let test = GrantPermissionStatementBuilder::default()
+            .permission(Permission::Modify)
+            .resource(Resource::keyspace("test"))
+            .to("admin")
+            .build()
+            .unwrap();
+        assert_eq!(stmt.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_revoke_permission() {
+        let s = "REVOKE ALL PERMISSIONS ON TABLE test FROM admin";
+        let stmt = s.parse::<RevokePermissionStatement>().unwrap();
+        let test = RevokePermissionStatementBuilder::default()
+            .permission(PermissionKind::All)
+            .resource(Resource::table("test"))
+            .from("admin")
+            .build()
+            .unwrap();
+        assert_eq!(stmt.to_string(), test.to_string());
+    }
+
+    #[test]
+    fn test_parse_list_permissions() {
+        let s = "LIST SELECT PERMISSION ON MBEAN 'test' OF admin NORECURSIVE";
+        let stmt = s.parse::<ListPermissionsStatement>().unwrap();
+        let test = ListPermissionsStatementBuilder::default()
+            .permission(Permission::Select)
+            .resource(Resource::mbean("test"))
+            .of("admin")
+            .no_recursive(true)
+            .build()
+            .unwrap();
+        assert_eq!(stmt.to_string(), test.to_string());
     }
 }

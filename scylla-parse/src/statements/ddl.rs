@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use super::*;
 use crate::{
     ColumnDefinition,
@@ -40,7 +38,7 @@ impl Parse for DataDefinitionStatement {
         } else if let Some(stmt) = s.parse::<Option<TruncateStatement>>()? {
             Self::Truncate(stmt)
         } else {
-            anyhow::bail!("Expected data definition statement!")
+            anyhow::bail!("Expected data definition statement, found {}", s.info())
         })
     }
 }
@@ -102,6 +100,7 @@ impl Display for UseStatement {
 
 #[derive(Builder, Clone, Debug)]
 pub struct KeyspaceOpts {
+    #[builder(setter(into))]
     pub replication: Replication,
     #[builder(setter(strip_option), default)]
     pub durable_writes: Option<bool>,
@@ -119,7 +118,7 @@ impl Parse for KeyspaceOpts {
                     if res.replication.is_some() {
                         anyhow::bail!("Duplicate replication option");
                     } else if let StatementOptValue::Map(m) = value {
-                        res.replication(m.try_into()?);
+                        res.replication(Replication::try_from(m)?);
                     } else {
                         anyhow::bail!("Invalid replication value: {}", value);
                     }
@@ -156,6 +155,7 @@ impl Display for KeyspaceOpts {
 pub struct CreateKeyspaceStatement {
     #[builder(default)]
     pub if_not_exists: bool,
+    #[builder(setter(into))]
     pub keyspace: Name,
     pub options: KeyspaceOpts,
 }
@@ -166,7 +166,7 @@ impl Parse for CreateKeyspaceStatement {
         s.parse::<(CREATE, KEYSPACE)>()?;
         let mut res = CreateKeyspaceStatementBuilder::default();
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .keyspace(s.parse()?);
+            .keyspace(s.parse::<Name>()?);
         s.parse::<WITH>()?;
         res.options(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
@@ -206,6 +206,7 @@ impl KeyspaceOptionsExt for CreateKeyspaceStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug)]
 pub struct AlterKeyspaceStatement {
+    #[builder(setter(into))]
     pub keyspace: Name,
     pub options: KeyspaceOpts,
 }
@@ -215,7 +216,7 @@ impl Parse for AlterKeyspaceStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, KEYSPACE)>()?;
         let mut res = AlterKeyspaceStatementBuilder::default();
-        res.keyspace(s.parse()?);
+        res.keyspace(s.parse::<Name>()?);
         s.parse::<WITH>()?;
         res.options(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
@@ -241,6 +242,7 @@ impl Display for AlterKeyspaceStatement {
 pub struct DropKeyspaceStatement {
     #[builder(default)]
     pub if_exists: bool,
+    #[builder(setter(into))]
     pub keyspace: Name,
 }
 
@@ -250,7 +252,7 @@ impl Parse for DropKeyspaceStatement {
         s.parse::<(DROP, KEYSPACE)>()?;
         let mut res = DropKeyspaceStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .keyspace(s.parse()?);
+            .keyspace(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -408,7 +410,7 @@ impl Parse for AlterTableInstruction {
             } else if s.parse::<Option<WITH>>()?.is_some() {
                 Self::With(s.parse_from::<List<StatementOpt, AND>>()?)
             } else {
-                anyhow::bail!("Invalid ALTER TABLE instruction: {}", s.parse_from::<Token>()?);
+                anyhow::bail!("Invalid ALTER TABLE instruction: {}", s.info());
             },
         )
     }
@@ -505,15 +507,14 @@ impl Display for TruncateStatement {
     }
 }
 
+#[cfg(test)]
 mod test {
-    #[allow(unused)]
     use super::*;
-    #[allow(unused)]
     use crate::{
         ColumnDefinition,
         Compaction,
         Compression,
-        CqlType,
+        KeyspaceQualifyExt,
         NativeType,
         SpeculativeRetry,
     };
@@ -540,30 +541,30 @@ mod test {
             } 
             AND memtable_flush_period_in_ms = 0 
             AND gc_grace_seconds = 864000";
-        let res = StatementStream::new(statement).parse::<CreateTableStatement>().unwrap();
+        let res = statement.parse::<CreateTableStatement>().unwrap();
         let test = CreateTableStatementBuilder::default()
             .if_not_exists(true)
-            .table("test.test".parse().unwrap())
+            .table("test".dot("test"))
             .columns(vec![
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("id".to_string()))
-                    .data_type("int".parse().unwrap())
+                    .name("id")
+                    .data_type(NativeType::Int)
                     .primary_key(true)
                     .build()
                     .unwrap(),
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("name".to_string()))
-                    .data_type("text".parse().unwrap())
+                    .name("name")
+                    .data_type(NativeType::Text)
                     .build()
                     .unwrap(),
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("age".to_string()))
-                    .data_type("int".parse().unwrap())
+                    .name("age")
+                    .data_type(NativeType::Int)
                     .build()
                     .unwrap(),
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("created_at".to_string()))
-                    .data_type("timestamp".parse().unwrap())
+                    .name("created_at")
+                    .data_type(NativeType::Timestamp)
                     .build()
                     .unwrap(),
             ])
@@ -591,26 +592,26 @@ mod test {
             ";
         let res = StatementStream::new(statement).parse::<AlterTableStatement>().unwrap();
         let test = AlterTableStatementBuilder::default()
-            .table("test.test".parse().unwrap())
+            .table("test".dot("test"))
             .instruction(AlterTableInstruction::Add(vec![
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("new_id".to_string()))
-                    .data_type("int".parse().unwrap())
+                    .name("new_id")
+                    .data_type(NativeType::Int)
                     .build()
                     .unwrap(),
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("new_name".to_string()))
-                    .data_type("text".parse().unwrap())
+                    .name("new_name")
+                    .data_type(NativeType::Text)
                     .build()
                     .unwrap(),
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("new_age".to_string()))
-                    .data_type("int".parse().unwrap())
+                    .name("new_age")
+                    .data_type(NativeType::Int)
                     .build()
                     .unwrap(),
                 ColumnDefinition::build()
-                    .name(Name::Unquoted("new_created_at".to_string()))
-                    .data_type("timestamp".parse().unwrap())
+                    .name("new_created_at")
+                    .data_type(NativeType::Timestamp)
                     .build()
                     .unwrap(),
             ]))
@@ -622,10 +623,10 @@ mod test {
     #[test]
     fn test_parse_drop_table() {
         let statement = "DROP TABLE test.test;";
-        let res = StatementStream::new(statement).parse::<DropTableStatement>().unwrap();
+        let res = statement.parse::<DropTableStatement>().unwrap();
         let test = DropTableStatementBuilder::default()
             .if_exists(false)
-            .table("test.test".parse().unwrap())
+            .table("test".dot("test"))
             .build()
             .unwrap();
         assert_eq!(res.to_string(), test.to_string());
@@ -640,15 +641,13 @@ mod test {
                 'replication_factor': 1
             }
             AND durable_writes = true";
-        let res = StatementStream::new(statement)
-            .parse::<CreateKeyspaceStatement>()
-            .unwrap();
+        let res = statement.parse::<CreateKeyspaceStatement>().unwrap();
         let test = CreateKeyspaceStatementBuilder::default()
             .if_not_exists(true)
-            .keyspace("test".parse().unwrap())
+            .keyspace("test")
             .options(
                 KeyspaceOptsBuilder::default()
-                    .replication(Replication::simple(1))
+                    .replication(1)
                     .durable_writes(true)
                     .build()
                     .unwrap(),
@@ -664,19 +663,19 @@ mod test {
             ALTER KEYSPACE test
             WITH replication = {
                 'class': 'NetworkTopologyStrategy',
+                'DC1': 1,
                 'DC2': 3
             }
             AND durable_writes = false;";
-        let res = StatementStream::new(statement)
-            .parse::<AlterKeyspaceStatement>()
-            .unwrap();
+        let res = statement.parse::<AlterKeyspaceStatement>().unwrap();
         let test = AlterKeyspaceStatementBuilder::default()
-            .keyspace("test".parse().unwrap())
+            .keyspace("test")
             .options(
                 KeyspaceOptsBuilder::default()
-                    .replication(Replication::NetworkTopologyStrategy(maplit::hashmap! {
-                        "DC2".to_string() => 3
-                    }))
+                    .replication(maplit::btreemap! {
+                        "DC2".to_string() => 3,
+                        "DC1".to_string() => 1
+                    })
                     .durable_writes(false)
                     .build()
                     .unwrap(),
@@ -689,12 +688,10 @@ mod test {
     #[test]
     fn test_parse_drop_keyspace() {
         let statement = "DROP KEYSPACE test;";
-        let res = StatementStream::new(statement)
-            .parse::<DropKeyspaceStatement>()
-            .unwrap();
+        let res = statement.parse::<DropKeyspaceStatement>().unwrap();
         let test = DropKeyspaceStatementBuilder::default()
             .if_exists(false)
-            .keyspace("test".parse().unwrap())
+            .keyspace("test")
             .build()
             .unwrap();
         assert_eq!(res.to_string(), test.to_string());
