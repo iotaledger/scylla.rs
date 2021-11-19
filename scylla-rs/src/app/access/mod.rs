@@ -691,9 +691,7 @@ pub mod tests {
     impl Select<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = QueryStatement;
         fn statement(&self) -> SelectStatement {
-            let mut stmt: SelectStatement = parse_statement!("SELECT col2 FROM my_table WHERE key = ?");
-            stmt.set_keyspace(&self.name);
-            stmt
+            parse_statement!("SELECT col2 FROM my_table WHERE key = ?").with_keyspace(self.name())
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {

@@ -7,6 +7,7 @@ use crate::{
     CompactionType,
     Compression,
     CqlType,
+    CustomToTokens,
     If,
     KeyspaceQualifiedName,
     List,
@@ -25,13 +26,17 @@ use crate::{
     StatementStream,
     TableOpts,
     Term,
+    TokenWrapper,
 };
 use derive_builder::Builder;
 use derive_more::{
     From,
     TryInto,
 };
-use scylla_parse_macros::ParseFromStr;
+use scylla_parse_macros::{
+    ParseFromStr,
+    ToTokens,
+};
 use std::{
     convert::TryFrom,
     fmt::{
@@ -62,7 +67,7 @@ pub use security::*;
 mod trigger;
 pub use trigger::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum Statement {
     DataDefinition(DataDefinitionStatement),
     DataManipulation(DataManipulationStatement),
@@ -140,7 +145,7 @@ impl Parse for Statement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct FieldDefinition {
     pub name: Name,
     pub data_type: CqlType,
@@ -181,7 +186,15 @@ impl<N: Into<Name>, T: Into<CqlType>> From<(N, T)> for FieldDefinition {
 pub trait KeyspaceExt {
     fn get_keyspace(&self) -> Option<String>;
 
-    fn set_keyspace(&mut self, keyspace: &str);
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>);
+
+    fn with_keyspace(mut self, keyspace: impl Into<Name>) -> Self
+    where
+        Self: Sized,
+    {
+        self.set_keyspace(keyspace);
+        self
+    }
 }
 
 pub trait WhereExt {

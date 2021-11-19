@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum SecondaryIndexStatement {
     Create(CreateIndexStatement),
     Drop(DropIndexStatement),
@@ -25,7 +25,7 @@ impl Peek for SecondaryIndexStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct CreateIndexStatement {
     #[builder(default)]
@@ -94,7 +94,7 @@ impl Display for CreateIndexStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum IndexIdentifier {
     Column(Name),
     Qualified(IndexQualifier, Name),
@@ -144,7 +144,7 @@ impl<N: Into<Name>> From<N> for IndexIdentifier {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum IndexQualifier {
     Keys,
     Values,
@@ -180,7 +180,7 @@ impl Display for IndexQualifier {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct IndexClass {
     pub path: LitStr,
     pub options: Option<MapLiteral>,
@@ -227,7 +227,7 @@ impl Display for IndexClass {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropIndexStatement {
     #[builder(default)]
     pub if_exists: bool,

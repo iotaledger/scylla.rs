@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum TriggerStatement {
     Create(CreateTriggerStatement),
     Drop(DropTriggerStatement),
@@ -25,7 +25,7 @@ impl Peek for TriggerStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct CreateTriggerStatement {
     #[builder(default)]
     pub if_not_exists: bool,
@@ -72,7 +72,7 @@ impl Display for CreateTriggerStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropTriggerStatement {
     #[builder(default)]
     pub if_exists: bool,

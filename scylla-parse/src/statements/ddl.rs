@@ -6,7 +6,7 @@ use crate::{
     StatementOptValue,
 };
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum DataDefinitionStatement {
     Use(UseStatement),
     CreateKeyspace(CreateKeyspaceStatement),
@@ -71,7 +71,7 @@ impl Display for DataDefinitionStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct UseStatement {
     pub keyspace: Name,
 }
@@ -98,7 +98,7 @@ impl Display for UseStatement {
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+#[derive(Builder, Clone, Debug, ToTokens)]
 pub struct KeyspaceOpts {
     #[builder(setter(into))]
     pub replication: Replication,
@@ -151,7 +151,7 @@ impl Display for KeyspaceOpts {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct CreateKeyspaceStatement {
     #[builder(default)]
     pub if_not_exists: bool,
@@ -204,7 +204,7 @@ impl KeyspaceOptionsExt for CreateKeyspaceStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct AlterKeyspaceStatement {
     #[builder(setter(into))]
     pub keyspace: Name,
@@ -238,7 +238,7 @@ impl Display for AlterKeyspaceStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropKeyspaceStatement {
     #[builder(default)]
     pub if_exists: bool,
@@ -277,7 +277,7 @@ impl Display for DropKeyspaceStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct CreateTableStatement {
     #[builder(default)]
@@ -353,7 +353,7 @@ impl TableOptionsExt for CreateTableStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct AlterTableStatement {
     pub table: KeyspaceQualifiedName,
     pub instruction: AlterTableInstruction,
@@ -384,7 +384,7 @@ impl Display for AlterTableStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum AlterTableInstruction {
     Add(Vec<ColumnDefinition>),
     Drop(Vec<Name>),
@@ -439,7 +439,7 @@ impl Display for AlterTableInstruction {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropTableStatement {
     #[builder(default)]
     pub if_exists: bool,
@@ -477,7 +477,7 @@ impl Display for DropTableStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct TruncateStatement {
     pub table: KeyspaceQualifiedName,
 }

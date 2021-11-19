@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum RoleStatement {
     Create(CreateRoleStatement),
     Alter(AlterRoleStatement),
@@ -44,7 +44,7 @@ impl Peek for RoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, Ord, PartialOrd, Eq)]
+#[derive(ParseFromStr, Clone, Debug, Ord, PartialOrd, Eq, ToTokens)]
 pub enum RoleOpt {
     Password(LitStr),
     Login(bool),
@@ -140,7 +140,7 @@ pub trait RoleOptBuilderExt {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct CreateRoleStatement {
     #[builder(default)]
@@ -213,7 +213,7 @@ impl RoleOptBuilderExt for CreateRoleStatementBuilder {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct AlterRoleStatement {
     #[builder(setter(into))]
     pub name: Name,
@@ -270,7 +270,7 @@ impl RoleOptBuilderExt for AlterRoleStatementBuilder {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropRoleStatement {
     #[builder(default)]
     pub if_exists: bool,
@@ -320,7 +320,7 @@ impl Display for DropRoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct GrantRoleStatement {
     pub name: Name,
     pub to: Name,
@@ -353,7 +353,7 @@ impl Display for GrantRoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct RevokeRoleStatement {
     pub name: Name,
     pub from: Name,
@@ -386,7 +386,7 @@ impl Display for RevokeRoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct ListRolesStatement {
     #[builder(setter(into), default)]
@@ -432,7 +432,7 @@ impl Display for ListRolesStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum Permission {
     Create,
     Alter,
@@ -480,7 +480,7 @@ impl Display for Permission {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum PermissionKind {
     All,
     One(Permission),
@@ -518,7 +518,7 @@ impl From<Permission> for PermissionKind {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum Resource {
     AllKeyspaces,
     Keyspace(Name),
@@ -641,7 +641,7 @@ impl Display for Resource {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum PermissionStatement {
     Grant(GrantPermissionStatement),
     Revoke(RevokePermissionStatement),
@@ -671,7 +671,7 @@ impl Peek for PermissionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(into))]
 pub struct GrantPermissionStatement {
     pub permission: PermissionKind,
@@ -708,7 +708,7 @@ impl Display for GrantPermissionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(into))]
 pub struct RevokePermissionStatement {
     pub permission: PermissionKind,
@@ -745,7 +745,7 @@ impl Display for RevokePermissionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct ListPermissionsStatement {
     #[builder(setter(into))]
@@ -818,7 +818,7 @@ impl Display for ListPermissionsStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum UserStatement {
     Create(CreateUserStatement),
     Alter(AlterUserStatement),
@@ -852,7 +852,7 @@ impl Peek for UserStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct CreateUserStatement {
     #[builder(default)]
@@ -927,7 +927,7 @@ impl Display for CreateUserStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct AlterUserStatement {
     #[builder(setter(into))]
@@ -994,7 +994,7 @@ impl Display for AlterUserStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropUserStatement {
     #[builder(default)]
     pub if_exists: bool,
@@ -1033,7 +1033,7 @@ impl Display for DropUserStatement {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ToTokens)]
 pub struct ListUsersStatement;
 
 impl Parse for ListUsersStatement {
@@ -1056,7 +1056,7 @@ impl Display for ListUsersStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum UserDefinedTypeStatement {
     Create(CreateUserDefinedTypeStatement),
     Alter(AlterUserDefinedTypeStatement),
@@ -1088,7 +1088,7 @@ impl Peek for UserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct CreateUserDefinedTypeStatement {
     #[builder(default)]
     pub if_not_exists: bool,
@@ -1129,7 +1129,7 @@ impl Display for CreateUserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct AlterUserDefinedTypeStatement {
     pub name: KeyspaceQualifiedName,
     pub instruction: AlterTypeInstruction,
@@ -1160,7 +1160,7 @@ impl Display for AlterUserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum AlterTypeInstruction {
     Add(FieldDefinition),
     Rename(Vec<(Name, Name)>),
@@ -1199,7 +1199,7 @@ impl Display for AlterTypeInstruction {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropUserDefinedTypeStatement {
     #[builder(default)]
     pub if_exists: bool,

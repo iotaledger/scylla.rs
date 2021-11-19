@@ -7,11 +7,19 @@ use derive_more::{
     From,
     TryInto,
 };
-use scylla_parse_macros::ParseFromStr;
+use quote::{
+    quote,
+    ToTokens,
+};
+use scylla_parse_macros::{
+    ParseFromStr,
+    ToTokens,
+};
 use std::{
     cell::RefCell,
     collections::{
         BTreeMap,
+        BTreeSet,
         HashMap,
     },
     convert::{
@@ -743,7 +751,7 @@ parse_peek_group!(Angles, LeftAngle, RightAngle);
 parse_peek_group!(SingleQuoted, SingleQuote, SingleQuote);
 parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum BindMarker {
     #[from(ignore)]
     #[try_into(ignore)]
@@ -782,7 +790,7 @@ impl Parse for Uuid {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(u) = s.nextn(36) {
-            Ok(Uuid::parse_str(&u)?)
+            Ok(uuid::Uuid::parse_str(&u)?)
         } else {
             anyhow::bail!("Invalid UUID: {}", s.info())
         }
@@ -794,7 +802,14 @@ impl Peek for Uuid {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq)]
+impl<'a> CustomToTokens<'a> for Uuid {
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let u = self.to_string();
+        tokens.extend(quote!(Uuid::parse_str(#u).unwrap()));
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq, ToTokens)]
 pub enum Identifier {
     Name(Name),
     Keyword(ReservedKeyword),
@@ -817,13 +832,13 @@ impl Peek for Identifier {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum LitStrKind {
     Quoted,
     Escaped,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct LitStr {
     pub kind: LitStrKind,
     pub value: String,
@@ -911,7 +926,7 @@ impl From<&str> for LitStr {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, ToTokens)]
 pub enum Name {
     Quoted(String),
     Unquoted(String),
@@ -1021,7 +1036,7 @@ impl<N: Into<Name>> KeyspaceQualifyExt for N {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct KeyspaceQualifiedName {
     pub keyspace: Option<Name>,
     pub name: Name,
@@ -1073,7 +1088,7 @@ impl From<&str> for KeyspaceQualifiedName {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct StatementOpt {
     pub name: Name,
     pub value: StatementOptValue,
@@ -1093,7 +1108,7 @@ impl Display for StatementOpt {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum StatementOptValue {
     Identifier(Name),
     Constant(Constant),
@@ -1125,7 +1140,7 @@ impl Display for StatementOptValue {
     }
 }
 
-#[derive(Builder, Clone, Debug)]
+#[derive(Builder, Clone, Debug, ToTokens)]
 pub struct ColumnDefinition {
     #[builder(setter(into))]
     pub name: Name,
@@ -1174,7 +1189,7 @@ impl Display for ColumnDefinition {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct PrimaryKey {
     pub partition_key: PartitionKey,
     pub clustering_columns: Option<Vec<Name>>,
@@ -1237,7 +1252,7 @@ impl<N: Into<Name>> From<Vec<N>> for PrimaryKey {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct PartitionKey {
     pub columns: Vec<Name>,
 }
@@ -1294,7 +1309,7 @@ impl<N: Into<Name>> From<N> for PartitionKey {
 }
 
 // TODO: Scylla encryption opts and caching?
-#[derive(Builder, Clone, Debug, Default)]
+#[derive(Builder, Clone, Debug, Default, ToTokens)]
 #[builder(setter(strip_option), default)]
 pub struct TableOpts {
     pub compact_storage: bool,
@@ -1504,7 +1519,7 @@ impl Display for TableOpts {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct ColumnOrder {
     pub column: Name,
     pub order: Order,
@@ -1524,7 +1539,7 @@ impl Display for ColumnOrder {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ToTokens)]
 pub enum Order {
     Ascending,
     Descending,
@@ -1558,7 +1573,7 @@ impl Display for Order {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum Relation {
     Normal {
         column: Name,
@@ -1670,7 +1685,7 @@ impl Display for Relation {
     }
 }
 
-#[derive(Clone, Debug, From)]
+#[derive(Clone, Debug, From, ToTokens)]
 pub enum Replication {
     SimpleStrategy(i32),
     NetworkTopologyStrategy(BTreeMap<String, i32>),
@@ -1768,7 +1783,7 @@ impl TryFrom<MapLiteral> for Replication {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum SpeculativeRetry {
     None,
     Always,
@@ -1813,7 +1828,7 @@ impl Display for SpeculativeRetry {
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug, Default)]
+#[derive(Builder, Copy, Clone, Debug, Default, ToTokens)]
 #[builder(setter(strip_option), default)]
 pub struct SizeTieredCompactionStrategy {
     enabled: Option<bool>,
@@ -1880,7 +1895,7 @@ impl Display for SizeTieredCompactionStrategy {
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug, Default)]
+#[derive(Builder, Copy, Clone, Debug, Default, ToTokens)]
 #[builder(setter(strip_option), default)]
 pub struct LeveledCompactionStrategy {
     enabled: Option<bool>,
@@ -1943,7 +1958,7 @@ impl Display for LeveledCompactionStrategy {
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug, Default)]
+#[derive(Builder, Copy, Clone, Debug, Default, ToTokens)]
 #[builder(setter(strip_option), default)]
 pub struct TimeWindowCompactionStrategy {
     enabled: Option<bool>,
@@ -2015,7 +2030,7 @@ impl Display for TimeWindowCompactionStrategy {
 
 pub trait CompactionType: Display + Into<Compaction> {}
 
-#[derive(Clone, Debug, From, TryInto)]
+#[derive(Clone, Debug, From, TryInto, ToTokens)]
 pub enum Compaction {
     SizeTiered(SizeTieredCompactionStrategy),
     Leveled(LeveledCompactionStrategy),
@@ -2198,7 +2213,7 @@ impl Display for Compaction {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ToTokens)]
 pub enum JavaTimeUnit {
     Minutes,
     Hours,
@@ -2236,7 +2251,7 @@ impl Display for JavaTimeUnit {
     }
 }
 
-#[derive(Builder, Clone, Debug, Default)]
+#[derive(Builder, Clone, Debug, Default, ToTokens)]
 #[builder(setter(strip_option), default)]
 pub struct Compression {
     #[builder(setter(into))]
@@ -2307,7 +2322,7 @@ impl TryFrom<MapLiteral> for Compression {
     }
 }
 
-#[derive(Builder, Clone, Debug, Default)]
+#[derive(Builder, Clone, Debug, Default, ToTokens)]
 #[builder(setter(strip_option), default)]
 pub struct Caching {
     keys: Option<Keys>,
@@ -2356,7 +2371,7 @@ impl TryFrom<MapLiteral> for Caching {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ToTokens)]
 pub enum Keys {
     All,
     None,
@@ -2390,7 +2405,7 @@ impl Display for Keys {
     }
 }
 
-#[derive(ParseFromStr, Copy, Clone, Debug)]
+#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens)]
 pub enum RowsPerPartition {
     All,
     None,
@@ -2421,3 +2436,134 @@ impl Display for RowsPerPartition {
         }
     }
 }
+
+trait CustomToTokens<'a> {
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream);
+}
+
+struct TokenWrapper<'a, T>(pub &'a T);
+
+impl<'a, T> ToTokens for TokenWrapper<'a, T>
+where
+    T: CustomToTokens<'a>,
+{
+    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+        self.0.to_tokens(tokens);
+    }
+}
+
+impl<'a, T: 'a> CustomToTokens<'a> for Option<T>
+where
+    TokenWrapper<'a, T>: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        tokens.extend(match self {
+            Some(t) => {
+                let t = TokenWrapper(t);
+                quote! {Some(#t)}
+            }
+            None => quote! {None},
+        });
+    }
+}
+
+impl<'a, T: 'a> CustomToTokens<'a> for Box<T>
+where
+    T: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let i = self;
+        tokens.extend(quote! {Box::new(#i)});
+    }
+}
+
+impl<'a, T: 'a> CustomToTokens<'a> for Vec<T>
+where
+    TokenWrapper<'a, T>: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let t = self.iter().map(|t| TokenWrapper(t));
+        tokens.extend(quote! { vec![#(#t),*]});
+    }
+}
+
+impl<'a, K: 'static, V: 'static> CustomToTokens<'a> for HashMap<K, V>
+where
+    TokenWrapper<'a, K>: ToTokens,
+    TokenWrapper<'a, V>: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let t = self.iter().map(|(k, v)| {
+            let (k, v) = (TokenWrapper(k), TokenWrapper(v));
+            quote! {#k => #v}
+        });
+        tokens.extend(quote! { hashmap![#(#t),*]});
+    }
+}
+
+impl<'a, K: 'static, V: 'static> CustomToTokens<'a> for BTreeMap<K, V>
+where
+    TokenWrapper<'a, K>: ToTokens,
+    TokenWrapper<'a, V>: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let t = self.iter().map(|(k, v)| {
+            let (k, v) = (TokenWrapper(k), TokenWrapper(v));
+            quote! {#k => #v}
+        });
+        tokens.extend(quote! { btreemap![#(#t),*]});
+    }
+}
+
+impl<'a, K: 'static> CustomToTokens<'a> for BTreeSet<K>
+where
+    TokenWrapper<'a, K>: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let t = self.iter().map(|k| TokenWrapper(k));
+        tokens.extend(quote! { btreeset![#(#t),*]});
+    }
+}
+
+impl<'a> CustomToTokens<'a> for String {
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let s = self;
+        tokens.extend(quote! { #s.to_string() });
+    }
+}
+
+macro_rules! impl_custom_to_tokens {
+    ($($t:ty),*) => {
+        $(
+            impl<'a> CustomToTokens<'a> for $t {
+                fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+                    ToTokens::to_tokens(self, tokens);
+                }
+            }
+        )*
+    };
+}
+
+impl_custom_to_tokens!(i8, i32, i64, u8, u32, u64, f32, f64, bool, char);
+
+macro_rules! impl_custom_to_tokens_tuple {
+    ($(($t:ident, $v:ident)),+) => {
+        impl<'a, $($t: ToTokens),+> CustomToTokens<'a> for ($($t),+,) {
+            fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+                let ( $($v),*, ) = self;
+                tokens.extend(quote! { ($(#$v),*) });
+            }
+        }
+    };
+}
+
+impl_custom_to_tokens_tuple!((T0, t0));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6), (T7, t7));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6), (T7, t7), (T8, t8));
+impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6), (T7, t7), (T8, t8), (T9, t9));

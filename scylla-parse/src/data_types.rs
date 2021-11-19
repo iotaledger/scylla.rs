@@ -4,6 +4,7 @@ use super::{
     BindMarker,
     Braces,
     Brackets,
+    CustomToTokens,
     Float,
     FunctionCall,
     Hex,
@@ -21,6 +22,7 @@ use crate::{
     Alpha,
     KeyspaceQualifiedName,
     LitStr,
+    TokenWrapper,
 };
 use chrono::{
     DateTime,
@@ -32,7 +34,10 @@ use derive_more::{
     From,
     TryInto,
 };
-use scylla_parse_macros::ParseFromStr;
+use scylla_parse_macros::{
+    ParseFromStr,
+    ToTokens,
+};
 use std::{
     collections::{
         BTreeMap,
@@ -50,7 +55,7 @@ use std::{
 };
 use uuid::Uuid;
 
-#[derive(ParseFromStr, Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum ArithmeticOp {
     Add,
     Sub,
@@ -103,7 +108,7 @@ impl Peek for ArithmeticOp {
     }
 }
 
-#[derive(ParseFromStr, Copy, Clone, Debug)]
+#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens)]
 pub enum Operator {
     Equal,
     NotEqual,
@@ -290,7 +295,7 @@ impl Peek for TimeUnit {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum Term {
     Constant(Constant),
     Literal(Literal),
@@ -501,14 +506,14 @@ impl_from_constant_to_term!(f64);
 impl_from_constant_to_term!(bool);
 impl_from_constant_to_term!(Uuid);
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum Constant {
     Null,
     String(LitStr),
     Integer(String),
     Float(String),
     Boolean(bool),
-    Uuid(Uuid),
+    Uuid(#[wrap] Uuid),
     Hex(Vec<u8>),
     Blob(Vec<u8>),
 }
@@ -692,7 +697,7 @@ impl From<Uuid> for Constant {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum Literal {
     Collection(CollectionTypeLiteral),
     UserDefined(UserDefinedTypeLiteral),
@@ -729,7 +734,7 @@ impl Display for Literal {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, From)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, From, ToTokens)]
 pub enum CqlType {
     Native(NativeType),
     Collection(CollectionType),
@@ -785,7 +790,7 @@ impl Display for CqlType {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum NativeType {
     Ascii,
     Bigint,
@@ -894,7 +899,7 @@ impl Peek for NativeType {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum CollectionTypeLiteral {
     List(ListLiteral),
     Set(SetLiteral),
@@ -931,7 +936,7 @@ impl Display for CollectionTypeLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum CollectionType {
     List(Box<CqlType>),
     Set(Box<CqlType>),
@@ -973,7 +978,7 @@ impl Display for CollectionType {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct MapLiteral {
     pub elements: BTreeMap<Term, Term>,
 }
@@ -1021,7 +1026,7 @@ impl<T: Into<Term>> From<HashMap<T, T>> for MapLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct TupleLiteral {
     pub elements: Vec<Term>,
 }
@@ -1065,7 +1070,7 @@ impl<T: Into<Term>> From<Vec<T>> for TupleLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct SetLiteral {
     pub elements: Vec<Term>,
 }
@@ -1106,7 +1111,7 @@ impl<T: Into<Term>> From<Vec<T>> for SetLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct ListLiteral {
     pub elements: Vec<Term>,
 }
@@ -1196,7 +1201,7 @@ impl Parse for TimeLiteral {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, ToTokens)]
 pub struct DurationLiteral {
     pub months: i32,
     pub days: i32,
@@ -1251,7 +1256,7 @@ impl Display for DurationLiteral {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct UserDefinedTypeLiteral {
     pub fields: BTreeMap<Name, Term>,
 }

@@ -3,10 +3,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use scylla_parse::{Statement, StatementStream};
-
-mod to_tokens;
-use to_tokens::*;
+use scylla_parse::{DataDefinitionStatement, DataManipulationStatement, SecondaryIndexStatement, Statement};
 
 #[proc_macro_derive(ColumnEncoder, attributes(column, encode, decode))]
 pub fn column_encoder_derive(input: TokenStream) -> TokenStream {
@@ -485,22 +482,68 @@ pub fn row_derive(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn parse_statement(item: TokenStream) -> TokenStream {
-    let statement_str = syn::parse_macro_input!(item as syn::LitStr).value();
-    let statement = StatementStream::new(&statement_str).parse::<Statement>().unwrap();
-    let res = match &statement {
-        Statement::DataDefinition(_) => todo!(),
-        Statement::DataManipulation(dml) => {
-            let dml = Tokenable(dml);
-            quote!(Statement::DataManipulation(#dml).try_into().unwrap())
+    let res = syn::parse_macro_input!(item as syn::LitStr).value().parse::<Statement>().unwrap();
+    match res {
+        Statement::DataDefinition(stmt) => match stmt {
+            DataDefinitionStatement::Use(stmt) => quote!(#stmt),
+            DataDefinitionStatement::CreateKeyspace(stmt) => quote!(#stmt),
+            DataDefinitionStatement::AlterKeyspace(stmt) => quote!(#stmt),
+            DataDefinitionStatement::DropKeyspace(stmt) => quote!(#stmt),
+            DataDefinitionStatement::CreateTable(stmt) => quote!(#stmt),
+            DataDefinitionStatement::AlterTable(stmt) => quote!(#stmt),
+            DataDefinitionStatement::DropTable(stmt) => quote!(#stmt),
+            DataDefinitionStatement::Truncate(stmt) => quote!(#stmt),
         },
-        Statement::SecondaryIndex(_) => todo!(),
-        Statement::MaterializedView(_) => todo!(),
-        Statement::Role(_) => todo!(),
-        Statement::Permission(_) => todo!(),
-        Statement::User(_) => todo!(),
-        Statement::UserDefinedFunction(_) => todo!(),
-        Statement::UserDefinedType(_) => todo!(),
-        Statement::Trigger(_) => todo!(),
-    };
-    res.into()
+        Statement::DataManipulation(stmt) => match stmt {
+            DataManipulationStatement::Select(stmt) => quote!(#stmt),
+            DataManipulationStatement::Insert(stmt) => quote!(#stmt),
+            DataManipulationStatement::Update(stmt) => quote!(#stmt),
+            DataManipulationStatement::Delete(stmt) => quote!(#stmt),
+            DataManipulationStatement::Batch(stmt) => quote!(#stmt),
+        },
+        Statement::SecondaryIndex(stmt) => match stmt {
+            SecondaryIndexStatement::Create(stmt) => quote!(#stmt),
+            SecondaryIndexStatement::Drop(stmt) => quote!(#stmt),
+        },
+        Statement::MaterializedView(stmt) => match stmt {
+            scylla_parse::MaterializedViewStatement::Create(stmt) => quote!(#stmt),
+            scylla_parse::MaterializedViewStatement::Alter(stmt) => quote!(#stmt),
+            scylla_parse::MaterializedViewStatement::Drop(stmt) => quote!(#stmt),
+        },
+        Statement::Role(stmt) => match stmt {
+            scylla_parse::RoleStatement::Create(stmt) => quote!(#stmt),
+            scylla_parse::RoleStatement::Alter(stmt) => quote!(#stmt),
+            scylla_parse::RoleStatement::Drop(stmt) => quote!(#stmt),
+            scylla_parse::RoleStatement::Grant(stmt) => quote!(#stmt),
+            scylla_parse::RoleStatement::Revoke(stmt) => quote!(#stmt),
+            scylla_parse::RoleStatement::List(stmt) => quote!(#stmt),
+        }
+        Statement::Permission(stmt) => match stmt {
+            scylla_parse::PermissionStatement::Grant(stmt) => quote!(#stmt),
+            scylla_parse::PermissionStatement::Revoke(stmt) => quote!(#stmt),
+            scylla_parse::PermissionStatement::List(stmt) => quote!(#stmt),
+        }
+        Statement::User(stmt) => match stmt {
+            scylla_parse::UserStatement::Create(stmt) => quote!(#stmt),
+            scylla_parse::UserStatement::Alter(stmt) => quote!(#stmt),
+            scylla_parse::UserStatement::Drop(stmt) => quote!(#stmt),
+            scylla_parse::UserStatement::List(stmt) => quote!(#stmt),
+        }
+        Statement::UserDefinedFunction(stmt) => match stmt {
+            scylla_parse::UserDefinedFunctionStatement::Create(stmt) => quote!(#stmt),
+            scylla_parse::UserDefinedFunctionStatement::Drop(stmt) => quote!(#stmt),
+            scylla_parse::UserDefinedFunctionStatement::CreateAggregate(stmt) => quote!(#stmt),
+            scylla_parse::UserDefinedFunctionStatement::DropAggregate(stmt) => quote!(#stmt),
+        }
+        Statement::UserDefinedType(stmt) => match stmt {
+            scylla_parse::UserDefinedTypeStatement::Create(stmt) => quote!(#stmt),
+            scylla_parse::UserDefinedTypeStatement::Alter(stmt) => quote!(#stmt),
+            scylla_parse::UserDefinedTypeStatement::Drop(stmt) => quote!(#stmt),
+        }
+        Statement::Trigger(stmt) => match stmt {
+            scylla_parse::TriggerStatement::Create(stmt) => quote!(#stmt),
+            scylla_parse::TriggerStatement::Drop(stmt) => quote!(#stmt),
+        }
+    }
+    .into()
 }

@@ -2,7 +2,7 @@ use crate::PrimaryKey;
 
 use super::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum MaterializedViewStatement {
     Create(CreateMaterializedViewStatement),
     Alter(AlterMaterializedViewStatement),
@@ -34,7 +34,7 @@ impl Peek for MaterializedViewStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct CreateMaterializedViewStatement {
     #[builder(default)]
     pub if_not_exists: bool,
@@ -83,7 +83,7 @@ impl Display for CreateMaterializedViewStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct AlterMaterializedViewStatement {
     #[builder(setter(into))]
     pub name: Name,
@@ -116,7 +116,7 @@ impl Display for AlterMaterializedViewStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropMaterializedViewStatement {
     pub if_exists: bool,
     #[builder(setter(into))]
@@ -157,7 +157,6 @@ impl Display for DropMaterializedViewStatement {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::TableOptsBuilder;
 
     #[test]
     fn test_parse_create_mv() {
@@ -183,7 +182,7 @@ mod test {
             )
             .primary_key(vec!["population", "species"])
             .table_opts(
-                TableOptsBuilder::default()
+                crate::TableOptsBuilder::default()
                     .comment("Allow query by population instead of species")
                     .build()
                     .unwrap(),
@@ -200,7 +199,12 @@ mod test {
         let parsed = stmt.parse::<AlterMaterializedViewStatement>().unwrap();
         let test = AlterMaterializedViewStatementBuilder::default()
             .name("monkeySpecies_by_population")
-            .table_opts(TableOptsBuilder::default().default_time_to_live(100).build().unwrap())
+            .table_opts(
+                crate::TableOptsBuilder::default()
+                    .default_time_to_live(100)
+                    .build()
+                    .unwrap(),
+            )
             .build()
             .unwrap();
         assert_eq!(parsed.to_string(), test.to_string());

@@ -4,14 +4,18 @@ use super::{
     Peek,
     StatementStream,
     StreamInfo,
+    CustomToTokens
 };
-use scylla_parse_macros::ParseFromStr;
+use scylla_parse_macros::{
+    ParseFromStr,
+    ToTokens,
+};
 use std::{
     fmt::Display,
     str::FromStr,
 };
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, ToTokens)]
 pub enum ReservedKeyword {
     ADD,
     ALLOW,

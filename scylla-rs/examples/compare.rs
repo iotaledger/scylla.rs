@@ -332,9 +332,7 @@ impl ToString for MyKeyspace {
 impl Insert<String, i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
     fn statement(&self) -> InsertStatement {
-        let mut stmt: InsertStatement = parse_statement!("INSERT INTO test (key, data) VALUES (?, ?)");
-        stmt.set_keyspace(&self.name());
-        stmt
+        parse_statement!("INSERT INTO test (key, data) VALUES (?, ?)").with_keyspace(self.name())
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, value: &i32) -> T {
@@ -346,9 +344,7 @@ impl Select<String, (), i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
 
     fn statement(&self) -> SelectStatement {
-        let mut stmt: SelectStatement = parse_statement!("SELECT data FROM test WHERE key = ?");
-        stmt.set_keyspace(&self.name());
-        stmt
+        parse_statement!("SELECT data FROM test WHERE key = ?").with_keyspace(self.name())
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, _variables: &()) -> T {

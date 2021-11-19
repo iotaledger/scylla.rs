@@ -9,7 +9,7 @@ use crate::{
     TupleLiteral,
 };
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum DataManipulationStatement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -58,7 +58,7 @@ impl Display for DataManipulationStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct SelectStatement {
     #[builder(default)]
@@ -200,8 +200,8 @@ impl KeyspaceExt for SelectStatement {
         self.from.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
-    fn set_keyspace(&mut self, keyspace: &str) {
-        self.from.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        self.from.table.keyspace.replace(keyspace.into());
     }
 }
 
@@ -211,7 +211,7 @@ impl WhereExt for SelectStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum SelectClauseKind {
     All,
     Selectors(Vec<Selector>),
@@ -254,7 +254,7 @@ impl From<Vec<Selector>> for SelectClauseKind {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct Selector {
     #[builder(setter(into))]
     pub kind: SelectorKind,
@@ -330,7 +330,7 @@ impl Display for Selector {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct SelectorFunction {
     pub function: Name,
     pub args: Vec<Selector>,
@@ -382,7 +382,7 @@ impl Display for SelectorFunction {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum SelectorKind {
     Column(Name),
     Term(Term),
@@ -428,7 +428,7 @@ impl Display for SelectorKind {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct InsertStatement {
     #[builder(setter(into))]
@@ -502,12 +502,12 @@ impl KeyspaceExt for InsertStatement {
         self.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
-    fn set_keyspace(&mut self, keyspace: &str) {
-        self.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        self.table.keyspace.replace(keyspace.into());
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum InsertKind {
     NameValue {
         names: Vec<Name>,
@@ -568,7 +568,7 @@ impl Display for InsertKind {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum UpdateParameter {
     TTL(Limit),
     Timestamp(Limit),
@@ -612,7 +612,7 @@ impl Display for UpdateParameter {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct UpdateStatement {
     #[builder(setter(into))]
@@ -685,8 +685,8 @@ impl KeyspaceExt for UpdateStatement {
         self.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
-    fn set_keyspace(&mut self, keyspace: &str) {
-        self.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        self.table.keyspace.replace(keyspace.into());
     }
 }
 
@@ -696,7 +696,7 @@ impl WhereExt for UpdateStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum Assignment {
     Simple {
         selection: SimpleSelection,
@@ -769,7 +769,7 @@ impl Display for Assignment {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum SimpleSelection {
     Column(Name),
     Term(Name, Term),
@@ -823,7 +823,7 @@ impl From<&str> for SimpleSelection {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct Condition {
     pub lhs: SimpleSelection,
     pub op: Operator,
@@ -844,7 +844,7 @@ impl Display for Condition {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum IfClause {
     Exists,
     Conditions(Vec<Condition>),
@@ -886,7 +886,7 @@ impl Display for IfClause {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct DeleteStatement {
     #[builder(default)]
@@ -961,8 +961,8 @@ impl KeyspaceExt for DeleteStatement {
         self.from.table.keyspace.as_ref().map(|n| n.to_string())
     }
 
-    fn set_keyspace(&mut self, keyspace: &str) {
-        self.from.table.keyspace = Some(Name::Quoted(keyspace.to_string()));
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        self.from.table.keyspace.replace(keyspace.into());
     }
 }
 
@@ -972,7 +972,7 @@ impl WhereExt for DeleteStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct BatchStatement {
     #[builder(default)]
     pub kind: BatchKind,
@@ -1111,7 +1111,7 @@ impl Display for BatchStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum ModificationStatement {
     Insert(InsertStatement),
     Update(UpdateStatement),
@@ -1155,7 +1155,7 @@ impl Display for ModificationStatement {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ToTokens)]
 pub enum BatchKind {
     Logged,
     Unlogged,
@@ -1181,7 +1181,7 @@ impl Default for BatchKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, ToTokens)]
 pub struct FromClause {
     pub table: KeyspaceQualifiedName,
 }
@@ -1228,7 +1228,7 @@ impl From<&str> for FromClause {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, ToTokens)]
 pub struct WhereClause {
     pub relations: Vec<Relation>,
 }
@@ -1267,7 +1267,7 @@ impl From<Vec<Relation>> for WhereClause {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, ToTokens)]
 pub struct GroupByClause {
     pub columns: Vec<Name>,
 }
@@ -1300,7 +1300,7 @@ impl Display for GroupByClause {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, ToTokens)]
 pub struct OrderingClause {
     pub columns: Vec<ColumnOrder>,
 }
@@ -1333,7 +1333,7 @@ impl Display for OrderingClause {
     }
 }
 
-#[derive(Clone, Debug, From)]
+#[derive(Clone, Debug, From, ToTokens)]
 pub enum Limit {
     Literal(i32),
     BindMarker(BindMarker),
@@ -1365,7 +1365,7 @@ impl Display for Limit {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ToTokens)]
 pub enum ColumnDefault {
     Null,
     Unset,

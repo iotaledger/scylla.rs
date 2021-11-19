@@ -2,7 +2,7 @@ use super::*;
 
 pub type FunctionName = KeyspaceQualifiedName;
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct FunctionDeclaration {
     #[builder(setter(into))]
     pub name: FunctionName,
@@ -30,7 +30,7 @@ impl Display for FunctionDeclaration {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub struct FunctionReference {
     pub name: FunctionName,
     pub args: Option<Vec<CqlType>>,
@@ -66,7 +66,7 @@ impl From<FunctionName> for FunctionReference {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct FunctionCall {
     pub name: FunctionName,
     pub args: Vec<Term>,
@@ -96,7 +96,7 @@ impl Display for FunctionCall {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum UserDefinedFunctionStatement {
     Create(CreateFunctionStatement),
     Drop(DropFunctionStatement),
@@ -130,7 +130,7 @@ impl Peek for UserDefinedFunctionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct CreateFunctionStatement {
     #[builder(default)]
     pub or_replace: bool,
@@ -188,7 +188,7 @@ impl Display for CreateFunctionStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens)]
 pub enum OnNullInput {
     Called,
     ReturnsNull,
@@ -218,7 +218,7 @@ impl Display for OnNullInput {
 
 pub type ArgumentDeclaration = FieldDefinition;
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropFunctionStatement {
     #[builder(default)]
     pub if_exists: bool,
@@ -256,7 +256,7 @@ impl Display for DropFunctionStatement {
         )
     }
 }
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 #[builder(setter(strip_option))]
 pub struct CreateAggregateFunctionStatement {
     #[builder(default)]
@@ -338,7 +338,7 @@ impl Display for CreateAggregateFunctionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
 pub struct DropAggregateFunctionStatement {
     #[builder(default)]
     pub if_exists: bool,
