@@ -29,7 +29,7 @@ impl PrepareWorker {
 impl From<PrepareRequest> for PrepareWorker {
     fn from(request: PrepareRequest) -> Self {
         Self {
-            id: md5::compute(request.statement().as_bytes()).into(),
+            id: md5::compute(Request::statement(&request).as_bytes()).into(),
             retries: 0,
             request,
         }
@@ -37,13 +37,16 @@ impl From<PrepareRequest> for PrepareWorker {
 }
 impl Worker for PrepareWorker {
     fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
-        info!("Successfully prepared statement: '{}'", self.request.statement());
+        info!(
+            "Successfully prepared statement: '{}'",
+            Request::statement(&self.request)
+        );
         Ok(())
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!(
             "Failed to prepare statement: {}, error: {}",
-            self.request.statement(),
+            Request::statement(&self.request),
             error
         );
         self.retry().ok();
@@ -101,7 +104,7 @@ where
             Err(e) => self.handle.handle_error(WorkerError::Other(e)),
         }
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
         match self.retry() {
             Ok(_) => Ok(()),

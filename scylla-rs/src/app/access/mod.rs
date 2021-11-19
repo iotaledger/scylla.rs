@@ -595,6 +595,7 @@ impl Marker for DecodeVoid {
 #[derive(Clone)]
 pub struct DecodeResult<T> {
     inner: T,
+    /// Identify the type of request
     pub request_type: RequestType,
 }
 impl<T> DecodeResult<T> {

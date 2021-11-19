@@ -36,11 +36,11 @@ mod select;
 mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
-pub trait Worker: Send + Sync + std::fmt::Debug {
+pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
     /// Reporter will invoke this method to Send the cql response to worker
     fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()>;
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()>;
 }
 
 #[derive(Error, Debug)]
@@ -280,5 +280,26 @@ where
     let payload = worker.request().payload();
     let retry_request = ReporterEvent::Request { worker, payload };
     reporter.send(retry_request).ok();
+    Ok(())
+}
+
+/// retry to send a request
+pub fn retry_send(keyspace: &str, mut r: RingSendError, mut retries: u8) -> Result<(), Box<dyn Worker>> {
+    loop {
+        if let ReporterEvent::Request { worker, payload } = r.into() {
+            if retries > 0 {
+                if let Err(still_error) = send_global(Some(keyspace), rand::random(), payload, worker) {
+                    r = still_error;
+                    retries -= 1;
+                } else {
+                    break;
+                };
+            } else {
+                return Err(worker);
+            }
+        } else {
+            unreachable!("the reporter variant must be request");
+        }
+    }
     Ok(())
 }

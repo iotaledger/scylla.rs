@@ -1,2 +1,2 @@
 ## About
-Ring holds the Scylla cluster topology in thread local storage.
+Shared Ring holds the Scylla cluster topology in static variable

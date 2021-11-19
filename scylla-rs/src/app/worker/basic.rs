@@ -24,7 +24,7 @@ impl Worker for BasicWorker {
         Ok(())
     }
 
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         anyhow::bail!(error);
     }
 }
@@ -104,10 +104,14 @@ where
         Ok(())
     }
 
-    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+    fn handle_error(
+        self: Box<Self>,
+        mut error: WorkerError,
+        reporter_opt: Option<&ReporterHandle>,
+    ) -> anyhow::Result<()> {
         error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let Some(id) = cql_error.take_unprepared_id() {
+            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter_opt) {
                 handle_unprepared_error(self, id, reporter).map_err(|worker| {
                     error!("Error trying to reprepare query: {}", worker.request().statement());
                     anyhow::anyhow!("Error trying to reprepare query!")
