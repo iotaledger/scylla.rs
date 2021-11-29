@@ -1,3 +1,6 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 
 pub type FunctionName = KeyspaceQualifiedName;
@@ -70,6 +73,15 @@ impl From<FunctionName> for FunctionReference {
 pub struct FunctionCall {
     pub name: FunctionName,
     pub args: Vec<Term>,
+}
+
+impl FunctionCall {
+    pub fn new<F: Into<FunctionName>, T: Into<Term>>(name: F, args: Vec<T>) -> Self {
+        Self {
+            name: name.into(),
+            args: args.into_iter().map(|a| a.into()).collect(),
+        }
+    }
 }
 
 impl Parse for FunctionCall {

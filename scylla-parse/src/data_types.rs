@@ -1,5 +1,11 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::Alphanumeric;
+
 use super::{
     keywords::*,
+    Alpha,
     Angles,
     BindMarker,
     Braces,
@@ -8,26 +14,27 @@ use super::{
     Float,
     FunctionCall,
     Hex,
+    KeyspaceQualifiedName,
     List,
+    LitStr,
     Name,
-    Nothing,
+    Not,
     Number,
     Parens,
     Parse,
     Peek,
     SignedNumber,
     StatementStream,
-};
-use crate::{
-    Alpha,
-    KeyspaceQualifiedName,
-    LitStr,
     TokenWrapper,
+    UndelimitedList,
 };
 use chrono::{
     DateTime,
+    Datelike,
     NaiveDate,
+    NaiveDateTime,
     NaiveTime,
+    Timelike,
     Utc,
 };
 use derive_more::{
@@ -108,7 +115,7 @@ impl Peek for ArithmeticOp {
     }
 }
 
-#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Operator {
     Equal,
     NotEqual,
@@ -295,16 +302,18 @@ impl Peek for TimeUnit {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens, From)]
 pub enum Term {
     Constant(Constant),
     Literal(Literal),
     FunctionCall(FunctionCall),
+    #[from(ignore)]
     ArithmeticOp {
         lhs: Option<Box<Term>>,
         op: ArithmeticOp,
         rhs: Box<Term>,
     },
+    #[from(ignore)]
     TypeHint {
         hint: CqlType,
         ident: Name,
@@ -1201,7 +1210,7 @@ impl Parse for TimeLiteral {
     }
 }
 
-#[derive(Clone, Debug, Default, ToTokens)]
+#[derive(Clone, Debug, Default, ToTokens, PartialEq, Eq)]
 pub struct DurationLiteral {
     pub months: i32,
     pub days: i32,
@@ -1212,7 +1221,7 @@ impl Parse for DurationLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(
-            if let Some(v) = s.parse_from::<Option<List<(Number, TimeUnit), Nothing>>>()? {
+            if let Some(v) = s.parse_from::<Option<UndelimitedList<(Number, TimeUnit), Not<Alphanumeric>>>>()? {
                 let mut res = DurationLiteral::default();
                 for (n, u) in v {
                     match u {
@@ -1231,7 +1240,6 @@ impl Parse for DurationLiteral {
                 res
             } else {
                 anyhow::bail!("ISO 8601 not currently supported for durations! Use `(quantity unit)+` instead!");
-                // let token = s.parse::<String>()?;
                 // let dt = DateTime::parse_from_rfc3339(&token).map_err(|e| anyhow::anyhow!(e))?;
                 // DurationLiteral {
                 //    months: dt.year() * 12 + dt.month() as i32,
@@ -1252,7 +1260,45 @@ impl Peek for DurationLiteral {
 
 impl Display for DurationLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}mo{}d{}ns", self.months, self.days, self.nanos)
+        if self.months == 0 && self.days == 0 && self.nanos == 0 {
+            write!(f, "0ns")
+        } else {
+            if self.months > 0 {
+                write!(f, "{}mo", self.months)?;
+            }
+            if self.days > 0 {
+                write!(f, "{}d", self.days)?;
+            }
+            if self.nanos > 0 {
+                write!(f, "{}ns", self.nanos)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+impl From<NaiveDateTime> for DurationLiteral {
+    fn from(dt: NaiveDateTime) -> Self {
+        let mut res = DurationLiteral::default();
+        res.months = dt.year() * 12 + dt.month() as i32;
+        res.days = dt.day() as i32;
+        res.nanos = dt.hour() as i64 * 3_600_000_000_000
+            + dt.minute() as i64 * 60_000_000_000
+            + dt.second() as i64 * 1_000_000_000;
+        res
+    }
+}
+
+impl From<std::time::Duration> for DurationLiteral {
+    fn from(d: std::time::Duration) -> Self {
+        let mut res = DurationLiteral::default();
+        let mut s = d.as_secs();
+        res.months = (s / (60 * 60 * 24 * 30)) as i32;
+        s %= 60 * 60 * 24 * 30;
+        res.days = (s / (60 * 60 * 24)) as i32;
+        s %= 60 * 60 * 24;
+        res.nanos = (s * 1_000_000_000 + d.subsec_nanos() as u64) as i64;
+        res
     }
 }
 

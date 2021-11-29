@@ -1,6 +1,8 @@
-use crate::PrimaryKey;
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::PrimaryKey;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
 pub enum MaterializedViewStatement {
@@ -171,7 +173,7 @@ mod test {
             .name("monkeySpecies_by_population")
             .select_statement(
                 SelectStatementBuilder::default()
-                    .select_clause(SelectClauseKind::All)
+                    .select_clause(SelectClause::All)
                     .from("monkeySpecies")
                     .where_clause(vec![
                         Relation::is_not_null("population"),

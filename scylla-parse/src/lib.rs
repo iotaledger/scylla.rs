@@ -1,3 +1,6 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use anymap::{
     AnyMap,
     Map,
@@ -418,12 +421,27 @@ where
     }
 }
 
-pub type List<T, Delim> = TerminatingList<T, Delim, Nothing>;
+pub struct Not<T>(PhantomData<fn(T) -> T>);
+impl<T: 'static + Peek> Parse for Not<T> {
+    type Output = bool;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(!s.check::<T>())
+    }
+}
+
+impl<T: 'static + Peek> Peek for Not<T> {
+    fn peek(s: StatementStream<'_>) -> bool {
+        !s.check::<T>()
+    }
+}
+
+pub type List<T, Delim> = TerminatingList<T, Delim, EmptyPeek>;
+pub type UndelimitedList<T, End> = TerminatingList<T, Nothing, End>;
 
 #[derive(Debug)]
-pub struct TerminatingList<T, Delim, Term>(PhantomData<fn(T, Delim, Term) -> (T, Delim, Term)>);
-impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, Term: 'static + Peek> Parse
-    for TerminatingList<T, Delim, Term>
+pub struct TerminatingList<T, Delim, End>(PhantomData<fn(T, Delim, End) -> (T, Delim, End)>);
+impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, End: 'static + Peek> Parse
+    for TerminatingList<T, Delim, End>
 where
     Delim::Output: 'static + Clone,
     T::Output: 'static + Clone,
@@ -431,11 +449,11 @@ where
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = vec![s.parse_from::<T>()?];
-        if s.check::<Term>() {
+        if s.check::<End>() {
             return Ok(res);
         }
         while s.parse_from::<Option<Delim>>()?.is_some() {
-            if s.check::<Term>() {
+            if s.check::<End>() {
                 return Ok(res);
             }
             res.push(s.parse_from::<T>()?);
@@ -443,8 +461,8 @@ where
         Ok(res)
     }
 }
-impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, Term: 'static + Peek> Peek
-    for TerminatingList<T, Delim, Term>
+impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, End: 'static + Peek> Peek
+    for TerminatingList<T, Delim, End>
 where
     T::Output: 'static + Clone,
     Delim::Output: 'static + Clone,
@@ -454,7 +472,7 @@ where
     }
 }
 
-impl<T, Delim, Term> Clone for TerminatingList<T, Delim, Term> {
+impl<T, Delim, End> Clone for TerminatingList<T, Delim, End> {
     fn clone(&self) -> Self {
         Self(PhantomData)
     }
@@ -465,10 +483,24 @@ pub struct Nothing;
 impl Parse for Nothing {
     type Output = Self;
     fn parse(_: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(Nothing)
+        Ok(Self)
     }
 }
 impl Peek for Nothing {
+    fn peek(_: StatementStream<'_>) -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct EmptyPeek;
+impl Parse for EmptyPeek {
+    type Output = Self;
+    fn parse(_: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        anyhow::bail!("Empty peek!")
+    }
+}
+impl Peek for EmptyPeek {
     fn peek(_: StatementStream<'_>) -> bool {
         false
     }
@@ -761,9 +793,8 @@ parse_peek_group!(Angles, LeftAngle, RightAngle);
 parse_peek_group!(SingleQuoted, SingleQuote, SingleQuote);
 parse_peek_group!(DoubleQuoted, DoubleQuote, DoubleQuote);
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum BindMarker {
-    #[from(ignore)]
     #[try_into(ignore)]
     Anonymous,
     Named(Name),
@@ -796,6 +827,12 @@ impl Display for BindMarker {
     }
 }
 
+impl<T: Into<Name>> From<T> for BindMarker {
+    fn from(id: T) -> Self {
+        BindMarker::Named(id.into())
+    }
+}
+
 impl Parse for Uuid {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
@@ -816,29 +853,6 @@ impl<'a> CustomToTokens<'a> for Uuid {
     fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
         let u = self.to_string();
         tokens.extend(quote!(Uuid::parse_str(#u).unwrap()));
-    }
-}
-
-#[derive(ParseFromStr, Clone, Debug, Hash, Eq, PartialEq, ToTokens)]
-pub enum Identifier {
-    Name(Name),
-    Keyword(ReservedKeyword),
-}
-
-impl Parse for Identifier {
-    type Output = Self;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(keyword) = s.parse::<Option<ReservedKeyword>>()? {
-            Ok(Identifier::Keyword(keyword))
-        } else {
-            Ok(Identifier::Name(s.parse::<Name>()?))
-        }
-    }
-}
-
-impl Peek for Identifier {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<ReservedKeyword>() || s.check::<Name>()
     }
 }
 
@@ -1614,6 +1628,15 @@ impl Display for ColumnOrder {
     }
 }
 
+impl<T: Into<Name>> From<(T, Order)> for ColumnOrder {
+    fn from((t, order): (T, Order)) -> Self {
+        ColumnOrder {
+            column: t.into(),
+            order,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Order {
     Ascending,
@@ -1648,7 +1671,7 @@ impl Display for Order {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Relation {
     Normal {
         column: Name,

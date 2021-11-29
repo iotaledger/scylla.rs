@@ -1,5 +1,7 @@
-use std::collections::BTreeSet;
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
 use super::*;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]

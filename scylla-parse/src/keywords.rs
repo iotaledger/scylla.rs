@@ -1,3 +1,6 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{
     Alphanumeric,
     CustomToTokens,
@@ -64,7 +67,6 @@ pub enum ReservedKeyword {
     SET,
     TABLE,
     TO,
-    TOKEN,
     TRUNCATE,
     UNLOGGED,
     UPDATE,
@@ -316,7 +318,6 @@ impl Display for ReservedKeyword {
                 ReservedKeyword::SET => "SET",
                 ReservedKeyword::TABLE => "TABLE",
                 ReservedKeyword::TO => "TO",
-                ReservedKeyword::TOKEN => "TOKEN",
                 ReservedKeyword::TRUNCATE => "TRUNCATE",
                 ReservedKeyword::UNLOGGED => "UNLOGGED",
                 ReservedKeyword::UPDATE => "UPDATE",
@@ -382,7 +383,6 @@ impl FromStr for ReservedKeyword {
             "SET" => ReservedKeyword::SET,
             "TABLE" => ReservedKeyword::TABLE,
             "TO" => ReservedKeyword::TO,
-            "TOKEN" => ReservedKeyword::TOKEN,
             "TRUNCATE" => ReservedKeyword::TRUNCATE,
             "UNLOGGED" => ReservedKeyword::UNLOGGED,
             "UPDATE" => ReservedKeyword::UPDATE,

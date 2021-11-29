@@ -1,3 +1,6 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::{
     ArithmeticOp,
@@ -58,21 +61,21 @@ impl Display for DataManipulationStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct SelectStatement {
     #[builder(default)]
     pub distinct: bool,
     #[builder(setter(into))]
-    pub select_clause: SelectClauseKind,
+    pub select_clause: SelectClause,
     #[builder(setter(into))]
-    pub from: FromClause,
+    pub from: KeyspaceQualifiedName,
     #[builder(setter(into), default)]
     pub where_clause: Option<WhereClause>,
     #[builder(setter(into), default)]
     pub group_by_clause: Option<GroupByClause>,
     #[builder(setter(into), default)]
-    pub order_by_clause: Option<OrderingClause>,
+    pub order_by_clause: Option<OrderByClause>,
     #[builder(setter(into), default)]
     pub per_partition_limit: Option<Limit>,
     #[builder(setter(into), default)]
@@ -94,8 +97,8 @@ impl Parse for SelectStatement {
         s.parse::<SELECT>()?;
         let mut res = SelectStatementBuilder::default();
         res.distinct(s.parse::<Option<DISTINCT>>()?.is_some())
-            .select_clause(s.parse::<SelectClauseKind>()?)
-            .from(s.parse::<FromClause>()?);
+            .select_clause(s.parse::<SelectClause>()?)
+            .from(s.parse::<(FROM, KeyspaceQualifiedName)>()?.1);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
@@ -110,7 +113,7 @@ impl Parse for SelectStatement {
                     anyhow::bail!("Duplicate GROUP BY clause!");
                 }
                 res.group_by_clause(group_by_clause);
-            } else if let Some(order_by_clause) = s.parse::<Option<OrderingClause>>()? {
+            } else if let Some(order_by_clause) = s.parse::<Option<OrderByClause>>()? {
                 if res.order_by_clause.is_some() {
                     anyhow::bail!("Duplicate ORDER BY clause!");
                 }
@@ -162,7 +165,7 @@ impl Display for SelectStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "SELECT {}{} {}",
+            "SELECT {}{} FROM {}",
             if self.distinct { "DISTINCT " } else { "" },
             self.select_clause,
             self.from
@@ -197,11 +200,11 @@ impl Display for SelectStatement {
 
 impl KeyspaceExt for SelectStatement {
     fn get_keyspace(&self) -> Option<String> {
-        self.from.table.keyspace.as_ref().map(|n| n.to_string())
+        self.from.keyspace.as_ref().map(|n| n.to_string())
     }
 
     fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
-        self.from.table.keyspace.replace(keyspace.into());
+        self.from.keyspace.replace(keyspace.into());
     }
 }
 
@@ -211,31 +214,31 @@ impl WhereExt for SelectStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
-pub enum SelectClauseKind {
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+pub enum SelectClause {
     All,
     Selectors(Vec<Selector>),
 }
 
-impl Parse for SelectClauseKind {
+impl Parse for SelectClause {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
     {
         Ok(if s.parse::<Option<Star>>()?.is_some() {
-            SelectClauseKind::All
+            SelectClause::All
         } else {
-            SelectClauseKind::Selectors(s.parse_from::<List<Selector, Comma>>()?)
+            SelectClause::Selectors(s.parse_from::<List<Selector, Comma>>()?)
         })
     }
 }
 
-impl Display for SelectClauseKind {
+impl Display for SelectClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SelectClauseKind::All => write!(f, "*"),
-            SelectClauseKind::Selectors(selectors) => {
+            SelectClause::All => write!(f, "*"),
+            SelectClause::Selectors(selectors) => {
                 for (i, selector) in selectors.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -248,13 +251,13 @@ impl Display for SelectClauseKind {
     }
 }
 
-impl From<Vec<Selector>> for SelectClauseKind {
+impl From<Vec<Selector>> for SelectClause {
     fn from(selectors: Vec<Selector>) -> Self {
-        SelectClauseKind::Selectors(selectors)
+        SelectClause::Selectors(selectors)
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct Selector {
     #[builder(setter(into))]
     pub kind: SelectorKind,
@@ -330,7 +333,7 @@ impl Display for Selector {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct SelectorFunction {
     pub function: Name,
     pub args: Vec<Selector>,
@@ -382,7 +385,7 @@ impl Display for SelectorFunction {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum SelectorKind {
     Column(Name),
     Term(Term),
@@ -428,7 +431,7 @@ impl Display for SelectorKind {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct InsertStatement {
     #[builder(setter(into))]
@@ -507,7 +510,7 @@ impl KeyspaceExt for InsertStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum InsertKind {
     NameValue {
         names: Vec<Name>,
@@ -568,7 +571,7 @@ impl Display for InsertKind {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum UpdateParameter {
     TTL(Limit),
     Timestamp(Limit),
@@ -612,7 +615,7 @@ impl Display for UpdateParameter {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct UpdateStatement {
     #[builder(setter(into))]
@@ -696,7 +699,7 @@ impl WhereExt for UpdateStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Assignment {
     Simple {
         selection: SimpleSelection,
@@ -769,7 +772,7 @@ impl Display for Assignment {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum SimpleSelection {
     Column(Name),
     Term(Name, Term),
@@ -823,7 +826,7 @@ impl From<&str> for SimpleSelection {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct Condition {
     pub lhs: SimpleSelection,
     pub op: Operator,
@@ -844,7 +847,7 @@ impl Display for Condition {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum IfClause {
     Exists,
     Conditions(Vec<Condition>),
@@ -886,13 +889,13 @@ impl Display for IfClause {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct DeleteStatement {
     #[builder(default)]
     pub selections: Option<Vec<SimpleSelection>>,
     #[builder(setter(into))]
-    pub from: FromClause,
+    pub from: KeyspaceQualifiedName,
     #[builder(default)]
     pub using: Option<Vec<UpdateParameter>>,
     #[builder(setter(into))]
@@ -909,7 +912,7 @@ impl Parse for DeleteStatement {
         if let Some(s) = s.parse_from::<Option<List<SimpleSelection, Comma>>>()? {
             res.selections(s);
         }
-        res.from(s.parse::<FromClause>()?);
+        res.from(s.parse::<(FROM, KeyspaceQualifiedName)>()?.1);
         if let Some(u) = s.parse_from::<If<USING, List<UpdateParameter, AND>>>()? {
             res.using(u);
         }
@@ -940,7 +943,7 @@ impl Display for DeleteStatement {
                 selections.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
             )?;
         }
-        write!(f, " {}", self.from)?;
+        write!(f, " FROM {}", self.from)?;
         if let Some(using) = &self.using {
             write!(
                 f,
@@ -958,11 +961,11 @@ impl Display for DeleteStatement {
 
 impl KeyspaceExt for DeleteStatement {
     fn get_keyspace(&self) -> Option<String> {
-        self.from.table.keyspace.as_ref().map(|n| n.to_string())
+        self.from.keyspace.as_ref().map(|n| n.to_string())
     }
 
     fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
-        self.from.table.keyspace.replace(keyspace.into());
+        self.from.keyspace.replace(keyspace.into());
     }
 }
 
@@ -972,7 +975,7 @@ impl WhereExt for DeleteStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct BatchStatement {
     #[builder(default)]
     pub kind: BatchKind,
@@ -1111,7 +1114,7 @@ impl Display for BatchStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum ModificationStatement {
     Insert(InsertStatement),
     Update(UpdateStatement),
@@ -1155,7 +1158,7 @@ impl Display for ModificationStatement {
     }
 }
 
-#[derive(Copy, Clone, Debug, ToTokens)]
+#[derive(Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum BatchKind {
     Logged,
     Unlogged,
@@ -1181,54 +1184,7 @@ impl Default for BatchKind {
     }
 }
 
-#[derive(Clone, Debug, ToTokens)]
-pub struct FromClause {
-    pub table: KeyspaceQualifiedName,
-}
-
-impl Parse for FromClause {
-    type Output = Self;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, table) = s.parse::<(FROM, KeyspaceQualifiedName)>()?;
-        Ok(FromClause { table })
-    }
-}
-
-impl Peek for FromClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<FROM>()
-    }
-}
-
-impl Display for FromClause {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FROM {}", self.table)
-    }
-}
-
-impl From<KeyspaceQualifiedName> for FromClause {
-    fn from(table: KeyspaceQualifiedName) -> Self {
-        FromClause { table }
-    }
-}
-
-impl From<String> for FromClause {
-    fn from(table: String) -> Self {
-        FromClause {
-            table: KeyspaceQualifiedName::from(table),
-        }
-    }
-}
-
-impl From<&str> for FromClause {
-    fn from(table: &str) -> Self {
-        FromClause {
-            table: KeyspaceQualifiedName::from(table),
-        }
-    }
-}
-
-#[derive(Clone, Debug, ToTokens)]
+#[derive(Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct WhereClause {
     pub relations: Vec<Relation>,
 }
@@ -1267,7 +1223,7 @@ impl From<Vec<Relation>> for WhereClause {
     }
 }
 
-#[derive(Clone, Debug, ToTokens)]
+#[derive(Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct GroupByClause {
     pub columns: Vec<Name>,
 }
@@ -1300,26 +1256,34 @@ impl Display for GroupByClause {
     }
 }
 
-#[derive(Clone, Debug, ToTokens)]
-pub struct OrderingClause {
-    pub columns: Vec<ColumnOrder>,
-}
-
-impl Parse for OrderingClause {
-    type Output = Self;
-    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (_, _, columns) = s.parse_from::<(GROUP, BY, List<ColumnOrder, Comma>)>()?;
-        Ok(OrderingClause { columns })
+impl<T: Into<Name>> From<Vec<T>> for GroupByClause {
+    fn from(columns: Vec<T>) -> Self {
+        GroupByClause {
+            columns: columns.into_iter().map(|c| c.into()).collect(),
+        }
     }
 }
 
-impl Peek for OrderingClause {
+#[derive(Clone, Debug, ToTokens, PartialEq, Eq)]
+pub struct OrderByClause {
+    pub columns: Vec<ColumnOrder>,
+}
+
+impl Parse for OrderByClause {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
+        let (_, _, columns) = s.parse_from::<(ORDER, BY, List<ColumnOrder, Comma>)>()?;
+        Ok(OrderByClause { columns })
+    }
+}
+
+impl Peek for OrderByClause {
     fn peek(s: StatementStream<'_>) -> bool {
         s.check::<(ORDER, BY)>()
     }
 }
 
-impl Display for OrderingClause {
+impl Display for OrderByClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -1333,9 +1297,18 @@ impl Display for OrderingClause {
     }
 }
 
-#[derive(Clone, Debug, From, ToTokens)]
+impl<T: Into<ColumnOrder>> From<Vec<T>> for OrderByClause {
+    fn from(columns: Vec<T>) -> Self {
+        OrderByClause {
+            columns: columns.into_iter().map(|c| c.into()).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, From, ToTokens, PartialEq, Eq)]
 pub enum Limit {
     Literal(i32),
+    #[from(ignore)]
     BindMarker(BindMarker),
 }
 
@@ -1365,7 +1338,13 @@ impl Display for Limit {
     }
 }
 
-#[derive(Copy, Clone, Debug, ToTokens)]
+impl<T: Into<BindMarker>> From<T> for Limit {
+    fn from(bind: T) -> Self {
+        Limit::BindMarker(bind.into())
+    }
+}
+
+#[derive(Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum ColumnDefault {
     Null,
     Unset,
@@ -1402,30 +1381,65 @@ impl Display for ColumnDefault {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::KeyspaceQualifyExt;
+    use crate::{
+        KeyspaceQualifyExt,
+        Order,
+    };
 
     #[test]
     fn test_parse_select() {
-        let statement = r#"SELECT movie, director as "Movie Director"
-            FROM movies.NerdMovies
-            WHERE main_actor = 'Nathan Fillion'
-            AND year > 2011
-            AND year <= 2012"#;
-        let select_statement = statement.parse::<SelectStatement>().unwrap();
-        let test = SelectStatementBuilder::default()
-            .select_clause(vec![
-                Selector::column("movie"),
-                Selector::column("director").as_id("Movie Director"),
-            ])
-            .from("movies".dot("NerdMovies"))
-            .where_clause(vec![
-                Relation::normal("main_actor", Operator::Equal, LitStr::quoted("Nathan Fillion")),
-                Relation::normal("year", Operator::GreaterThan, 2011_i32),
-                Relation::normal("year", Operator::LessThanOrEqual, 2012_i32),
-            ])
-            .build()
-            .unwrap();
-        assert_eq!(select_statement.to_string(), test.to_string())
+        let mut builder = SelectStatementBuilder::default();
+        builder.select_clause(vec![
+            Selector::column("movie"),
+            Selector::column("director").as_id("Movie Director"),
+        ]);
+        assert!(builder.build().is_err());
+        builder.from("movies".dot("NerdMovies"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.where_clause(vec![
+            Relation::normal("year", Operator::Equal, 2012_i32),
+            Relation::tuple(
+                vec!["main_actor"],
+                Operator::In,
+                vec![LitStr::from("Nathan Fillion"), LitStr::from("John O'Goodman")],
+            ),
+            Relation::token(
+                vec!["director"],
+                Operator::GreaterThan,
+                FunctionCall::new("token", vec![LitStr::from("movie")]),
+            ),
+        ]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.distinct(true);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.select_clause(SelectClause::All);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.group_by_clause(vec!["director", "main_actor", "year", "movie"]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.order_by_clause(vec![("director", Order::Ascending), ("year", Order::Descending)]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.per_partition_limit(10);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.limit(BindMarker::Anonymous);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.limit("bind_marker");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.allow_filtering(true).bypass_cache(false);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.timeout(std::time::Duration::from_secs(10));
+        let statement = builder.build().unwrap().to_string();
+        println!("{}", statement);
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
