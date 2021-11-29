@@ -483,7 +483,7 @@ pub fn row_derive(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn parse_statement(item: TokenStream) -> TokenStream {
     let res = syn::parse_macro_input!(item as syn::LitStr).value().parse::<Statement>().unwrap();
-    match res {
+    let res = match res {
         Statement::DataDefinition(stmt) => match stmt {
             DataDefinitionStatement::Use(stmt) => quote!(#stmt),
             DataDefinitionStatement::CreateKeyspace(stmt) => quote!(#stmt),
@@ -544,6 +544,6 @@ pub fn parse_statement(item: TokenStream) -> TokenStream {
             scylla_parse::TriggerStatement::Create(stmt) => quote!(#stmt),
             scylla_parse::TriggerStatement::Drop(stmt) => quote!(#stmt),
         }
-    }
-    .into()
+    };
+    res.into()
 }

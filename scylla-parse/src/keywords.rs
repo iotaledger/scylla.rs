@@ -1,10 +1,10 @@
 use super::{
     Alphanumeric,
+    CustomToTokens,
     Parse,
     Peek,
     StatementStream,
     StreamInfo,
-    CustomToTokens
 };
 use scylla_parse_macros::{
     ParseFromStr,
@@ -95,8 +95,10 @@ macro_rules! keyword {
                             }
                         )
                     }
+                    Ok($t)
+                } else {
+                    anyhow::bail!("Expected keyword '{}', found end of stream", this)
                 }
-                Ok($t)
             }
         }
         impl Peek for $t {

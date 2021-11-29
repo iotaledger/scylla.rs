@@ -14,15 +14,15 @@ pub fn parse_from_str_derive(input: TokenStream) -> TokenStream {
         data: _,
     } = syn::parse_macro_input!(input as syn::DeriveInput);
     let (imp, ty, wher) = generics.split_for_impl();
-    quote! {
+    let res = quote! {
         impl #imp FromStr for #ident #ty #wher {
             type Err = anyhow::Error;
             fn from_str(s: &str) -> anyhow::Result<Self> {
                 StatementStream::new(s).parse()
             }
         }
-    }
-    .into()
+    };
+    res.into()
 }
 
 fn is_wrappable(ty: &syn::Type) -> bool {
@@ -50,7 +50,7 @@ pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
         data,
     } = syn::parse_macro_input!(input as syn::DeriveInput);
     let (imp, ty, wher) = generics.split_for_impl();
-    match data {
+    let res = match data {
         syn::Data::Struct(s) => {
             let (destr, restr) = match s.fields {
                 syn::Fields::Named(f) => {
@@ -204,6 +204,6 @@ pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
             }
         }
         syn::Data::Union(_) => panic!("Unions not supported!"),
-    }
-    .into()
+    };
+    res.into()
 }

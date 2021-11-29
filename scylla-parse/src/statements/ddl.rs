@@ -4,6 +4,7 @@ use crate::{
     Constant,
     PrimaryKey,
     StatementOptValue,
+    TerminatingList,
 };
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
@@ -71,7 +72,7 @@ impl Display for DataDefinitionStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct UseStatement {
     pub keyspace: Name,
 }
@@ -98,7 +99,13 @@ impl Display for UseStatement {
     }
 }
 
-#[derive(Builder, Clone, Debug, ToTokens)]
+impl<T: Into<Name>> From<T> for UseStatement {
+    fn from(name: T) -> Self {
+        Self { keyspace: name.into() }
+    }
+}
+
+#[derive(Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct KeyspaceOpts {
     #[builder(setter(into))]
     pub replication: Replication,
@@ -151,7 +158,7 @@ impl Display for KeyspaceOpts {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct CreateKeyspaceStatement {
     #[builder(default)]
     pub if_not_exists: bool,
@@ -204,7 +211,7 @@ impl KeyspaceOptionsExt for CreateKeyspaceStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct AlterKeyspaceStatement {
     #[builder(setter(into))]
     pub keyspace: Name,
@@ -238,7 +245,7 @@ impl Display for AlterKeyspaceStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropKeyspaceStatement {
     #[builder(default)]
     pub if_exists: bool,
@@ -277,14 +284,24 @@ impl Display for DropKeyspaceStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+impl<T: Into<Name>> From<T> for DropKeyspaceStatement {
+    fn from(name: T) -> Self {
+        Self {
+            if_exists: Default::default(),
+            keyspace: name.into(),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 #[builder(setter(strip_option))]
 pub struct CreateTableStatement {
     #[builder(default)]
     pub if_not_exists: bool,
+    #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
     pub columns: Vec<ColumnDefinition>,
-    #[builder(default)]
+    #[builder(setter(into), default)]
     pub primary_key: Option<PrimaryKey>,
     #[builder(default)]
     pub options: Option<TableOpts>,
@@ -296,9 +313,9 @@ impl Parse for CreateTableStatement {
         s.parse::<(CREATE, TABLE)>()?;
         let mut res = CreateTableStatementBuilder::default();
         res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .table(s.parse()?);
+            .table(s.parse::<KeyspaceQualifiedName>()?);
         s.parse::<LeftParen>()?;
-        res.columns(s.parse_from::<List<ColumnDefinition, Comma>>()?);
+        res.columns(s.parse_from::<TerminatingList<ColumnDefinition, Comma, (PRIMARY, KEY)>>()?);
         if let Some(p) = s.parse_from::<If<(PRIMARY, KEY), Parens<PrimaryKey>>>()? {
             res.primary_key(p);
         }
@@ -353,8 +370,9 @@ impl TableOptionsExt for CreateTableStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 pub struct AlterTableStatement {
+    #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
     pub instruction: AlterTableInstruction,
 }
@@ -364,7 +382,7 @@ impl Parse for AlterTableStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, TABLE)>()?;
         let mut res = AlterTableStatementBuilder::default();
-        res.table(s.parse()?).instruction(s.parse()?);
+        res.table(s.parse::<KeyspaceQualifiedName>()?).instruction(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -384,12 +402,30 @@ impl Display for AlterTableStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq)]
 pub enum AlterTableInstruction {
     Add(Vec<ColumnDefinition>),
     Drop(Vec<Name>),
     Alter(Name, CqlType),
-    With(Vec<StatementOpt>),
+    With(TableOpts),
+}
+
+impl AlterTableInstruction {
+    pub fn add<T: Into<ColumnDefinition>>(defs: Vec<T>) -> Self {
+        AlterTableInstruction::Add(defs.into_iter().map(|i| i.into()).collect())
+    }
+
+    pub fn drop<T: Into<Name>>(names: Vec<T>) -> Self {
+        AlterTableInstruction::Drop(names.into_iter().map(|i| i.into()).collect())
+    }
+
+    pub fn alter<N: Into<Name>, T: Into<CqlType>>(name: N, cql_type: T) -> Self {
+        AlterTableInstruction::Alter(name.into(), cql_type.into())
+    }
+
+    pub fn with(opts: TableOpts) -> Self {
+        AlterTableInstruction::With(opts)
+    }
 }
 
 impl Parse for AlterTableInstruction {
@@ -408,7 +444,7 @@ impl Parse for AlterTableInstruction {
                 let (col, _, ty) = s.parse::<(_, TYPE, _)>()?;
                 Self::Alter(col, ty)
             } else if s.parse::<Option<WITH>>()?.is_some() {
-                Self::With(s.parse_from::<List<StatementOpt, AND>>()?)
+                Self::With(s.parse_from::<TableOpts>()?)
             } else {
                 anyhow::bail!("Invalid ALTER TABLE instruction: {}", s.info());
             },
@@ -426,23 +462,20 @@ impl Display for AlterTableInstruction {
             ),
             Self::Drop(cols) => write!(
                 f,
-                "DROP {}",
-                cols.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" ")
+                "DROP ({})",
+                cols.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
             ),
             Self::Alter(col, ty) => write!(f, "ALTER {} TYPE {}", col, ty),
-            Self::With(options) => write!(
-                f,
-                "WITH {}",
-                options.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" AND ")
-            ),
+            Self::With(options) => write!(f, "WITH {}", options),
         }
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropTableStatement {
     #[builder(default)]
     pub if_exists: bool,
+    #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
 }
 
@@ -452,7 +485,7 @@ impl Parse for DropTableStatement {
         s.parse::<(DROP, TABLE)>()?;
         let mut res = DropTableStatementBuilder::default();
         res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .table(s.parse()?);
+            .table(s.parse::<KeyspaceQualifiedName>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -477,8 +510,18 @@ impl Display for DropTableStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+impl<T: Into<KeyspaceQualifiedName>> From<T> for DropTableStatement {
+    fn from(name: T) -> Self {
+        Self {
+            if_exists: Default::default(),
+            table: name.into(),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct TruncateStatement {
+    #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
 }
 
@@ -487,7 +530,7 @@ impl Parse for TruncateStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<TRUNCATE>()?;
         let mut res = TruncateStatementBuilder::default();
-        res.table(s.parse()?);
+        res.table(s.parse::<KeyspaceQualifiedName>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -507,13 +550,19 @@ impl Display for TruncateStatement {
     }
 }
 
+impl<T: Into<KeyspaceQualifiedName>> From<T> for TruncateStatement {
+    fn from(name: T) -> Self {
+        Self { table: name.into() }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::{
-        ColumnDefinition,
         Compaction,
         Compression,
+        JavaTimeUnit,
         KeyspaceQualifyExt,
         NativeType,
         SpeculativeRetry,
@@ -521,179 +570,255 @@ mod test {
 
     #[test]
     fn test_parse_create_table() {
-        let statement = "
-            CREATE TABLE IF NOT EXISTS test.test (
-                id INT PRIMARY KEY, 
-                name TEXT, 
-                age INT, 
-                created_at TIMESTAMP
-            ) 
-            WITH comment = 'test' 
-            AND speculative_retry = '99.0PERCENTILE'
-            AND compression = {
-                'class': 'LZ4Compressor'
-            } 
-            AND default_time_to_live = 0 
-            AND read_repair = 'BLOCKING' 
-            AND compaction = {
-                'class': 'SizeTieredCompactionStrategy', 
-                'enabled': FALSE
-            } 
-            AND memtable_flush_period_in_ms = 0 
-            AND gc_grace_seconds = 864000";
-        let res = statement.parse::<CreateTableStatement>().unwrap();
-        let test = CreateTableStatementBuilder::default()
-            .if_not_exists(true)
-            .table("test".dot("test"))
-            .columns(vec![
-                ColumnDefinition::build()
-                    .name("id")
-                    .data_type(NativeType::Int)
-                    .primary_key(true)
-                    .build()
-                    .unwrap(),
-                ColumnDefinition::build()
-                    .name("name")
-                    .data_type(NativeType::Text)
-                    .build()
-                    .unwrap(),
-                ColumnDefinition::build()
-                    .name("age")
-                    .data_type(NativeType::Int)
-                    .build()
-                    .unwrap(),
-                ColumnDefinition::build()
-                    .name("created_at")
-                    .data_type(NativeType::Timestamp)
-                    .build()
-                    .unwrap(),
-            ])
-            .build()
-            .unwrap()
-            .with_comment("test")
-            .with_compaction(Compaction::size_tiered().enabled(false).build().unwrap())
-            .with_compression(Compression::build().class("LZ4Compressor").build().unwrap())
-            .with_default_time_to_live(0)
-            .with_gc_grace_seconds(864000)
-            .with_memtable_flush_period_in_ms(0)
-            .with_read_repair(true)
-            .with_speculative_retry(SpeculativeRetry::Percentile(99.0));
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = CreateTableStatementBuilder::default();
+        assert!(builder.build().is_err());
+        builder.table("test");
+        assert!(builder.build().is_err());
+        builder.columns(vec![
+            ("ascii", NativeType::Ascii).into(),
+            ("bigint", NativeType::Bigint).into(),
+            ("blob", NativeType::Blob).into(),
+            ("boolean", NativeType::Boolean).into(),
+            ("counter", NativeType::Counter).into(),
+            ("decimal", NativeType::Decimal).into(),
+            ("double", NativeType::Double).into(),
+            ("duration", NativeType::Duration).into(),
+            ("float", NativeType::Float).into(),
+            ("inet", NativeType::Inet).into(),
+            ("int", NativeType::Int).into(),
+            ("smallint", NativeType::Smallint).into(),
+            ("text", NativeType::Text).into(),
+            ("time", NativeType::Time).into(),
+            ("timestamp", NativeType::Timestamp).into(),
+            ("timeuuid", NativeType::Timeuuid).into(),
+            ("tinyint", NativeType::Tinyint).into(),
+            ("uuid", NativeType::Uuid).into(),
+            ("varchar", NativeType::Varchar).into(),
+            ("varint", NativeType::Varint).into(),
+        ]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.table("test".dot("test"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.primary_key(vec!["tinyint", "int", "bigint"]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists(true);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        let mut opts_builder = crate::TableOptsBuilder::default();
+        assert!(opts_builder.build().is_err());
+        opts_builder.comment("test");
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.compaction(Compaction::size_tiered().enabled(false).build().unwrap().into());
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.compression(Compression::build().class("LZ4Compressor").build().unwrap());
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.default_time_to_live(0);
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.gc_grace_seconds(99999);
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.memtable_flush_period_in_ms(100);
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.read_repair(true);
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.read_repair(false);
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder.speculative_retry(SpeculativeRetry::Percentile(99.0));
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_alter_table() {
-        let statement = "
-            ALTER TABLE test.test ADD
-                new_id INT, 
-                new_name TEXT, 
-                new_age INT, 
-                new_created_at TIMESTAMP
-            ";
-        let res = StatementStream::new(statement).parse::<AlterTableStatement>().unwrap();
-        let test = AlterTableStatementBuilder::default()
-            .table("test".dot("test"))
-            .instruction(AlterTableInstruction::Add(vec![
-                ColumnDefinition::build()
-                    .name("new_id")
-                    .data_type(NativeType::Int)
+        let mut builder = AlterTableStatementBuilder::default();
+        builder.table("test");
+        assert!(builder.build().is_err());
+        builder.instruction(AlterTableInstruction::add(vec![
+            ("ascii", NativeType::Ascii),
+            ("bigint", NativeType::Bigint),
+            ("blob", NativeType::Blob),
+            ("boolean", NativeType::Boolean),
+            ("counter", NativeType::Counter),
+            ("decimal", NativeType::Decimal),
+            ("double", NativeType::Double),
+            ("duration", NativeType::Duration),
+            ("float", NativeType::Float),
+            ("inet", NativeType::Inet),
+            ("int", NativeType::Int),
+            ("smallint", NativeType::Smallint),
+            ("text", NativeType::Text),
+            ("time", NativeType::Time),
+            ("timestamp", NativeType::Timestamp),
+            ("timeuuid", NativeType::Timeuuid),
+            ("tinyint", NativeType::Tinyint),
+            ("uuid", NativeType::Uuid),
+            ("varchar", NativeType::Varchar),
+            ("varint", NativeType::Varint),
+        ]));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.table("test".dot("test"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.instruction(AlterTableInstruction::alter("ascii", NativeType::Blob));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.instruction(AlterTableInstruction::drop(vec!["ascii", "timestamp", "varint"]));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        let mut opts_builder = crate::TableOptsBuilder::default();
+        assert!(opts_builder.build().is_err());
+        opts_builder
+            .compaction(
+                Compaction::leveled()
+                    .enabled(false)
+                    .tombstone_threshold(0.99)
+                    .tombstone_compaction_interval(10)
+                    .sstable_size_in_mb(2)
+                    .fanout_size(4)
+                    .log_all(true)
+                    .unchecked_tombstone_compaction(false)
+                    .only_purge_repaired_tombstone(true)
+                    .min_threshold(1)
+                    .max_threshold(10)
+                    .build()
+                    .unwrap()
+                    .into(),
+            )
+            .compression(
+                Compression::build()
+                    .class("java.org.something.MyCompressorClass")
+                    .chunk_length_in_kb(10)
+                    .crc_check_chance(0.5)
+                    .compression_level(1)
+                    .enabled(true)
                     .build()
                     .unwrap(),
-                ColumnDefinition::build()
-                    .name("new_name")
-                    .data_type(NativeType::Text)
+            )
+            .default_time_to_live(0)
+            .gc_grace_seconds(99999)
+            .memtable_flush_period_in_ms(100)
+            .read_repair(true)
+            .speculative_retry(SpeculativeRetry::custom("3h30m"));
+        builder.instruction(AlterTableInstruction::with(opts_builder.build().unwrap()));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        opts_builder
+            .compaction(
+                Compaction::time_window()
+                    .enabled(true)
+                    .tombstone_threshold(0.05)
+                    .tombstone_compaction_interval(2)
+                    .compaction_window_unit(JavaTimeUnit::Days)
+                    .compaction_window_size(2)
+                    .unsafe_aggressive_sstable_expiration(true)
+                    .log_all(false)
+                    .unchecked_tombstone_compaction(true)
+                    .only_purge_repaired_tombstone(false)
+                    .min_threshold(1)
+                    .max_threshold(10)
                     .build()
-                    .unwrap(),
-                ColumnDefinition::build()
-                    .name("new_age")
-                    .data_type(NativeType::Int)
-                    .build()
-                    .unwrap(),
-                ColumnDefinition::build()
-                    .name("new_created_at")
-                    .data_type(NativeType::Timestamp)
-                    .build()
-                    .unwrap(),
-            ]))
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+                    .unwrap()
+                    .into(),
+            )
+            .read_repair(false)
+            .speculative_retry(SpeculativeRetry::Always);
+        builder.instruction(AlterTableInstruction::with(opts_builder.build().unwrap()));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_table() {
-        let statement = "DROP TABLE test.test;";
-        let res = statement.parse::<DropTableStatement>().unwrap();
-        let test = DropTableStatementBuilder::default()
-            .if_exists(false)
-            .table("test".dot("test"))
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = DropTableStatementBuilder::default();
+        builder.table("test");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists(true).table("test".dot("test"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_create_keyspace() {
-        let statement = "
-            CREATE KEYSPACE IF NOT EXISTS test
-            WITH replication = {
-                'class': 'SimpleStrategy',
-                'replication_factor': 1
-            }
-            AND durable_writes = true";
-        let res = statement.parse::<CreateKeyspaceStatement>().unwrap();
-        let test = CreateKeyspaceStatementBuilder::default()
-            .if_not_exists(true)
-            .keyspace("test")
-            .options(
-                KeyspaceOptsBuilder::default()
-                    .replication(1)
-                    .durable_writes(true)
-                    .build()
-                    .unwrap(),
-            )
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = CreateKeyspaceStatementBuilder::default();
+        builder.keyspace("test");
+        assert!(builder.build().is_err());
+        builder.if_not_exists(true);
+        assert!(builder.build().is_err());
+        builder.options(
+            KeyspaceOptsBuilder::default()
+                .replication(1)
+                .durable_writes(true)
+                .build()
+                .unwrap(),
+        );
+        let statement = builder.build().unwrap().to_string();
+        println!("{}", statement);
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.options(
+            KeyspaceOptsBuilder::default()
+                .replication(Replication::network_topology(maplit::btreemap! {
+                    "dc1" => 1,
+                    "dc2" => 2,
+                }))
+                .durable_writes(false)
+                .build()
+                .unwrap(),
+        );
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_alter_keyspace() {
-        let statement = "
-            ALTER KEYSPACE test
-            WITH replication = {
-                'class': 'NetworkTopologyStrategy',
-                'DC1': 1,
-                'DC2': 3
-            }
-            AND durable_writes = false;";
-        let res = statement.parse::<AlterKeyspaceStatement>().unwrap();
-        let test = AlterKeyspaceStatementBuilder::default()
-            .keyspace("test")
-            .options(
-                KeyspaceOptsBuilder::default()
-                    .replication(maplit::btreemap! {
-                        "DC2".to_string() => 3,
-                        "DC1".to_string() => 1
-                    })
-                    .durable_writes(false)
-                    .build()
-                    .unwrap(),
-            )
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = AlterKeyspaceStatementBuilder::default();
+        builder.keyspace("test whitespace");
+        assert!(builder.build().is_err());
+        builder.options(KeyspaceOptsBuilder::default().replication(2).build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.options(
+            KeyspaceOptsBuilder::default()
+                .replication(Replication::network_topology(maplit::btreemap! {
+                    "dc1" => 1,
+                    "dc2" => 2,
+                }))
+                .durable_writes(true)
+                .build()
+                .unwrap(),
+        );
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_keyspace() {
-        let statement = "DROP KEYSPACE test;";
-        let res = statement.parse::<DropKeyspaceStatement>().unwrap();
-        let test = DropKeyspaceStatementBuilder::default()
-            .if_exists(false)
-            .keyspace("test")
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = DropKeyspaceStatementBuilder::default();
+        builder.keyspace("test");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists(true);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }

@@ -418,9 +418,12 @@ where
     }
 }
 
+pub type List<T, Delim> = TerminatingList<T, Delim, Nothing>;
+
 #[derive(Debug)]
-pub struct List<T, Delim>(PhantomData<fn(T, Delim) -> (T, Delim)>);
-impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone> Parse for List<T, Delim>
+pub struct TerminatingList<T, Delim, Term>(PhantomData<fn(T, Delim, Term) -> (T, Delim, Term)>);
+impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, Term: 'static + Peek> Parse
+    for TerminatingList<T, Delim, Term>
 where
     Delim::Output: 'static + Clone,
     T::Output: 'static + Clone,
@@ -428,13 +431,20 @@ where
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = vec![s.parse_from::<T>()?];
+        if s.check::<Term>() {
+            return Ok(res);
+        }
         while s.parse_from::<Option<Delim>>()?.is_some() {
+            if s.check::<Term>() {
+                return Ok(res);
+            }
             res.push(s.parse_from::<T>()?);
         }
         Ok(res)
     }
 }
-impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone> Peek for List<T, Delim>
+impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, Term: 'static + Peek> Peek
+    for TerminatingList<T, Delim, Term>
 where
     T::Output: 'static + Clone,
     Delim::Output: 'static + Clone,
@@ -444,7 +454,7 @@ where
     }
 }
 
-impl<T, Delim> Clone for List<T, Delim> {
+impl<T, Delim, Term> Clone for TerminatingList<T, Delim, Term> {
     fn clone(&self) -> Self {
         Self(PhantomData)
     }
@@ -460,7 +470,7 @@ impl Parse for Nothing {
 }
 impl Peek for Nothing {
     fn peek(_: StatementStream<'_>) -> bool {
-        true
+        false
     }
 }
 
@@ -1000,7 +1010,7 @@ impl Display for Name {
 
 impl From<String> for Name {
     fn from(s: String) -> Self {
-        if s.contains('\"') || s.contains(char::is_whitespace) {
+        if s.contains(char::is_whitespace) {
             Self::Quoted(s)
         } else {
             Self::Unquoted(s)
@@ -1088,10 +1098,19 @@ impl From<&str> for KeyspaceQualifiedName {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct StatementOpt {
     pub name: Name,
     pub value: StatementOptValue,
+}
+
+impl StatementOpt {
+    pub fn new<N: Into<Name>>(name: N, value: StatementOptValue) -> Self {
+        Self {
+            name: name.into(),
+            value,
+        }
+    }
 }
 
 impl Parse for StatementOpt {
@@ -1108,7 +1127,7 @@ impl Display for StatementOpt {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq, From)]
 pub enum StatementOptValue {
     Identifier(Name),
     Constant(Constant),
@@ -1140,7 +1159,7 @@ impl Display for StatementOptValue {
     }
 }
 
-#[derive(Builder, Clone, Debug, ToTokens)]
+#[derive(Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct ColumnDefinition {
     #[builder(setter(into))]
     pub name: Name,
@@ -1189,7 +1208,18 @@ impl Display for ColumnDefinition {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+impl<T: Into<Name>> From<(T, NativeType)> for ColumnDefinition {
+    fn from((name, data_type): (T, NativeType)) -> Self {
+        Self {
+            name: name.into(),
+            data_type: CqlType::Native(data_type),
+            static_column: false,
+            primary_key: false,
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct PrimaryKey {
     pub partition_key: PartitionKey,
     pub clustering_columns: Option<Vec<Name>>,
@@ -1252,7 +1282,7 @@ impl<N: Into<Name>> From<Vec<N>> for PrimaryKey {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct PartitionKey {
     pub columns: Vec<Name>,
 }
@@ -1309,8 +1339,8 @@ impl<N: Into<Name>> From<N> for PartitionKey {
 }
 
 // TODO: Scylla encryption opts and caching?
-#[derive(Builder, Clone, Debug, Default, ToTokens)]
-#[builder(setter(strip_option), default)]
+#[derive(Builder, Clone, Debug, Default, ToTokens, PartialEq)]
+#[builder(setter(strip_option), default, build_fn(validate = "Self::validate"))]
 pub struct TableOpts {
     pub compact_storage: bool,
     pub clustering_order: Option<Vec<ColumnOrder>>,
@@ -1513,13 +1543,58 @@ impl Display for TableOpts {
             res.push(format!("memtable_flush_period_in_ms = {}", c));
         }
         if let Some(ref c) = self.read_repair {
-            res.push(format!("read_repair = {}", c));
+            res.push(
+                match c {
+                    true => "read_repair = 'BLOCKING'",
+                    false => "read_repair = 'NONE'",
+                }
+                .to_string(),
+            );
         }
         write!(f, "{}", res.join(" AND "))
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+impl TableOptsBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self.compact_storage.is_some()
+            || self.clustering_order.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self.comment.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self.speculative_retry.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self
+                .change_data_capture
+                .as_ref()
+                .map(|v| v.is_some())
+                .unwrap_or_default()
+            || self.gc_grace_seconds.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self
+                .bloom_filter_fp_chance
+                .as_ref()
+                .map(|v| v.is_some())
+                .unwrap_or_default()
+            || self
+                .default_time_to_live
+                .as_ref()
+                .map(|v| v.is_some())
+                .unwrap_or_default()
+            || self.compaction.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self.compression.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self.caching.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self
+                .memtable_flush_period_in_ms
+                .as_ref()
+                .map(|v| v.is_some())
+                .unwrap_or_default()
+            || self.read_repair.as_ref().map(|v| v.is_some()).unwrap_or_default()
+        {
+            Ok(())
+        } else {
+            Err("No table options specified".to_string())
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct ColumnOrder {
     pub column: Name,
     pub order: Order,
@@ -1539,7 +1614,7 @@ impl Display for ColumnOrder {
     }
 }
 
-#[derive(Copy, Clone, Debug, ToTokens)]
+#[derive(Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Order {
     Ascending,
     Descending,
@@ -1685,7 +1760,7 @@ impl Display for Relation {
     }
 }
 
-#[derive(Clone, Debug, From, ToTokens)]
+#[derive(Clone, Debug, From, ToTokens, PartialEq, Eq)]
 pub enum Replication {
     SimpleStrategy(i32),
     NetworkTopologyStrategy(BTreeMap<String, i32>),
@@ -1696,8 +1771,8 @@ impl Replication {
         Replication::SimpleStrategy(replication_factor)
     }
 
-    pub fn network_topology(replication_map: BTreeMap<String, i32>) -> Self {
-        Replication::NetworkTopologyStrategy(replication_map)
+    pub fn network_topology<S: Into<String>>(replication_map: BTreeMap<S, i32>) -> Self {
+        Replication::NetworkTopologyStrategy(replication_map.into_iter().map(|(k, v)| (k.into(), v)).collect())
     }
 }
 
@@ -1783,12 +1858,18 @@ impl TryFrom<MapLiteral> for Replication {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq)]
 pub enum SpeculativeRetry {
     None,
     Always,
     Percentile(f32),
     Custom(LitStr),
+}
+
+impl SpeculativeRetry {
+    pub fn custom<S: Into<LitStr>>(s: S) -> Self {
+        SpeculativeRetry::Custom(s.into())
+    }
 }
 
 impl Default for SpeculativeRetry {
@@ -1801,19 +1882,19 @@ impl Parse for SpeculativeRetry {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let token = s.parse::<LitStr>()?;
-        Ok(
-            if let Ok(res) = StatementStream::new(&token.value).parse_from::<(Float, PERCENTILE)>() {
-                SpeculativeRetry::Percentile(res.0.parse()?)
-            } else if let Ok(res) = StatementStream::new(&token.value).parse_from::<(Number, PERCENTILE)>() {
-                SpeculativeRetry::Percentile(res.0.parse()?)
-            } else {
-                match token.value.to_uppercase().as_str() {
-                    "NONE" => SpeculativeRetry::None,
-                    "ALWAYS" => SpeculativeRetry::Always,
-                    _ => SpeculativeRetry::Custom(token),
+        Ok(match token.value.to_uppercase().as_str() {
+            "NONE" => SpeculativeRetry::None,
+            "ALWAYS" => SpeculativeRetry::Always,
+            _ => {
+                if let Ok(res) = StatementStream::new(&token.value).parse_from::<(Float, PERCENTILE)>() {
+                    SpeculativeRetry::Percentile(res.0.parse()?)
+                } else if let Ok(res) = StatementStream::new(&token.value).parse_from::<(Number, PERCENTILE)>() {
+                    SpeculativeRetry::Percentile(res.0.parse()?)
+                } else {
+                    SpeculativeRetry::Custom(token)
                 }
-            },
-        )
+            }
+        })
     }
 }
 
@@ -1828,12 +1909,12 @@ impl Display for SpeculativeRetry {
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug, Default, ToTokens)]
-#[builder(setter(strip_option), default)]
+#[derive(Builder, Copy, Clone, Debug, Default, ToTokens, PartialEq)]
+#[builder(setter(strip_option), default, build_fn(validate = "Self::validate"))]
 pub struct SizeTieredCompactionStrategy {
     enabled: Option<bool>,
-    tombstone_threshhold: Option<f32>,
-    tombsone_compaction_interval: Option<i32>,
+    tombstone_threshold: Option<f32>,
+    tombstone_compaction_interval: Option<i32>,
     log_all: Option<bool>,
     unchecked_tombstone_compaction: Option<bool>,
     only_purge_repaired_tombstone: Option<bool>,
@@ -1844,6 +1925,50 @@ pub struct SizeTieredCompactionStrategy {
     bucket_high: Option<f32>,
 }
 
+impl SizeTieredCompactionStrategyBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(v) = self.tombstone_threshold.flatten() {
+            if v < 0.0 || v > 1.0 {
+                return Err(format!("tombstone_threshold must be between 0.0 and 1.0, found {}", v));
+            }
+        }
+        if let Some(v) = self.tombstone_compaction_interval.flatten() {
+            if v < 0 {
+                return Err(format!(
+                    "tombstone_compaction_interval must be a positive integer, found {}",
+                    v
+                ));
+            }
+        }
+        if let Some(v) = self.min_sstable_size.flatten() {
+            if v < 0 {
+                return Err(format!("min_sstable_size must be a positive integer, found {}", v));
+            }
+        }
+        if let Some(v) = self.bucket_high.flatten() {
+            if v < 0.0 {
+                return Err(format!("bucket_high must be a positive float, found {}", v));
+            }
+        }
+        if let Some(v) = self.bucket_low.flatten() {
+            if v < 0.0 {
+                return Err(format!("bucket_low must be a positive float, found {}", v));
+            }
+        }
+        if let Some(v) = self.min_threshold.flatten() {
+            if v < 0 {
+                return Err(format!("min_threshold must be a positive integer, found {}", v));
+            }
+        }
+        if let Some(v) = self.max_threshold.flatten() {
+            if v < 0 {
+                return Err(format!("max_threshold must be a positive integer, found {}", v));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CompactionType for SizeTieredCompactionStrategy {}
 
 impl Display for SizeTieredCompactionStrategy {
@@ -1852,13 +1977,13 @@ impl Display for SizeTieredCompactionStrategy {
         if let Some(enabled) = self.enabled {
             res.push(format!("'enabled': {}", enabled));
         }
-        if let Some(tombstone_threshhold) = self.tombstone_threshhold {
-            res.push(format!("'tombstone_threshhold': {:.1}", tombstone_threshhold));
+        if let Some(tombstone_threshold) = self.tombstone_threshold {
+            res.push(format!("'tombstone_threshold': {}", tombstone_threshold));
         }
-        if let Some(tombsone_compaction_interval) = self.tombsone_compaction_interval {
+        if let Some(tombstone_compaction_interval) = self.tombstone_compaction_interval {
             res.push(format!(
-                "'tombsone_compaction_interval': {}",
-                tombsone_compaction_interval
+                "'tombstone_compaction_interval': {}",
+                tombstone_compaction_interval
             ));
         }
         if let Some(log_all) = self.log_all {
@@ -1895,12 +2020,12 @@ impl Display for SizeTieredCompactionStrategy {
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug, Default, ToTokens)]
-#[builder(setter(strip_option), default)]
+#[derive(Builder, Copy, Clone, Debug, Default, ToTokens, PartialEq)]
+#[builder(setter(strip_option), default, build_fn(validate = "Self::validate"))]
 pub struct LeveledCompactionStrategy {
     enabled: Option<bool>,
-    tombstone_threshhold: Option<f32>,
-    tombsone_compaction_interval: Option<i32>,
+    tombstone_threshold: Option<f32>,
+    tombstone_compaction_interval: Option<i32>,
     log_all: Option<bool>,
     unchecked_tombstone_compaction: Option<bool>,
     only_purge_repaired_tombstone: Option<bool>,
@@ -1910,21 +2035,60 @@ pub struct LeveledCompactionStrategy {
     fanout_size: Option<i32>,
 }
 
+impl LeveledCompactionStrategyBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(v) = self.tombstone_threshold.flatten() {
+            if v < 0.0 || v > 1.0 {
+                return Err(format!("tombstone_threshold must be between 0.0 and 1.0, found {}", v));
+            }
+        }
+        if let Some(v) = self.tombstone_compaction_interval.flatten() {
+            if v < 0 {
+                return Err(format!(
+                    "tombstone_compaction_interval must be a positive integer, found {}",
+                    v
+                ));
+            }
+        }
+        if let Some(v) = self.sstable_size_in_mb.flatten() {
+            if v < 0 {
+                return Err(format!("sstable_size_in_mb must be a positive integer, found {}", v));
+            }
+        }
+        if let Some(v) = self.fanout_size.flatten() {
+            if v < 0 {
+                return Err(format!("fanout_size must be a positive integer, found {}", v));
+            }
+        }
+        if let Some(v) = self.min_threshold.flatten() {
+            if v < 0 {
+                return Err(format!("min_threshold must be a positive integer, found {}", v));
+            }
+        }
+        if let Some(v) = self.max_threshold.flatten() {
+            if v < 0 {
+                return Err(format!("max_threshold must be a positive integer, found {}", v));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CompactionType for LeveledCompactionStrategy {}
 
 impl Display for LeveledCompactionStrategy {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut res = vec![format!("'class': 'SizeTieredCompactionStrategy'")];
+        let mut res = vec![format!("'class': 'LeveledCompactionStrategy'")];
         if let Some(enabled) = self.enabled {
             res.push(format!("'enabled': {}", enabled));
         }
-        if let Some(tombstone_threshhold) = self.tombstone_threshhold {
-            res.push(format!("'tombstone_threshhold': {:.1}", tombstone_threshhold));
+        if let Some(tombstone_threshold) = self.tombstone_threshold {
+            res.push(format!("'tombstone_threshold': {}", tombstone_threshold));
         }
-        if let Some(tombsone_compaction_interval) = self.tombsone_compaction_interval {
+        if let Some(tombstone_compaction_interval) = self.tombstone_compaction_interval {
             res.push(format!(
-                "'tombsone_compaction_interval': {}",
-                tombsone_compaction_interval
+                "'tombstone_compaction_interval': {}",
+                tombstone_compaction_interval
             ));
         }
         if let Some(log_all) = self.log_all {
@@ -1958,12 +2122,12 @@ impl Display for LeveledCompactionStrategy {
     }
 }
 
-#[derive(Builder, Copy, Clone, Debug, Default, ToTokens)]
-#[builder(setter(strip_option), default)]
+#[derive(Builder, Copy, Clone, Debug, Default, ToTokens, PartialEq)]
+#[builder(setter(strip_option), default, build_fn(validate = "Self::validate"))]
 pub struct TimeWindowCompactionStrategy {
     enabled: Option<bool>,
-    tombstone_threshhold: Option<f32>,
-    tombsone_compaction_interval: Option<i32>,
+    tombstone_threshold: Option<f32>,
+    tombstone_compaction_interval: Option<i32>,
     log_all: Option<bool>,
     unchecked_tombstone_compaction: Option<bool>,
     only_purge_repaired_tombstone: Option<bool>,
@@ -1974,21 +2138,58 @@ pub struct TimeWindowCompactionStrategy {
     unsafe_aggressive_sstable_expiration: Option<bool>,
 }
 
+impl TimeWindowCompactionStrategyBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(v) = self.tombstone_threshold.flatten() {
+            if v < 0.0 || v > 1.0 {
+                return Err(format!("tombstone_threshold must be between 0.0 and 1.0, found {}", v));
+            }
+        }
+        if let Some(v) = self.tombstone_compaction_interval.flatten() {
+            if v < 0 {
+                return Err(format!(
+                    "tombstone_compaction_interval must be a positive integer, found {}",
+                    v
+                ));
+            }
+        }
+        if let Some(v) = self.compaction_window_size.flatten() {
+            if v < 0 {
+                return Err(format!(
+                    "compaction_window_size must be a positive integer, found {}",
+                    v
+                ));
+            }
+        }
+        if let Some(v) = self.min_threshold.flatten() {
+            if v < 0 {
+                return Err(format!("min_threshold must be a positive integer, found {}", v));
+            }
+        }
+        if let Some(v) = self.max_threshold.flatten() {
+            if v < 0 {
+                return Err(format!("max_threshold must be a positive integer, found {}", v));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CompactionType for TimeWindowCompactionStrategy {}
 
 impl Display for TimeWindowCompactionStrategy {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut res = vec![format!("'class': 'SizeTieredCompactionStrategy'")];
+        let mut res = vec![format!("'class': 'TimeWindowCompactionStrategy'")];
         if let Some(enabled) = self.enabled {
             res.push(format!("'enabled': {}", enabled));
         }
-        if let Some(tombstone_threshhold) = self.tombstone_threshhold {
-            res.push(format!("'tombstone_threshhold': {:.1}", tombstone_threshhold));
+        if let Some(tombstone_threshold) = self.tombstone_threshold {
+            res.push(format!("'tombstone_threshold': {}", tombstone_threshold));
         }
-        if let Some(tombsone_compaction_interval) = self.tombsone_compaction_interval {
+        if let Some(tombstone_compaction_interval) = self.tombstone_compaction_interval {
             res.push(format!(
-                "'tombsone_compaction_interval': {}",
-                tombsone_compaction_interval
+                "'tombstone_compaction_interval': {}",
+                tombstone_compaction_interval
             ));
         }
         if let Some(log_all) = self.log_all {
@@ -2030,7 +2231,7 @@ impl Display for TimeWindowCompactionStrategy {
 
 pub trait CompactionType: Display + Into<Compaction> {}
 
-#[derive(Clone, Debug, From, TryInto, ToTokens)]
+#[derive(Clone, Debug, From, TryInto, ToTokens, PartialEq)]
 pub enum Compaction {
     SizeTiered(SizeTieredCompactionStrategy),
     Leveled(LeveledCompactionStrategy),
@@ -2095,10 +2296,10 @@ impl TryFrom<MapLiteral> for Compaction {
                         builder.enabled(t.try_into()?);
                     }
                     if let Some(t) = map.remove("tombstone_threshold") {
-                        builder.tombstone_threshhold(t.try_into()?);
+                        builder.tombstone_threshold(t.try_into()?);
                     }
                     if let Some(t) = map.remove("tombstone_compaction_interval") {
-                        builder.tombsone_compaction_interval(t.try_into()?);
+                        builder.tombstone_compaction_interval(t.try_into()?);
                     }
                     if let Some(t) = map.remove("log_all") {
                         builder.log_all(t.try_into()?);
@@ -2131,10 +2332,10 @@ impl TryFrom<MapLiteral> for Compaction {
                         builder.enabled(t.try_into()?);
                     }
                     if let Some(t) = map.remove("tombstone_threshold") {
-                        builder.tombstone_threshhold(t.try_into()?);
+                        builder.tombstone_threshold(t.try_into()?);
                     }
                     if let Some(t) = map.remove("tombstone_compaction_interval") {
-                        builder.tombsone_compaction_interval(t.try_into()?);
+                        builder.tombstone_compaction_interval(t.try_into()?);
                     }
                     if let Some(t) = map.remove("log_all") {
                         builder.log_all(t.try_into()?);
@@ -2164,10 +2365,10 @@ impl TryFrom<MapLiteral> for Compaction {
                         builder.enabled(t.try_into()?);
                     }
                     if let Some(t) = map.remove("tombstone_threshold") {
-                        builder.tombstone_threshhold(t.try_into()?);
+                        builder.tombstone_threshold(t.try_into()?);
                     }
                     if let Some(t) = map.remove("tombstone_compaction_interval") {
-                        builder.tombsone_compaction_interval(t.try_into()?);
+                        builder.tombstone_compaction_interval(t.try_into()?);
                     }
                     if let Some(t) = map.remove("log_all") {
                         builder.log_all(t.try_into()?);
@@ -2213,7 +2414,7 @@ impl Display for Compaction {
     }
 }
 
-#[derive(Copy, Clone, Debug, ToTokens)]
+#[derive(Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum JavaTimeUnit {
     Minutes,
     Hours,
@@ -2244,14 +2445,14 @@ impl Parse for JavaTimeUnit {
 impl Display for JavaTimeUnit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            JavaTimeUnit::Minutes => write!(f, "MINUTES"),
-            JavaTimeUnit::Hours => write!(f, "HOURS"),
-            JavaTimeUnit::Days => write!(f, "DAYS"),
+            JavaTimeUnit::Minutes => write!(f, "'MINUTES'"),
+            JavaTimeUnit::Hours => write!(f, "'HOURS'"),
+            JavaTimeUnit::Days => write!(f, "'DAYS'"),
         }
     }
 }
 
-#[derive(Builder, Clone, Debug, Default, ToTokens)]
+#[derive(Builder, Clone, Debug, Default, ToTokens, PartialEq)]
 #[builder(setter(strip_option), default)]
 pub struct Compression {
     #[builder(setter(into))]
@@ -2322,7 +2523,7 @@ impl TryFrom<MapLiteral> for Compression {
     }
 }
 
-#[derive(Builder, Clone, Debug, Default, ToTokens)]
+#[derive(Builder, Clone, Debug, Default, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option), default)]
 pub struct Caching {
     keys: Option<Keys>,
@@ -2371,7 +2572,7 @@ impl TryFrom<MapLiteral> for Caching {
     }
 }
 
-#[derive(Copy, Clone, Debug, ToTokens)]
+#[derive(Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Keys {
     All,
     None,
@@ -2405,7 +2606,7 @@ impl Display for Keys {
     }
 }
 
-#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum RowsPerPartition {
     All,
     None,
@@ -2564,6 +2765,36 @@ impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3));
 impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4));
 impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5));
 impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6));
-impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6), (T7, t7));
-impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6), (T7, t7), (T8, t8));
-impl_custom_to_tokens_tuple!((T0, t0), (T1, t1), (T2, t2), (T3, t3), (T4, t4), (T5, t5), (T6, t6), (T7, t7), (T8, t8), (T9, t9));
+impl_custom_to_tokens_tuple!(
+    (T0, t0),
+    (T1, t1),
+    (T2, t2),
+    (T3, t3),
+    (T4, t4),
+    (T5, t5),
+    (T6, t6),
+    (T7, t7)
+);
+impl_custom_to_tokens_tuple!(
+    (T0, t0),
+    (T1, t1),
+    (T2, t2),
+    (T3, t3),
+    (T4, t4),
+    (T5, t5),
+    (T6, t6),
+    (T7, t7),
+    (T8, t8)
+);
+impl_custom_to_tokens_tuple!(
+    (T0, t0),
+    (T1, t1),
+    (T2, t2),
+    (T3, t3),
+    (T4, t4),
+    (T5, t5),
+    (T6, t6),
+    (T7, t7),
+    (T8, t8),
+    (T9, t9)
+);
