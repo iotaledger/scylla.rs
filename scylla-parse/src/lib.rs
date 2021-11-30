@@ -54,7 +54,7 @@ pub use self::regex::*;
 pub struct StreamInfo {
     pub next_token: String,
     pub pos: usize,
-    pub len: usize,
+    pub rem: usize,
 }
 
 impl Display for StreamInfo {
@@ -62,7 +62,7 @@ impl Display for StreamInfo {
         write!(
             f,
             "{{ next token: '{}', current pos: {}, remaining: {} }}",
-            self.next_token, self.pos, self.len
+            self.next_token, self.pos, self.rem
         )
     }
 }
@@ -95,7 +95,7 @@ impl<T: Parse> Cached<T> {
 pub struct StatementStream<'a> {
     cursor: std::iter::Peekable<std::str::Chars<'a>>,
     pos: usize,
-    len: usize,
+    rem: usize,
     cache: Rc<RefCell<HashMap<usize, AnyMap>>>,
 }
 
@@ -104,7 +104,7 @@ impl<'a> StatementStream<'a> {
         Self {
             cursor: statement.chars().peekable(),
             pos: 0,
-            len: statement.len(),
+            rem: statement.chars().count(),
             cache: Default::default(),
         }
     }
@@ -113,7 +113,7 @@ impl<'a> StatementStream<'a> {
         StreamInfo {
             next_token: self.clone().parse_from::<Token>().unwrap_or_default(),
             pos: self.pos,
-            len: self.len,
+            rem: self.rem,
         }
     }
 
@@ -122,18 +122,24 @@ impl<'a> StatementStream<'a> {
     }
 
     pub fn remaining(&self) -> usize {
-        self.len
+        self.rem
     }
 
     pub fn nremaining(&self, n: usize) -> bool {
-        self.len >= n
+        self.rem >= n
     }
 
     pub fn peek(&mut self) -> Option<char> {
+        if self.rem == 0 {
+            return None;
+        }
         self.cursor.peek().map(|c| *c)
     }
 
     pub fn peekn(&mut self, n: usize) -> Option<String> {
+        if self.rem < n {
+            return None;
+        }
         let mut cursor = self.cursor.clone();
         let mut res = String::new();
         for _ in 0..n {
@@ -147,10 +153,13 @@ impl<'a> StatementStream<'a> {
     }
 
     pub(crate) fn next(&mut self) -> Option<char> {
+        if self.rem == 0 {
+            return None;
+        }
         let res = self.cursor.next();
         if res.is_some() {
             self.pos += 1;
-            self.len -= 1;
+            self.rem -= 1;
         }
         res
     }
@@ -436,7 +445,7 @@ impl<T: 'static + Peek> Peek for Not<T> {
 }
 
 pub type List<T, Delim> = TerminatingList<T, Delim, EmptyPeek>;
-pub type UndelimitedList<T, End> = TerminatingList<T, Nothing, End>;
+pub type UndelimitedList<T> = TerminatingList<T, Nothing, EmptyPeek>;
 
 #[derive(Debug)]
 pub struct TerminatingList<T, Delim, End>(PhantomData<fn(T, Delim, End) -> (T, Delim, End)>);
@@ -449,7 +458,7 @@ where
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = vec![s.parse_from::<T>()?];
-        if s.check::<End>() {
+        if s.remaining() == 0 || s.check::<End>() {
             return Ok(res);
         }
         while s.parse_from::<Option<Delim>>()?.is_some() {
@@ -457,6 +466,9 @@ where
                 return Ok(res);
             }
             res.push(s.parse_from::<T>()?);
+            if s.remaining() == 0 {
+                return Ok(res);
+            }
         }
         Ok(res)
     }

@@ -1,11 +1,10 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::Alphanumeric;
-
 use super::{
     keywords::*,
     Alpha,
+    Alphanumeric,
     Angles,
     BindMarker,
     Braces,
@@ -18,7 +17,6 @@ use super::{
     List,
     LitStr,
     Name,
-    Not,
     Number,
     Parens,
     Parse,
@@ -1217,11 +1215,12 @@ pub struct DurationLiteral {
     pub nanos: i64,
 }
 
+// TODO: Maybe rework this to parse character-by-character rather than trying to use List
 impl Parse for DurationLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(
-            if let Some(v) = s.parse_from::<Option<UndelimitedList<(Number, TimeUnit), Not<Alphanumeric>>>>()? {
+        Ok(if let Some(token) = s.parse_from::<Option<Alphanumeric>>()? {
+            if let Some(v) = StatementStream::new(&token).parse_from::<Option<UndelimitedList<(Number, TimeUnit)>>>()? {
                 let mut res = DurationLiteral::default();
                 for (n, u) in v {
                     match u {
@@ -1239,17 +1238,19 @@ impl Parse for DurationLiteral {
                 }
                 res
             } else {
-                anyhow::bail!("ISO 8601 not currently supported for durations! Use `(quantity unit)+` instead!");
-                // let dt = DateTime::parse_from_rfc3339(&token).map_err(|e| anyhow::anyhow!(e))?;
-                // DurationLiteral {
-                //    months: dt.year() * 12 + dt.month() as i32,
-                //    days: dt.day() as i32,
-                //    nanos: dt.hour() as i64 * 3_600_000_000_000
-                //        + dt.minute() as i64 * 60_000_000_000
-                //        + dt.second() as i64 * 1_000_000_000,
-                //}
-            },
-        )
+                anyhow::bail!("Invalid duration literal!")
+            }
+        } else {
+            anyhow::bail!("ISO 8601 not currently supported for durations! Use `(quantity unit)+` instead!");
+            // let dt = DateTime::parse_from_rfc3339(&token).map_err(|e| anyhow::anyhow!(e))?;
+            // DurationLiteral {
+            //    months: dt.year() * 12 + dt.month() as i32,
+            //    days: dt.day() as i32,
+            //    nanos: dt.hour() as i64 * 3_600_000_000_000
+            //        + dt.minute() as i64 * 60_000_000_000
+            //        + dt.second() as i64 * 1_000_000_000,
+            //}
+        })
     }
 }
 impl Peek for DurationLiteral {

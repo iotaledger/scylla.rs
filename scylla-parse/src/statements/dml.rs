@@ -530,8 +530,11 @@ impl InsertKind {
         }
     }
 
-    pub fn json(json: LitStr, default: Option<ColumnDefault>) -> Self {
-        Self::Json { json, default }
+    pub fn json<S: Into<LitStr>, O: Into<Option<ColumnDefault>>>(json: S, default: O) -> Self {
+        Self::Json {
+            json: json.into(),
+            default: default.into(),
+        }
     }
 }
 
@@ -581,6 +584,14 @@ pub enum UpdateParameter {
 impl UpdateParameter {
     pub fn ttl(limit: impl Into<Limit>) -> Self {
         Self::TTL(limit.into())
+    }
+
+    pub fn timestamp(limit: impl Into<Limit>) -> Self {
+        Self::Timestamp(limit.into())
+    }
+
+    pub fn timeout(duration: impl Into<DurationLiteral>) -> Self {
+        Self::Timeout(duration.into())
     }
 }
 
@@ -780,8 +791,16 @@ pub enum SimpleSelection {
 }
 
 impl SimpleSelection {
-    pub fn column(name: Name) -> Self {
-        Self::Column(name)
+    pub fn column<T: Into<Name>>(name: T) -> Self {
+        Self::Column(name.into())
+    }
+
+    pub fn term<N: Into<Name>, T: Into<Term>>(name: N, term: T) -> Self {
+        Self::Term(name.into(), term.into())
+    }
+
+    pub fn field<T: Into<Name>>(name: T, field: T) -> Self {
+        Self::Field(name.into(), field.into())
     }
 }
 
@@ -808,20 +827,8 @@ impl Display for SimpleSelection {
     }
 }
 
-impl From<Name> for SimpleSelection {
-    fn from(name: Name) -> Self {
-        Self::Column(name)
-    }
-}
-
-impl From<String> for SimpleSelection {
-    fn from(name: String) -> Self {
-        Self::Column(name.into())
-    }
-}
-
-impl From<&str> for SimpleSelection {
-    fn from(name: &str) -> Self {
+impl<N: Into<Name>> From<N> for SimpleSelection {
+    fn from(name: N) -> Self {
         Self::Column(name.into())
     }
 }
@@ -831,6 +838,16 @@ pub struct Condition {
     pub lhs: SimpleSelection,
     pub op: Operator,
     pub rhs: Term,
+}
+
+impl Condition {
+    pub fn new(lhs: impl Into<SimpleSelection>, op: impl Into<Operator>, rhs: impl Into<Term>) -> Self {
+        Self {
+            lhs: lhs.into(),
+            op: op.into(),
+            rhs: rhs.into(),
+        }
+    }
 }
 
 impl Parse for Condition {
@@ -851,6 +868,16 @@ impl Display for Condition {
 pub enum IfClause {
     Exists,
     Conditions(Vec<Condition>),
+}
+
+impl IfClause {
+    pub fn exists() -> Self {
+        Self::Exists
+    }
+
+    pub fn conditions<T: Into<Condition>>(conditions: Vec<T>) -> Self {
+        Self::Conditions(conditions.into_iter().map(Into::into).collect())
+    }
 }
 
 impl Parse for IfClause {
@@ -1097,7 +1124,7 @@ impl Display for BatchStatement {
             write!(
                 f,
                 " USING {}",
-                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
             )?;
         }
         write!(
@@ -1438,110 +1465,164 @@ mod test {
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         builder.timeout(std::time::Duration::from_secs(10));
         let statement = builder.build().unwrap().to_string();
-        println!("{}", statement);
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_insert() {
-        let statement = "INSERT INTO NerdMovies (movie, director, main_actor, year)
-            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005)
-            IF NOT EXISTS USING TTL 86400";
-        let insert_statement = statement.parse::<InsertStatement>().unwrap();
-        let test = InsertStatementBuilder::default()
-            .table("NerdMovies")
-            .kind(InsertKind::name_value(
-                vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
-                vec![
-                    LitStr::from("Serenity").into(),
-                    LitStr::from("Joss Whedon").into(),
-                    LitStr::from("Nathan Fillion").into(),
-                    2005_i32.into(),
-                ],
-            ))
-            .if_not_exists(true)
-            .using(vec![UpdateParameter::ttl(86400)])
-            .build()
-            .unwrap();
-        assert_eq!(insert_statement.to_string(), test.to_string())
+        let mut builder = InsertStatementBuilder::default();
+        builder.table("test");
+        assert!(builder.build().is_err());
+        builder.kind(InsertKind::name_value(
+            vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
+            vec![
+                LitStr::from("Serenity").into(),
+                LitStr::from("Joss Whedon").into(),
+                LitStr::from("Nathan Fillion").into(),
+                2005_i32.into(),
+            ],
+        ));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists(true);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.using(vec![
+            UpdateParameter::ttl(86400),
+            UpdateParameter::timestamp(1000),
+            UpdateParameter::timeout(std::time::Duration::from_secs(60)),
+        ]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.kind(InsertKind::json(
+            r#"{
+                "movie": "Serenity", 
+                "director": "Joss Whedon", 
+                "main_actor": "Nathan Fillion", 
+                "year": 2005
+            }"#,
+            ColumnDefault::Null,
+        ));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_update() {
-        let statement = "UPDATE NerdMovies
-            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion'
-            WHERE movie = 'Serenity'
-            IF EXISTS";
-        let update_statement = statement.parse::<UpdateStatement>().unwrap();
-        let test = UpdateStatementBuilder::default()
-            .table("NerdMovies")
-            .set_clause(vec![
-                Assignment::simple("director", LitStr::from("Joss Whedon")),
-                Assignment::simple("main_actor", LitStr::from("Nathan Fillion")),
-            ])
-            .where_clause(vec![Relation::normal(
-                "movie",
-                Operator::Equal,
-                LitStr::from("Serenity"),
-            )])
-            .if_clause(IfClause::Exists)
-            .build()
-            .unwrap();
-        assert_eq!(update_statement.to_string(), test.to_string())
+        let mut builder = UpdateStatementBuilder::default();
+        builder.table("test");
+        assert!(builder.build().is_err());
+        builder.set_clause(vec![
+            Assignment::simple("director", LitStr::from("Joss Whedon")),
+            Assignment::simple("main_actor", LitStr::from("Nathan Fillion")),
+            Assignment::arithmetic("year", "year", ArithmeticOp::Add, 10_i32),
+            Assignment::append("my_list", vec![LitStr::from("foo"), LitStr::from("bar")], "my_list"),
+        ]);
+        assert!(builder.build().is_err());
+        builder.where_clause(vec![Relation::normal(
+            "movie",
+            Operator::Equal,
+            LitStr::from("Serenity"),
+        )]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_clause(IfClause::Exists);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_clause(IfClause::conditions(vec![
+            Condition::new("director", Operator::Equal, LitStr::from("Joss Whedon")),
+            Condition::new(
+                SimpleSelection::field("my_type", "my_field"),
+                Operator::LessThan,
+                100_i32,
+            ),
+            Condition::new(
+                SimpleSelection::term("my_list", 0_i32),
+                Operator::Like,
+                LitStr::from("foo%"),
+            ),
+        ]));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.using(vec![
+            UpdateParameter::ttl(86400),
+            UpdateParameter::timestamp(1000),
+            UpdateParameter::timeout(std::time::Duration::from_secs(60)),
+        ]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_delete() {
-        let statement = "DELETE FROM NerdMovies
-            WHERE movie = 'Serenity'
-            IF EXISTS";
-        let delete_statement = statement.parse::<DeleteStatement>().unwrap();
-        let test = DeleteStatementBuilder::default()
-            .from("NerdMovies")
-            .where_clause(vec![Relation::normal(
-                "movie",
-                Operator::Equal,
-                LitStr::from("Serenity"),
-            )])
-            .if_clause(IfClause::Exists)
-            .build()
-            .unwrap();
-        assert_eq!(delete_statement.to_string(), test.to_string())
+        let mut builder = DeleteStatementBuilder::default();
+        builder.from("test");
+        assert!(builder.build().is_err());
+        builder.where_clause(vec![Relation::normal(
+            "movie",
+            Operator::Equal,
+            LitStr::from("Serenity"),
+        )]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_clause(IfClause::Exists);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_clause(IfClause::conditions(vec![
+            Condition::new("director", Operator::Equal, LitStr::from("Joss Whedon")),
+            Condition::new(
+                SimpleSelection::field("my_type", "my_field"),
+                Operator::LessThan,
+                100_i32,
+            ),
+            Condition::new(
+                SimpleSelection::term("my_list", 0_i32),
+                Operator::Like,
+                LitStr::from("foo%"),
+            ),
+        ]));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_batch() {
-        let statement = "BEGIN BATCH 
-            INSERT INTO NerdMovies (movie, director, main_actor, year) 
-            VALUES ('Serenity', 'Joss Whedon', 'Nathan Fillion', 2005) 
-            IF NOT EXISTS USING TTL 86400; 
-            UPDATE NerdMovies 
-            SET director = 'Joss Whedon', main_actor = 'Nathan Fillion' 
-            WHERE movie = 'Serenity' 
-            IF EXISTS; 
-            DELETE FROM NerdMovies 
-            WHERE movie = 'Serenity' 
-            IF EXISTS 
-            APPLY BATCH";
-        let batch_statement = statement.parse::<BatchStatement>().unwrap();
-        let test = BatchStatementBuilder::default()
-            .insert(
-                InsertStatementBuilder::default()
-                    .table("NerdMovies")
-                    .kind(InsertKind::name_value(
-                        vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
-                        vec![
-                            LitStr::from("Serenity").into(),
-                            LitStr::from("Joss Whedon").into(),
-                            LitStr::from("Nathan Fillion").into(),
-                            2005_i32.into(),
-                        ],
-                    ))
-                    .if_not_exists(true)
-                    .using(vec![UpdateParameter::ttl(86400)])
-                    .build()
-                    .unwrap(),
-            )
+        let mut builder = BatchStatementBuilder::default();
+        builder.using(vec![
+            UpdateParameter::ttl(86400),
+            UpdateParameter::timestamp(1000),
+            UpdateParameter::timeout(std::time::Duration::from_secs(60)),
+        ]);
+        assert!(builder.build().is_err());
+        builder.insert(
+            InsertStatementBuilder::default()
+                .table("NerdMovies")
+                .kind(InsertKind::name_value(
+                    vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
+                    vec![
+                        LitStr::from("Serenity").into(),
+                        LitStr::from("Joss Whedon").into(),
+                        LitStr::from("Nathan Fillion").into(),
+                        2005_i32.into(),
+                    ],
+                ))
+                .if_not_exists(true)
+                .using(vec![UpdateParameter::ttl(86400)])
+                .build()
+                .unwrap(),
+        );
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.kind(BatchKind::Unlogged);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.kind(BatchKind::Logged);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.kind(BatchKind::Counter);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder
             .update(
                 UpdateStatementBuilder::default()
                     .table("NerdMovies")
@@ -1569,9 +1650,8 @@ mod test {
                     .if_clause(IfClause::Exists)
                     .build()
                     .unwrap(),
-            )
-            .build()
-            .unwrap();
-        assert_eq!(batch_statement.to_string(), test.to_string())
+            );
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }

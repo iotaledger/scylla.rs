@@ -93,7 +93,7 @@ macro_rules! keyword {
                             StreamInfo {
                                 next_token: token,
                                 pos: s.current_pos(),
-                                len: s.remaining()
+                                rem: s.remaining()
                             }
                         )
                     }
@@ -431,7 +431,7 @@ macro_rules! punctuation {
                         StreamInfo {
                             next_token: c.to_string(),
                             pos: s.current_pos(),
-                            len: s.remaining()
+                            rem: s.remaining()
                         }
                     );
                 }
