@@ -1,15 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
+use super::{
     format_cql_f32,
     format_cql_f64,
-};
-
-use super::{
     keywords::*,
     Alpha,
-    Alphanumeric,
     Angles,
     BindMarker,
     Braces,
@@ -22,14 +18,12 @@ use super::{
     List,
     LitStr,
     Name,
-    Number,
     Parens,
     Parse,
     Peek,
     SignedNumber,
     StatementStream,
     TokenWrapper,
-    UndelimitedList,
 };
 use chrono::{
     DateTime,
@@ -40,6 +34,7 @@ use chrono::{
     Timelike,
     Utc,
 };
+use derive_builder::Builder;
 use derive_more::{
     From,
     TryInto,
@@ -52,7 +47,8 @@ use std::{
     collections::{
         BTreeMap,
         BTreeSet,
-        HashMap, HashSet,
+        HashMap,
+        HashSet,
     },
     convert::{
         TryFrom,
@@ -1328,49 +1324,357 @@ impl Parse for TimeLiteral {
     }
 }
 
-#[derive(Clone, Debug, Default, ToTokens, PartialEq, Eq)]
+enum DurationLiteralKind {
+    QuantityUnit,
+    ISO8601,
+}
+
+#[derive(Builder, Clone, Debug, Default)]
+#[builder(default, build_fn(validate = "Self::validate"))]
+struct ISO8601 {
+    years: i64,
+    months: i64,
+    days: i64,
+    hours: i64,
+    minutes: i64,
+    seconds: i64,
+    weeks: i64,
+}
+
+impl ISO8601Builder {
+    fn validate(&self) -> Result<(), String> {
+        if self.weeks.is_some()
+            && (self.years.is_some()
+                || self.months.is_some()
+                || self.days.is_some()
+                || self.hours.is_some()
+                || self.minutes.is_some()
+                || self.seconds.is_some())
+        {
+            return Err("ISO8601 duration cannot have weeks and other units".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, Default, ToTokens, PartialEq, Eq)]
 pub struct DurationLiteral {
     pub months: i32,
     pub days: i32,
     pub nanos: i64,
 }
 
+impl DurationLiteral {
+    pub fn ns(mut self, ns: i64) -> Self {
+        self.nanos += ns;
+        self
+    }
+
+    pub fn us(self, us: i64) -> Self {
+        self.ns(us * 1000)
+    }
+
+    pub fn ms(self, ms: i64) -> Self {
+        self.us(ms * 1000)
+    }
+
+    pub fn s(self, s: i64) -> Self {
+        self.ms(s * 1000)
+    }
+
+    pub fn m(self, m: i32) -> Self {
+        self.s(m as i64 * 60)
+    }
+
+    pub fn h(self, h: i32) -> Self {
+        self.m(h * 60)
+    }
+
+    pub fn d(mut self, d: i32) -> Self {
+        self.days += d;
+        self
+    }
+
+    pub fn w(self, w: i32) -> Self {
+        self.d(w * 7)
+    }
+
+    pub fn mo(mut self, mo: i32) -> Self {
+        self.months += mo;
+        self
+    }
+
+    pub fn y(self, y: i32) -> Self {
+        self.mo(y * 12)
+    }
+}
+
 // TODO: Maybe rework this to parse character-by-character rather than trying to use List
 impl Parse for DurationLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(token) = s.parse_from::<Option<Alphanumeric>>()? {
-            if let Some(v) = StatementStream::new(&token).parse_from::<Option<UndelimitedList<(Number, TimeUnit)>>>()? {
-                let mut res = DurationLiteral::default();
-                for (n, u) in v {
-                    match u {
-                        TimeUnit::Nanos => res.nanos += n.parse::<i64>()?,
-                        TimeUnit::Micros => res.nanos += n.parse::<i64>()? * 1000,
-                        TimeUnit::Millis => res.nanos += n.parse::<i64>()? * 1_000_000,
-                        TimeUnit::Seconds => res.nanos += n.parse::<i64>()? * 1_000_000_000,
-                        TimeUnit::Minutes => res.nanos += n.parse::<i64>()? * 60_000_000_000,
-                        TimeUnit::Hours => res.nanos += n.parse::<i64>()? * 3_600_000_000_000,
-                        TimeUnit::Days => res.days += n.parse::<i32>()?,
-                        TimeUnit::Weeks => res.days += n.parse::<i32>()? * 7,
-                        TimeUnit::Months => res.months += n.parse::<i32>()?,
-                        TimeUnit::Years => res.months += n.parse::<i32>()? * 12,
+        let kind = match s.peek() {
+            Some(c) => match c {
+                'P' => {
+                    s.next();
+                    DurationLiteralKind::ISO8601
+                }
+                _ => DurationLiteralKind::QuantityUnit,
+            },
+            None => anyhow::bail!("End of statement!"),
+        };
+        match kind {
+            DurationLiteralKind::ISO8601 => {
+                let mut iso = ISO8601Builder::default();
+                let mut ty = 'Y';
+                let mut num = None;
+                let mut time = false;
+                let mut res = None;
+                let mut alternative = None;
+                while let Some(c) = s.peek() {
+                    if c == 'P' {
+                        anyhow::bail!("Invalid ISO8601 duration literal: Too many date specifiers");
+                    } else if c == 'T' {
+                        if time {
+                            anyhow::bail!("Invalid ISO8601 duration literal: Too many time specifiers");
+                        }
+                        match ty {
+                            'Y' => {
+                                ty = 'h';
+                            }
+                            'D' => {
+                                let num = num
+                                    .take()
+                                    .ok_or_else(|| anyhow::anyhow!("Invalid ISO8601 duration: Missing days"))?;
+                                if num < 1 || num > 31 {
+                                    anyhow::bail!("Invalid ISO8601 duration: Day out of range");
+                                }
+                                iso.days(num);
+                                ty = 'h';
+                            }
+                            _ => {
+                                panic!("Duration `ty` variable got set improperly to {}. This is a bug!", ty);
+                            }
+                        }
+                        s.next();
+                        time = true;
+                    } else if c == '-' {
+                        match alternative {
+                            Some(true) => (),
+                            Some(false) => anyhow::bail!("Invalid ISO8601 duration literal: Invalid '-' character"),
+                            None => alternative = Some(true),
+                        }
+                        if time {
+                            anyhow::bail!("Invalid ISO8601 duration literal: Date separator outside of date");
+                        }
+                        match ty {
+                            'Y' => {
+                                iso.years(
+                                    num.take()
+                                        .ok_or_else(|| anyhow::anyhow!("Invalid ISO8601 duration: Missing years"))?,
+                                );
+                                ty = 'M';
+                            }
+                            'M' => {
+                                let num = num
+                                    .take()
+                                    .ok_or_else(|| anyhow::anyhow!("Invalid ISO8601 duration: Missing months"))?;
+                                if num < 1 || num > 12 {
+                                    anyhow::bail!("Invalid ISO8601 duration: Month out of range");
+                                }
+                                iso.months(num);
+                                ty = 'D';
+                            }
+                            _ => {
+                                panic!("Duration `ty` variable got set improperly to {}. This is a bug!", ty);
+                            }
+                        }
+                        s.next();
+                    } else if c == ':' {
+                        match alternative {
+                            Some(true) => (),
+                            Some(false) => anyhow::bail!("Invalid ISO8601 duration literal: Invalid '-' character"),
+                            None => alternative = Some(true),
+                        }
+                        if !time {
+                            anyhow::bail!("Invalid ISO8601 duration: Time separator outside of time");
+                        }
+                        match ty {
+                            'h' => {
+                                let num = num
+                                    .take()
+                                    .ok_or_else(|| anyhow::anyhow!("Invalid ISO8601 duration: Missing hours"))?;
+                                if num > 24 {
+                                    anyhow::bail!("Invalid ISO8601 duration: Hour out of range");
+                                }
+                                iso.hours(num);
+                                ty = 'm';
+                            }
+                            'm' => {
+                                let num = num
+                                    .take()
+                                    .ok_or_else(|| anyhow::anyhow!("Invalid ISO8601 duration: Missing minutes"))?;
+                                if num > 59 {
+                                    anyhow::bail!("Invalid ISO8601 duration: Minutes out of range");
+                                }
+                                iso.minutes(num);
+                                ty = 's';
+                            }
+                            _ => {
+                                panic!("Duration `ty` variable got set improperly to {}. This is a bug!", ty);
+                            }
+                        }
+                        s.next();
+                    } else if c.is_alphabetic() {
+                        match alternative {
+                            Some(false) => (),
+                            Some(true) => anyhow::bail!("Invalid ISO8601 duration literal: Invalid unit specifier character in alternative format"),
+                            None => alternative = Some(false),
+                        }
+                        match c {
+                            'Y' => {
+                                if iso.years.is_some() {
+                                    anyhow::bail!("Invalid ISO8601 duration: Duplicate year specifiers");
+                                }
+                                iso.years(num.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Invalid ISO8601 duration: Missing number preceeding years unit")
+                                })?);
+                            }
+                            'M' => {
+                                if !time {
+                                    if iso.months.is_some() {
+                                        anyhow::bail!("Invalid ISO8601 duration: Duplicate month specifiers");
+                                    }
+                                    iso.months(num.take().ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "Invalid ISO8601 duration: Missing number preceeding months unit"
+                                        )
+                                    })?);
+                                } else {
+                                    if iso.minutes.is_some() {
+                                        anyhow::bail!("Invalid ISO8601 duration: Duplicate minute specifiers");
+                                    }
+                                    iso.minutes(num.take().ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "Invalid ISO8601 duration: Missing number preceeding minutes unit"
+                                        )
+                                    })?);
+                                }
+                            }
+                            'D' => {
+                                if iso.days.is_some() {
+                                    anyhow::bail!("Invalid ISO8601 duration: Duplicate day specifiers");
+                                }
+                                iso.days(num.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Invalid ISO8601 duration: Missing number preceeding days unit")
+                                })?);
+                            }
+                            'H' => {
+                                if iso.hours.is_some() {
+                                    anyhow::bail!("Invalid ISO8601 duration: Duplicate hour specifiers");
+                                }
+                                iso.hours(num.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Invalid ISO8601 duration: Missing number preceeding hours unit")
+                                })?);
+                            }
+                            'S' => {
+                                if iso.seconds.is_some() {
+                                    anyhow::bail!("Invalid ISO8601 duration: Duplicate second specifiers");
+                                }
+                                iso.seconds(num.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Invalid ISO8601 duration: Missing number preceeding seconds unit")
+                                })?);
+                            }
+                            'W' => {
+                                if iso.weeks.is_some() {
+                                    anyhow::bail!("Invalid ISO8601 duration: Duplicate week specifiers");
+                                }
+                                iso.weeks(num.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Invalid ISO8601 duration: Missing number preceeding weeks unit")
+                                })?);
+                            }
+                            _ => {
+                                anyhow::bail!(
+                                    "Invalid ISO8601 duration: Expected P, Y, M, W, D, T, H, M, or S, found {}",
+                                    c
+                                );
+                            }
+                        }
+                        s.next();
+                    } else if c.is_numeric() {
+                        num = Some(s.parse::<u64>()? as i64);
+                    } else {
+                        break;
                     }
                 }
-                res
-            } else {
-                anyhow::bail!("Invalid duration literal!")
+                let alternative = alternative
+                    .ok_or_else(|| anyhow::anyhow!("Invalid ISO8601 duration literal: Unable to determine format"))?;
+                if let Some(num) = num {
+                    if !alternative {
+                        anyhow::bail!("Invalid ISO8601 duration: Trailing number");
+                    }
+                    if !time {
+                        if ty != 'D' {
+                            anyhow::bail!("Invalid ISO8601 duration: Trailing number");
+                        }
+                        if num < 1 || num > 31 {
+                            anyhow::bail!("Invalid ISO8601 duration: Day out of range");
+                        }
+                        iso.days(num);
+                    } else {
+                        if ty != 's' {
+                            anyhow::bail!("Invalid ISO8601 duration: Trailing number");
+                        }
+                        if num > 59 {
+                            anyhow::bail!("Invalid ISO8601 duration: Seconds out of range");
+                        }
+                        iso.seconds(num);
+                    }
+                    if iso.years.is_none() && iso.months.is_none() && iso.days.is_none()
+                        || iso.hours.is_none() && iso.minutes.is_none() && iso.seconds.is_none()
+                    {
+                        anyhow::bail!("Invalid ISO8601 duration: Missing required unit for alternative format");
+                    }
+                    res = Some(iso);
+                } else if !alternative {
+                    res = Some(iso);
+                }
+                if let Some(iso) = res {
+                    Ok(iso.build().map_err(|e| anyhow::anyhow!(e))?.into())
+                } else {
+                    anyhow::bail!("End of statement!");
+                }
             }
-        } else {
-            anyhow::bail!("ISO 8601 not currently supported for durations! Use `(quantity unit)+` instead!");
-            // let dt = DateTime::parse_from_rfc3339(&token).map_err(|e| anyhow::anyhow!(e))?;
-            // DurationLiteral {
-            //    months: dt.year() * 12 + dt.month() as i32,
-            //    days: dt.day() as i32,
-            //    nanos: dt.hour() as i64 * 3_600_000_000_000
-            //        + dt.minute() as i64 * 60_000_000_000
-            //        + dt.second() as i64 * 1_000_000_000,
-            //}
-        })
+            DurationLiteralKind::QuantityUnit => {
+                let mut res = DurationLiteral::default();
+                let mut num = None;
+                while let Some(c) = s.peek() {
+                    if c.is_numeric() {
+                        num = Some(s.parse_from::<u64>()? as i64);
+                    } else if c.is_alphabetic() {
+                        if let Some(num) = num.take() {
+                            match s.parse::<TimeUnit>()? {
+                                TimeUnit::Nanos => res.nanos += num,
+                                TimeUnit::Micros => res.nanos += num * 1000,
+                                TimeUnit::Millis => res.nanos += num * 1_000_000,
+                                TimeUnit::Seconds => res.nanos += num * 1_000_000_000,
+                                TimeUnit::Minutes => res.nanos += num * 60_000_000_000,
+                                TimeUnit::Hours => res.nanos += num * 3_600_000_000_000,
+                                TimeUnit::Days => res.days += num as i32,
+                                TimeUnit::Weeks => res.days += num as i32 * 7,
+                                TimeUnit::Months => res.months += num as i32,
+                                TimeUnit::Years => res.months += num as i32 * 12,
+                            }
+                        } else {
+                            anyhow::bail!("Invalid ISO8601 duration: Missing number preceeding unit specifier");
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                Ok(res)
+            }
+        }
     }
 }
 impl Peek for DurationLiteral {
@@ -1423,6 +1727,16 @@ impl From<std::time::Duration> for DurationLiteral {
     }
 }
 
+impl From<ISO8601> for DurationLiteral {
+    fn from(iso: ISO8601) -> Self {
+        let mut res = DurationLiteral::default();
+        res.months = (iso.years * 12 + iso.months) as i32;
+        res.days = (iso.weeks * 7 + iso.days) as i32;
+        res.nanos = iso.hours * 3_600_000_000_000 + iso.minutes * 60_000_000_000 + iso.seconds * 1_000_000_000;
+        res
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct UserDefinedTypeLiteral {
     pub fields: BTreeMap<Name, Term>,
@@ -1466,3 +1780,69 @@ impl Display for UserDefinedTypeLiteral {
 }
 
 pub type UserDefinedType = KeyspaceQualifiedName;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_duration_literals() {
+        assert_eq!(
+            "P3Y6M4DT12H30M5S".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().y(3).mo(6).d(4).h(12).m(30).s(5),
+        );
+        assert_eq!(
+            "P23DT23H".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().d(23).h(23),
+        );
+        assert_eq!(
+            "P4Y".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().y(4)
+        );
+        assert_eq!("PT0S".parse::<DurationLiteral>().unwrap(), DurationLiteral::default());
+        assert_eq!(
+            "P1M".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().mo(1)
+        );
+        assert_eq!(
+            "PT1M".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().m(1)
+        );
+        assert_eq!(
+            "PT36H".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().h(36)
+        );
+        assert_eq!(
+            "P1DT12H".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().d(1).h(12)
+        );
+        assert_eq!(
+            "P0003-06-04T12:30:05".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().y(3).mo(6).d(4).h(12).m(30).s(5)
+        );
+        assert_eq!(
+            "89h4m48s".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().h(89).m(4).s(48)
+        );
+        assert_eq!(
+            "89d4w48ns2us15ms".parse::<DurationLiteral>().unwrap(),
+            DurationLiteral::default().d(89).w(4).ns(48).us(2).ms(15)
+        );
+
+        assert!("P".parse::<DurationLiteral>().is_err());
+        assert!("T".parse::<DurationLiteral>().is_err());
+        assert!("PT".parse::<DurationLiteral>().is_err());
+        assert!("P1".parse::<DurationLiteral>().is_err());
+        assert!("P10Y3".parse::<DurationLiteral>().is_err());
+        assert!("P0003-06-04".parse::<DurationLiteral>().is_err());
+        assert!("T11:30:05".parse::<DurationLiteral>().is_err());
+        assert!("PT11:30:05".parse::<DurationLiteral>().is_err());
+        assert!("P0003-06-04T25:30:05".parse::<DurationLiteral>().is_err());
+        assert!("P0003-06-04T12:70:05".parse::<DurationLiteral>().is_err());
+        assert!("P0003-06-04T12:30:70".parse::<DurationLiteral>().is_err());
+        assert!("P0003-06-80T12:30:05".parse::<DurationLiteral>().is_err());
+        assert!("P0003-13-04T12:30:05".parse::<DurationLiteral>().is_err());
+        assert!("2w6y8mo96ns4u".parse::<DurationLiteral>().is_err());
+        assert!("2w6b8mo96ns4us".parse::<DurationLiteral>().is_err());
+    }
+}

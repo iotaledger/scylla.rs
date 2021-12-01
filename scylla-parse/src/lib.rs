@@ -445,7 +445,6 @@ impl<T: 'static + Peek> Peek for Not<T> {
 }
 
 pub type List<T, Delim> = TerminatingList<T, Delim, EmptyPeek>;
-pub type UndelimitedList<T> = TerminatingList<T, Nothing, EmptyPeek>;
 
 #[derive(Debug)]
 pub struct TerminatingList<T, Delim, End>(PhantomData<fn(T, Delim, End) -> (T, Delim, End)>);
