@@ -5,12 +5,21 @@ use super::*;
 
 pub type FunctionName = KeyspaceQualifiedName;
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct FunctionDeclaration {
     #[builder(setter(into))]
     pub name: FunctionName,
     #[builder(setter(into))]
     pub args: Vec<ArgumentDeclaration>,
+}
+
+impl FunctionDeclaration {
+    pub fn new<N: Into<FunctionName>, T: Into<ArgumentDeclaration>>(name: N, args: Vec<T>) -> Self {
+        Self {
+            name: name.into(),
+            args: args.into_iter().map(T::into).collect(),
+        }
+    }
 }
 
 impl Parse for FunctionDeclaration {
@@ -33,10 +42,19 @@ impl Display for FunctionDeclaration {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct FunctionReference {
     pub name: FunctionName,
     pub args: Option<Vec<CqlType>>,
+}
+
+impl FunctionReference {
+    pub fn args<T: Into<CqlType>>(self, args: Vec<T>) -> Self {
+        Self {
+            name: self.name,
+            args: Some(args.into_iter().map(T::into).collect()),
+        }
+    }
 }
 
 impl Parse for FunctionReference {
@@ -66,6 +84,24 @@ impl Display for FunctionReference {
 impl From<FunctionName> for FunctionReference {
     fn from(name: FunctionName) -> Self {
         Self { name, args: None }
+    }
+}
+
+impl From<String> for FunctionReference {
+    fn from(name: String) -> Self {
+        Self {
+            name: name.into(),
+            args: None,
+        }
+    }
+}
+
+impl From<&str> for FunctionReference {
+    fn from(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            args: None,
+        }
     }
 }
 
@@ -108,7 +144,7 @@ impl Display for FunctionCall {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum UserDefinedFunctionStatement {
     Create(CreateFunctionStatement),
     Drop(DropFunctionStatement),
@@ -142,11 +178,11 @@ impl Peek for UserDefinedFunctionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct CreateFunctionStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_or_replace"), default)]
     pub or_replace: bool,
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     pub func: FunctionDeclaration,
     pub on_null_input: OnNullInput,
@@ -158,14 +194,30 @@ pub struct CreateFunctionStatement {
     pub body: LitStr,
 }
 
+impl CreateFunctionStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+
+    /// Set OR REPLACE on the statement.
+    /// To undo this, use `set_or_replace(false)`.
+    pub fn or_replace(&mut self) -> &mut Self {
+        self.or_replace.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<CREATE>()?;
         let mut res = CreateFunctionStatementBuilder::default();
-        res.or_replace(s.parse::<Option<(OR, REPLACE)>>()?.is_some());
+        res.set_or_replace(s.parse::<Option<(OR, REPLACE)>>()?.is_some());
         s.parse::<FUNCTION>()?;
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .func(s.parse()?)
             .on_null_input(s.parse()?)
             .return_type(s.parse::<(RETURNS, CqlType)>()?.1)
@@ -200,7 +252,7 @@ impl Display for CreateFunctionStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum OnNullInput {
     Called,
     ReturnsNull,
@@ -230,12 +282,21 @@ impl Display for OnNullInput {
 
 pub type ArgumentDeclaration = FieldDefinition;
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropFunctionStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub func: FunctionReference,
+}
+
+impl DropFunctionStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropFunctionStatement {
@@ -243,7 +304,7 @@ impl Parse for DropFunctionStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, FUNCTION)>()?;
         let mut res = DropFunctionStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .func(s.parse::<FunctionReference>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -268,12 +329,12 @@ impl Display for DropFunctionStatement {
         )
     }
 }
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct CreateAggregateFunctionStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_or_replace"), default)]
     pub or_replace: bool,
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     pub func: FunctionDeclaration,
     pub state_modifying_fn: FunctionName,
@@ -285,14 +346,30 @@ pub struct CreateAggregateFunctionStatement {
     pub init_condition: Option<Term>,
 }
 
+impl CreateAggregateFunctionStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+
+    /// Set OR REPLACE on the statement.
+    /// To undo this, use `set_or_replace(false)`.
+    pub fn or_replace(&mut self) -> &mut Self {
+        self.or_replace.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateAggregateFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<CREATE>()?;
         let mut res = CreateAggregateFunctionStatementBuilder::default();
-        res.or_replace(s.parse::<Option<(OR, REPLACE)>>()?.is_some());
+        res.set_or_replace(s.parse::<Option<(OR, REPLACE)>>()?.is_some());
         s.parse::<AGGREGATE>()?;
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .func(s.parse()?)
             .state_modifying_fn(s.parse::<(SFUNC, _)>()?.1)
             .state_value_type(s.parse::<(STYPE, CqlType)>()?.1);
@@ -350,12 +427,21 @@ impl Display for CreateAggregateFunctionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropAggregateFunctionStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub func: FunctionReference,
+}
+
+impl DropAggregateFunctionStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropAggregateFunctionStatement {
@@ -363,7 +449,7 @@ impl Parse for DropAggregateFunctionStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, AGGREGATE)>()?;
         let mut res = DropAggregateFunctionStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .func(s.parse::<FunctionReference>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -393,78 +479,111 @@ impl Display for DropAggregateFunctionStatement {
 mod test {
     use super::*;
     use crate::{
+        ArithmeticOp,
+        CollectionType,
+        Constant,
         KeyspaceQualifyExt,
         NativeType,
     };
 
     #[test]
     fn test_parse_create_function() {
-        let mut s = StatementStream::new(
-            "CREATE FUNCTION test.func(a int, b float) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'java.lang.Math.add(a, b)'",
-        );
-        let res = s.parse::<CreateFunctionStatement>().unwrap();
-        let test = CreateFunctionStatementBuilder::default()
-            .if_not_exists(false)
-            .func(
-                FunctionDeclarationBuilder::default()
-                    .name("test".dot("func"))
-                    .args(vec![("a", NativeType::Int).into(), ("b", NativeType::Float).into()])
-                    .build()
-                    .unwrap(),
-            )
-            .on_null_input(OnNullInput::Called)
-            .return_type(NativeType::Int)
-            .language("java")
-            .body("java.lang.Math.add(a, b)")
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = CreateFunctionStatementBuilder::default();
+        builder.on_null_input(OnNullInput::Called);
+        assert!(builder.build().is_err());
+        builder.func(FunctionDeclaration::new(
+            "test".dot("func"),
+            vec![("a", NativeType::Int), ("b whitespace", NativeType::Float)],
+        ));
+        assert!(builder.build().is_err());
+        builder.return_type(NativeType::Int);
+        assert!(builder.build().is_err());
+        builder.language("java");
+        assert!(builder.build().is_err());
+        builder.body("java.lang.Math.add(a, b)");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.or_replace();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_function() {
-        let mut s = StatementStream::new("DROP FUNCTION test.func");
-        let res = s.parse::<DropFunctionStatement>().unwrap();
-        let test = DropFunctionStatementBuilder::default()
-            .if_exists(false)
-            .func("test".dot("func"))
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = DropFunctionStatementBuilder::default();
+        builder.func("test".dot("func"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.func(FunctionReference::from("test".dot("func")).args::<CqlType>(vec![
+            NativeType::Int.into(),
+            CollectionType::list(NativeType::Float).into(),
+            "my_keyspace".dot("my_func").into(),
+        ]));
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_create_aggregate_function() {
-        let mut s = StatementStream::new(
-            "CREATE AGGREGATE test.func(a int, b float) SFUNC test.func_state_modifying_fn STYPE int INITCOND 0",
+        let mut builder = CreateAggregateFunctionStatementBuilder::default();
+        builder.func(
+            FunctionDeclarationBuilder::default()
+                .name("test".dot("func"))
+                .args(vec![("a", NativeType::Int).into(), ("b", NativeType::Float).into()])
+                .build()
+                .unwrap(),
         );
-        let res = s.parse::<CreateAggregateFunctionStatement>().unwrap();
-        let test = CreateAggregateFunctionStatementBuilder::default()
-            .if_not_exists(false)
-            .func(
-                FunctionDeclarationBuilder::default()
-                    .name("test".dot("func"))
-                    .args(vec![("a", NativeType::Int).into(), ("b", NativeType::Float).into()])
-                    .build()
-                    .unwrap(),
-            )
-            .state_modifying_fn("test".dot("func_state_modifying_fn"))
-            .state_value_type(NativeType::Int)
-            .init_condition(0_i32)
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        assert!(builder.build().is_err());
+        builder.state_modifying_fn("test".dot("func_state_modifying_fn"));
+        assert!(builder.build().is_err());
+        builder.state_value_type(NativeType::Int);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.init_condition(0_i32);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.or_replace();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.state_value_type(CollectionType::list(NativeType::Uuid));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.final_fn("test".dot("final_fn"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.init_condition(Term::negative(Constant::string("test")));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.init_condition(Term::arithmetic_op(
+            10_f32,
+            ArithmeticOp::Mul,
+            Constant::float("2.06E3").unwrap(),
+        ));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.init_condition(Term::type_hint(NativeType::Bigint, "test"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.init_condition(Term::bind_marker("marker whitespace"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_aggregate_function() {
-        let mut s = StatementStream::new("DROP AGGREGATE test.func");
-        let res = s.parse::<DropAggregateFunctionStatement>().unwrap();
-        let test = DropAggregateFunctionStatementBuilder::default()
-            .if_exists(false)
-            .func("test".dot("func"))
-            .build()
-            .unwrap();
-        assert_eq!(res.to_string(), test.to_string());
+        let mut builder = DropAggregateFunctionStatementBuilder::default();
+        builder.func("func");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }

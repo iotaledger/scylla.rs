@@ -12,7 +12,7 @@ use crate::{
     TupleLiteral,
 };
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum DataManipulationStatement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -62,9 +62,9 @@ impl Display for DataManipulationStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
-#[builder(setter(strip_option))]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
 pub struct SelectStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_distinct"), default)]
     pub distinct: bool,
     #[builder(setter(into))]
     pub select_clause: SelectClause,
@@ -80,12 +80,50 @@ pub struct SelectStatement {
     pub per_partition_limit: Option<Limit>,
     #[builder(setter(into), default)]
     pub limit: Option<Limit>,
-    #[builder(default)]
+    #[builder(setter(name = "set_allow_filtering"), default)]
     pub allow_filtering: bool,
-    #[builder(default)]
+    #[builder(setter(name = "set_bypass_cache"), default)]
     pub bypass_cache: bool,
     #[builder(setter(into), default)]
     pub timeout: Option<DurationLiteral>,
+}
+
+impl SelectStatementBuilder {
+    /// Set DISTINCT on the statement
+    /// To undo this, use `set_distinct(false)`
+    pub fn distinct(&mut self) -> &mut Self {
+        self.distinct.replace(true);
+        self
+    }
+
+    /// Set ALLOW FILTERING on the statement
+    /// To undo this, use `set_allow_filtering(false)`
+    pub fn allow_filtering(&mut self) -> &mut Self {
+        self.allow_filtering.replace(true);
+        self
+    }
+
+    /// Set BYPASS CACHE on the statement
+    /// To undo this, use `set_bypass_cache(false)`
+    pub fn bypass_cache(&mut self) -> &mut Self {
+        self.bypass_cache.replace(true);
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .select_clause
+            .as_ref()
+            .map(|s| match s {
+                SelectClause::Selectors(s) => s.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("SELECT clause selectors cannot be empty".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for SelectStatement {
@@ -96,7 +134,7 @@ impl Parse for SelectStatement {
     {
         s.parse::<SELECT>()?;
         let mut res = SelectStatementBuilder::default();
-        res.distinct(s.parse::<Option<DISTINCT>>()?.is_some())
+        res.set_distinct(s.parse::<Option<DISTINCT>>()?.is_some())
             .select_clause(s.parse::<SelectClause>()?)
             .from(s.parse::<(FROM, KeyspaceQualifiedName)>()?.1);
         loop {
@@ -132,12 +170,12 @@ impl Parse for SelectStatement {
                 if res.allow_filtering.is_some() {
                     anyhow::bail!("Duplicate ALLOW FILTERING clause!");
                 }
-                res.allow_filtering(true);
+                res.allow_filtering();
             } else if s.parse::<Option<(BYPASS, CACHE)>>()?.is_some() {
                 if res.bypass_cache.is_some() {
                     anyhow::bail!("Duplicate BYPASS CACHE clause!");
                 }
-                res.bypass_cache(true);
+                res.bypass_cache();
             } else if let Some(t) = s.parse_from::<If<(USING, TIMEOUT), DurationLiteral>>()? {
                 if res.timeout.is_some() {
                     anyhow::bail!("Duplicate USING TIMEOUT clause!");
@@ -438,10 +476,19 @@ pub struct InsertStatement {
     pub table: KeyspaceQualifiedName,
     #[builder(setter(into))]
     pub kind: InsertKind,
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(default)]
     pub using: Option<Vec<UpdateParameter>>,
+}
+
+impl InsertStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for InsertStatement {
@@ -459,7 +506,7 @@ impl Parse for InsertStatement {
                 if res.if_not_exists.is_some() {
                     anyhow::bail!("Duplicate IF NOT EXISTS clause!");
                 }
-                res.if_not_exists(true);
+                res.if_not_exists();
             } else if s.parse::<Option<USING>>()?.is_some() {
                 if res.using.is_some() {
                     anyhow::bail!("Duplicate USING clause!");
@@ -490,11 +537,13 @@ impl Display for InsertStatement {
             write!(f, " IF NOT EXISTS")?;
         }
         if let Some(using) = &self.using {
-            write!(
-                f,
-                " USING {}",
-                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
-            )?;
+            if !using.is_empty() {
+                write!(
+                    f,
+                    " USING {}",
+                    using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
+                )?;
+            }
         }
         Ok(())
     }
@@ -523,11 +572,20 @@ pub enum InsertKind {
 }
 
 impl InsertKind {
-    pub fn name_value(names: Vec<Name>, values: Vec<Term>) -> Self {
-        Self::NameValue {
+    pub fn name_value(names: Vec<Name>, values: Vec<Term>) -> anyhow::Result<Self> {
+        if names.is_empty() {
+            anyhow::bail!("No column names specified!");
+        }
+        if values.is_empty() {
+            anyhow::bail!("No values specified!");
+        }
+        if names.len() != values.len() {
+            anyhow::bail!("Number of column names and values do not match!");
+        }
+        Ok(Self::NameValue {
             names,
             values: values.into(),
-        }
+        })
     }
 
     pub fn json<S: Into<LitStr>, O: Into<Option<ColumnDefault>>>(json: S, default: O) -> Self {
@@ -627,7 +685,7 @@ impl Display for UpdateParameter {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
-#[builder(setter(strip_option))]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
 pub struct UpdateStatement {
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
@@ -638,6 +696,29 @@ pub struct UpdateStatement {
     pub where_clause: WhereClause,
     #[builder(setter(into), default)]
     pub if_clause: Option<IfClause>,
+}
+
+impl UpdateStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_clause.replace(Some(IfClause::Exists));
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.set_clause.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("SET clause assignments cannot be empty".to_string());
+        }
+        if self
+            .where_clause
+            .as_ref()
+            .map(|s| s.relations.is_empty())
+            .unwrap_or(false)
+        {
+            return Err("WHERE clause cannot be empty".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for UpdateStatement {
@@ -671,11 +752,13 @@ impl Display for UpdateStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "UPDATE {}", self.table)?;
         if let Some(using) = &self.using {
-            write!(
-                f,
-                " USING {}",
-                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
-            )?;
+            if !using.is_empty() {
+                write!(
+                    f,
+                    " USING {}",
+                    using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
+                )?;
+            }
         }
         write!(
             f,
@@ -902,6 +985,9 @@ impl Display for IfClause {
         match self {
             Self::Exists => write!(f, "IF EXISTS"),
             Self::Conditions(conditions) => {
+                if conditions.is_empty() {
+                    return Ok(());
+                }
                 write!(
                     f,
                     "IF {}",
@@ -917,7 +1003,7 @@ impl Display for IfClause {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
-#[builder(setter(strip_option))]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
 pub struct DeleteStatement {
     #[builder(default)]
     pub selections: Option<Vec<SimpleSelection>>,
@@ -929,6 +1015,26 @@ pub struct DeleteStatement {
     pub where_clause: WhereClause,
     #[builder(default)]
     pub if_clause: Option<IfClause>,
+}
+
+impl DeleteStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_clause.replace(Some(IfClause::Exists));
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .where_clause
+            .as_ref()
+            .map(|s| s.relations.is_empty())
+            .unwrap_or(false)
+        {
+            return Err("WHERE clause cannot be empty".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for DeleteStatement {
@@ -964,19 +1070,23 @@ impl Display for DeleteStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DELETE")?;
         if let Some(selections) = &self.selections {
-            write!(
-                f,
-                " {}",
-                selections.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
-            )?;
+            if !selections.is_empty() {
+                write!(
+                    f,
+                    " {}",
+                    selections.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
+                )?;
+            }
         }
         write!(f, " FROM {}", self.from)?;
         if let Some(using) = &self.using {
-            write!(
-                f,
-                " USING {}",
-                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
-            )?;
+            if !using.is_empty() {
+                write!(
+                    f,
+                    " USING {}",
+                    using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+                )?;
+            }
         }
         write!(f, " {}", self.where_clause)?;
         if let Some(if_clause) = &self.if_clause {
@@ -1003,6 +1113,7 @@ impl WhereExt for DeleteStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
 pub struct BatchStatement {
     #[builder(default)]
     pub kind: BatchKind,
@@ -1080,6 +1191,13 @@ impl BatchStatementBuilder {
             .push(statement.into());
         self
     }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.statements.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Batch cannot contain zero statements".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for BatchStatement {
@@ -1121,11 +1239,13 @@ impl Display for BatchStatement {
         };
         write!(f, " BATCH")?;
         if let Some(using) = &self.using {
-            write!(
-                f,
-                " USING {}",
-                using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
-            )?;
+            if !using.is_empty() {
+                write!(
+                    f,
+                    " USING {}",
+                    using.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" AND ")
+                )?;
+            }
         }
         write!(
             f,
@@ -1232,6 +1352,9 @@ impl Peek for WhereClause {
 
 impl Display for WhereClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.relations.is_empty() {
+            return Ok(());
+        }
         write!(
             f,
             "WHERE {}",
@@ -1271,6 +1394,9 @@ impl Peek for GroupByClause {
 
 impl Display for GroupByClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.columns.is_empty() {
+            return Ok(());
+        }
         write!(
             f,
             "GROUP BY {}",
@@ -1312,6 +1438,9 @@ impl Peek for OrderByClause {
 
 impl Display for OrderByClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.columns.is_empty() {
+            return Ok(());
+        }
         write!(
             f,
             "ORDER BY {}",
@@ -1439,7 +1568,7 @@ mod test {
         ]);
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.distinct(true);
+        builder.distinct();
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         builder.select_clause(SelectClause::All);
@@ -1460,7 +1589,7 @@ mod test {
         builder.limit("bind_marker");
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.allow_filtering(true).bypass_cache(false);
+        builder.allow_filtering().bypass_cache();
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         builder.timeout(std::time::Duration::from_secs(10));
@@ -1473,18 +1602,21 @@ mod test {
         let mut builder = InsertStatementBuilder::default();
         builder.table("test");
         assert!(builder.build().is_err());
-        builder.kind(InsertKind::name_value(
-            vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
-            vec![
-                LitStr::from("Serenity").into(),
-                LitStr::from("Joss Whedon").into(),
-                LitStr::from("Nathan Fillion").into(),
-                2005_i32.into(),
-            ],
-        ));
+        builder.kind(
+            InsertKind::name_value(
+                vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
+                vec![
+                    LitStr::from("Serenity").into(),
+                    LitStr::from("Joss Whedon").into(),
+                    LitStr::from("Nathan Fillion").into(),
+                    2005_i32.into(),
+                ],
+            )
+            .unwrap(),
+        );
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.if_not_exists(true);
+        builder.if_not_exists();
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         builder.using(vec![
@@ -1597,16 +1729,19 @@ mod test {
         builder.insert(
             InsertStatementBuilder::default()
                 .table("NerdMovies")
-                .kind(InsertKind::name_value(
-                    vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
-                    vec![
-                        LitStr::from("Serenity").into(),
-                        LitStr::from("Joss Whedon").into(),
-                        LitStr::from("Nathan Fillion").into(),
-                        2005_i32.into(),
-                    ],
-                ))
-                .if_not_exists(true)
+                .kind(
+                    InsertKind::name_value(
+                        vec!["movie".into(), "director".into(), "main_actor".into(), "year".into()],
+                        vec![
+                            LitStr::from("Serenity").into(),
+                            LitStr::from("Joss Whedon").into(),
+                            LitStr::from("Nathan Fillion").into(),
+                            2005_i32.into(),
+                        ],
+                    )
+                    .unwrap(),
+                )
+                .if_not_exists()
                 .using(vec![UpdateParameter::ttl(86400)])
                 .build()
                 .unwrap(),

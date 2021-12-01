@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum SecondaryIndexStatement {
     Create(CreateIndexStatement),
     Drop(DropIndexStatement),
@@ -28,12 +28,12 @@ impl Peek for SecondaryIndexStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct CreateIndexStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_custom"), default)]
     pub custom: bool,
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into), default)]
     pub name: Option<Name>,
@@ -45,14 +45,30 @@ pub struct CreateIndexStatement {
     pub using: Option<IndexClass>,
 }
 
+impl CreateIndexStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+
+    // Set CUSTOM on the statement
+    // To undo this, use `set_custom(false)`.
+    pub fn custom(&mut self) -> &mut Self {
+        self.custom.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateIndexStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<CREATE>()?;
         let mut res = CreateIndexStatementBuilder::default();
-        res.custom(s.parse::<Option<CUSTOM>>()?.is_some());
+        res.set_custom(s.parse::<Option<CUSTOM>>()?.is_some());
         s.parse::<INDEX>()?;
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some());
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some());
         if let Some(n) = s.parse::<Option<Name>>()? {
             res.name(n);
         }
@@ -97,7 +113,7 @@ impl Display for CreateIndexStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum IndexIdentifier {
     Column(Name),
     Qualified(IndexQualifier, Name),
@@ -147,7 +163,7 @@ impl<N: Into<Name>> From<N> for IndexIdentifier {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum IndexQualifier {
     Keys,
     Values,
@@ -183,7 +199,7 @@ impl Display for IndexQualifier {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct IndexClass {
     pub path: LitStr,
     pub options: Option<MapLiteral>,
@@ -230,12 +246,21 @@ impl Display for IndexClass {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropIndexStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl DropIndexStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropIndexStatement {
@@ -243,7 +268,7 @@ impl Parse for DropIndexStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, INDEX)>()?;
         let mut res = DropIndexStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some());
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some());
         if let Some(n) = s.parse::<Option<Name>>()? {
             res.name(n);
         }
@@ -278,33 +303,36 @@ mod test {
 
     #[test]
     fn test_parse_create_index() {
-        let stmt = "
-            CREATE CUSTOM INDEX userIndex ON users (email)
-            USING 'path.to.the.IndexClass'
-            WITH OPTIONS = {'storage': '/mnt/ssd/indexes/'};";
-        let parsed = stmt.parse::<CreateIndexStatement>().unwrap();
-        let test = CreateIndexStatementBuilder::default()
-            .custom(true)
-            .name("userIndex")
-            .table("users")
-            .index_id("email")
-            .using(IndexClass::new("path.to.the.IndexClass").options(maplit::hashmap! {
-                LitStr::from("storage") => LitStr::from("/mnt/ssd/indexes/")
-            }))
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = CreateIndexStatementBuilder::default();
+        builder.table("test");
+        assert!(builder.build().is_err());
+        builder.index_id("my_index_id");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.name("my_index_name");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.custom();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.using(IndexClass::new("path.to.the.IndexClass").options(maplit::hashmap! {
+            LitStr::from("storage") => LitStr::from("/mnt/ssd/indexes/")
+        }));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_index() {
-        let stmt = "DROP INDEX IF EXISTS userIndex;";
-        let parsed = stmt.parse::<DropIndexStatement>().unwrap();
-        let test = DropIndexStatementBuilder::default()
-            .if_exists(true)
-            .name("userIndex")
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = DropIndexStatementBuilder::default();
+        builder.name("my_index_name");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }

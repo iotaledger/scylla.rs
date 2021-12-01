@@ -674,9 +674,11 @@ impl Parse for SignedNumber {
     type Output = String;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
+        let mut has_numerals = false;
         let mut has_negative = false;
         while let Some(c) = s.peek() {
             if c.is_numeric() {
+                has_numerals = true;
                 res.push(c);
                 s.next();
             } else if c == '-' {
@@ -690,6 +692,9 @@ impl Parse for SignedNumber {
             } else {
                 break;
             }
+        }
+        if has_negative && !has_numerals {
+            anyhow::bail!("Invalid number: Negative sign without number")
         }
         if res.is_empty() {
             anyhow::bail!("End of statement!")
@@ -709,11 +714,13 @@ impl Parse for Float {
     type Output = String;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
+        let mut has_numerals = false;
         let mut has_dot = false;
         let mut has_negative = false;
         let mut has_e = false;
         while let Some(c) = s.peek() {
             if c.is_numeric() {
+                has_numerals = true;
                 res.push(c);
                 s.next();
             } else if c == '-' {
@@ -755,6 +762,12 @@ impl Parse for Float {
             } else {
                 break;
             }
+        }
+        if has_negative && !has_numerals {
+            anyhow::bail!("Invalid float: Negative sign without number")
+        }
+        if has_dot && !has_numerals {
+            anyhow::bail!("Invalid float: Decimal point without number")
         }
         if !has_dot {
             anyhow::bail!("Invalid float: Missing decimal point")
@@ -1262,7 +1275,11 @@ impl PrimaryKey {
     pub fn clustering_columns(self, clustering_columns: Vec<impl Into<Name>>) -> Self {
         PrimaryKey {
             partition_key: self.partition_key,
-            clustering_columns: Some(clustering_columns.into_iter().map(Into::into).collect()),
+            clustering_columns: if clustering_columns.is_empty() {
+                self.clustering_columns
+            } else {
+                Some(clustering_columns.into_iter().map(Into::into).collect())
+            },
         }
     }
 }
@@ -1283,15 +1300,17 @@ impl Display for PrimaryKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.partition_key.fmt(f)?;
         if let Some(clustering_columns) = &self.clustering_columns {
-            write!(
-                f,
-                ", {}",
-                clustering_columns
-                    .iter()
-                    .map(|i| i.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )?;
+            if !clustering_columns.is_empty() {
+                write!(
+                    f,
+                    ", {}",
+                    clustering_columns
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
+            }
         }
         Ok(())
     }
@@ -1544,16 +1563,16 @@ impl Display for TableOpts {
         if let Some(ref c) = self.speculative_retry {
             res.push(format!("speculative_retry = {}", c));
         }
-        if let Some(ref c) = self.change_data_capture {
+        if let Some(c) = self.change_data_capture {
             res.push(format!("cdc = {}", c));
         }
-        if let Some(ref c) = self.gc_grace_seconds {
+        if let Some(c) = self.gc_grace_seconds {
             res.push(format!("gc_grace_seconds = {}", c));
         }
-        if let Some(ref c) = self.bloom_filter_fp_chance {
-            res.push(format!("bloom_filter_fp_chance = {}", c));
+        if let Some(c) = self.bloom_filter_fp_chance {
+            res.push(format!("bloom_filter_fp_chance = {}", format_cql_f32(c)));
         }
-        if let Some(ref c) = self.default_time_to_live {
+        if let Some(c) = self.default_time_to_live {
             res.push(format!("default_time_to_live = {}", c));
         }
         if let Some(ref c) = self.compaction {
@@ -1565,10 +1584,10 @@ impl Display for TableOpts {
         if let Some(ref c) = self.caching {
             res.push(format!("caching = {}", c));
         }
-        if let Some(ref c) = self.memtable_flush_period_in_ms {
+        if let Some(c) = self.memtable_flush_period_in_ms {
             res.push(format!("memtable_flush_period_in_ms = {}", c));
         }
-        if let Some(ref c) = self.read_repair {
+        if let Some(c) = self.read_repair {
             res.push(
                 match c {
                     true => "read_repair = 'BLOCKING'",
@@ -1938,7 +1957,7 @@ impl Display for SpeculativeRetry {
         match self {
             SpeculativeRetry::None => write!(f, "'NONE'"),
             SpeculativeRetry::Always => write!(f, "'ALWAYS'"),
-            SpeculativeRetry::Percentile(p) => write!(f, "'{:.1}PERCENTILE'", p),
+            SpeculativeRetry::Percentile(p) => write!(f, "'{}PERCENTILE'", format_cql_f32(*p)),
             SpeculativeRetry::Custom(s) => s.fmt(f),
         }
     }
@@ -2013,7 +2032,10 @@ impl Display for SizeTieredCompactionStrategy {
             res.push(format!("'enabled': {}", enabled));
         }
         if let Some(tombstone_threshold) = self.tombstone_threshold {
-            res.push(format!("'tombstone_threshold': {}", tombstone_threshold));
+            res.push(format!(
+                "'tombstone_threshold': {}",
+                format_cql_f32(tombstone_threshold)
+            ));
         }
         if let Some(tombstone_compaction_interval) = self.tombstone_compaction_interval {
             res.push(format!(
@@ -2046,10 +2068,10 @@ impl Display for SizeTieredCompactionStrategy {
             res.push(format!("'min_sstable_size': {}", min_sstable_size));
         }
         if let Some(bucket_low) = self.bucket_low {
-            res.push(format!("'bucket_low': {:.1}", bucket_low));
+            res.push(format!("'bucket_low': {}", format_cql_f32(bucket_low)));
         }
         if let Some(bucket_high) = self.bucket_high {
-            res.push(format!("'bucket_high': {:.1}", bucket_high));
+            res.push(format!("'bucket_high': {}", format_cql_f32(bucket_high)));
         }
         write!(f, "{{{}}}", res.join(", "))
     }
@@ -2118,7 +2140,10 @@ impl Display for LeveledCompactionStrategy {
             res.push(format!("'enabled': {}", enabled));
         }
         if let Some(tombstone_threshold) = self.tombstone_threshold {
-            res.push(format!("'tombstone_threshold': {}", tombstone_threshold));
+            res.push(format!(
+                "'tombstone_threshold': {}",
+                format_cql_f32(tombstone_threshold)
+            ));
         }
         if let Some(tombstone_compaction_interval) = self.tombstone_compaction_interval {
             res.push(format!(
@@ -2219,7 +2244,10 @@ impl Display for TimeWindowCompactionStrategy {
             res.push(format!("'enabled': {}", enabled));
         }
         if let Some(tombstone_threshold) = self.tombstone_threshold {
-            res.push(format!("'tombstone_threshold': {}", tombstone_threshold));
+            res.push(format!(
+                "'tombstone_threshold': {}",
+                format_cql_f32(tombstone_threshold)
+            ));
         }
         if let Some(tombstone_compaction_interval) = self.tombstone_compaction_interval {
             res.push(format!(
@@ -2507,19 +2535,19 @@ impl Compression {
 impl Display for Compression {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut res = Vec::new();
-        if let Some(class) = &self.class {
+        if let Some(ref class) = self.class {
             res.push(format!("'class': {}", class));
         }
-        if let Some(enabled) = &self.enabled {
+        if let Some(enabled) = self.enabled {
             res.push(format!("'enabled': {}", enabled));
         }
-        if let Some(chunk_length_in_kb) = &self.chunk_length_in_kb {
+        if let Some(chunk_length_in_kb) = self.chunk_length_in_kb {
             res.push(format!("'chunk_length_in_kb': {}", chunk_length_in_kb));
         }
-        if let Some(crc_check_chance) = &self.crc_check_chance {
-            res.push(format!("'crc_check_chance': {:.1}", crc_check_chance));
+        if let Some(crc_check_chance) = self.crc_check_chance {
+            res.push(format!("'crc_check_chance': {}", format_cql_f32(crc_check_chance)));
         }
-        if let Some(compression_level) = &self.compression_level {
+        if let Some(compression_level) = self.compression_level {
             res.push(format!("'compression_level': {}", compression_level));
         }
         write!(f, "{{{}}}", res.join(", "))
@@ -2670,6 +2698,24 @@ impl Display for RowsPerPartition {
             RowsPerPartition::None => write!(f, "'NONE'"),
             RowsPerPartition::Count(count) => count.fmt(f),
         }
+    }
+}
+
+pub fn format_cql_f32(f: f32) -> String {
+    let s = f.to_string();
+    if let Ok(res) = StatementStream::new(&s).parse_from::<Float>() {
+        res
+    } else {
+        format!("{}.0", s)
+    }
+}
+
+pub fn format_cql_f64(f: f64) -> String {
+    let s = f.to_string();
+    if let Ok(res) = StatementStream::new(&s).parse_from::<Float>() {
+        res
+    } else {
+        format!("{}.0", s)
     }
 }
 

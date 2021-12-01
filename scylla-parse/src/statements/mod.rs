@@ -70,7 +70,7 @@ pub use security::*;
 mod trigger;
 pub use trigger::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
 pub enum Statement {
     DataDefinition(DataDefinitionStatement),
     DataManipulation(DataManipulationStatement),
@@ -148,7 +148,7 @@ impl Parse for Statement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct FieldDefinition {
     pub name: Name,
     pub data_type: CqlType,

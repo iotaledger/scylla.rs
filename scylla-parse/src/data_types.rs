@@ -1,6 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::{
+    format_cql_f32,
+    format_cql_f64,
+};
+
 use super::{
     keywords::*,
     Alpha,
@@ -46,7 +51,8 @@ use scylla_parse_macros::{
 use std::{
     collections::{
         BTreeMap,
-        HashMap,
+        BTreeSet,
+        HashMap, HashSet,
     },
     convert::{
         TryFrom,
@@ -319,6 +325,47 @@ pub enum Term {
     BindMarker(BindMarker),
 }
 
+impl Term {
+    pub fn constant<T: Into<Constant>>(value: T) -> Self {
+        Term::Constant(value.into())
+    }
+
+    pub fn literal<T: Into<Literal>>(value: T) -> Self {
+        Term::Literal(value.into())
+    }
+
+    pub fn function_call<T: Into<FunctionCall>>(value: T) -> Self {
+        Term::FunctionCall(value.into())
+    }
+
+    pub fn negative<T: Into<Term>>(t: T) -> Self {
+        Term::ArithmeticOp {
+            lhs: None,
+            op: ArithmeticOp::Sub,
+            rhs: Box::new(t.into()),
+        }
+    }
+
+    pub fn arithmetic_op<LT: Into<Term>, RT: Into<Term>>(lhs: LT, op: ArithmeticOp, rhs: RT) -> Self {
+        Term::ArithmeticOp {
+            lhs: Some(Box::new(lhs.into())),
+            op,
+            rhs: Box::new(rhs.into()),
+        }
+    }
+
+    pub fn type_hint<T: Into<CqlType>, N: Into<Name>>(hint: T, ident: N) -> Self {
+        Term::TypeHint {
+            hint: hint.into(),
+            ident: ident.into(),
+        }
+    }
+
+    pub fn bind_marker<T: Into<BindMarker>>(marker: T) -> Self {
+        Term::BindMarker(marker.into())
+    }
+}
+
 impl Parse for Term {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
@@ -525,6 +572,36 @@ pub enum Constant {
     Blob(Vec<u8>),
 }
 
+impl Constant {
+    pub fn string(s: &str) -> Self {
+        Self::String(s.into())
+    }
+
+    pub fn integer(s: &str) -> anyhow::Result<Self> {
+        Ok(Self::Integer(StatementStream::new(s).parse_from::<SignedNumber>()?))
+    }
+
+    pub fn float(s: &str) -> anyhow::Result<Self> {
+        Ok(Self::Float(StatementStream::new(s).parse_from::<Float>()?))
+    }
+
+    pub fn bool(b: bool) -> Self {
+        Self::Boolean(b)
+    }
+
+    pub fn uuid(u: Uuid) -> Self {
+        Self::Uuid(u)
+    }
+
+    pub fn hex(s: &str) -> anyhow::Result<Self> {
+        Ok(Self::Hex(StatementStream::new(s).parse_from::<Hex>()?))
+    }
+
+    pub fn blob(b: Vec<u8>) -> Self {
+        Self::Blob(b)
+    }
+}
+
 impl Parse for Constant {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
@@ -682,13 +759,13 @@ impl From<i64> for Constant {
 
 impl From<f32> for Constant {
     fn from(f: f32) -> Self {
-        Self::Float(f.to_string())
+        Self::Float(format_cql_f32(f))
     }
 }
 
 impl From<f64> for Constant {
     fn from(f: f64) -> Self {
-        Self::Float(f.to_string())
+        Self::Float(format_cql_f64(f))
     }
 }
 
@@ -744,7 +821,8 @@ impl Display for Literal {
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, From, ToTokens)]
 pub enum CqlType {
     Native(NativeType),
-    Collection(CollectionType),
+    #[from(ignore)]
+    Collection(Box<CollectionType>),
     UserDefined(UserDefinedType),
     Tuple(Vec<CqlType>),
     Custom(LitStr),
@@ -757,7 +835,7 @@ impl Parse for CqlType {
         Self: Sized,
     {
         Ok(if let Some(c) = s.parse()? {
-            Self::Collection(c)
+            Self::Collection(Box::new(c))
         } else if s.parse::<Option<TUPLE>>()?.is_some() {
             Self::Tuple(s.parse_from::<Angles<List<CqlType, Comma>>>()?)
         } else if let Some(n) = s.parse()? {
@@ -794,6 +872,12 @@ impl Display for CqlType {
             ),
             Self::Custom(c) => c.fmt(f),
         }
+    }
+}
+
+impl From<CollectionType> for CqlType {
+    fn from(c: CollectionType) -> Self {
+        Self::Collection(Box::new(c))
     }
 }
 
@@ -945,9 +1029,23 @@ impl Display for CollectionTypeLiteral {
 
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum CollectionType {
-    List(Box<CqlType>),
-    Set(Box<CqlType>),
-    Map(Box<CqlType>, Box<CqlType>),
+    List(CqlType),
+    Set(CqlType),
+    Map(CqlType, CqlType),
+}
+
+impl CollectionType {
+    pub fn list<T: Into<CqlType>>(t: T) -> Self {
+        Self::List(t.into())
+    }
+
+    pub fn set<T: Into<CqlType>>(t: T) -> Self {
+        Self::Set(t.into())
+    }
+
+    pub fn map<K: Into<CqlType>, V: Into<CqlType>>(k: K, v: V) -> Self {
+        Self::Map(k.into(), v.into())
+    }
 }
 
 impl Parse for CollectionType {
@@ -958,11 +1056,11 @@ impl Parse for CollectionType {
     {
         Ok(if s.parse::<Option<MAP>>()?.is_some() {
             let (t1, _, t2) = s.parse_from::<Angles<(CqlType, Comma, CqlType)>>()?;
-            Self::Map(Box::new(t1), Box::new(t2))
+            Self::Map(t1, t2)
         } else if s.parse::<Option<SET>>()?.is_some() {
-            Self::Set(Box::new(s.parse_from::<Angles<CqlType>>()?))
+            Self::Set(s.parse_from::<Angles<CqlType>>()?)
         } else if s.parse::<Option<LIST>>()?.is_some() {
-            Self::List(Box::new(s.parse_from::<Angles<CqlType>>()?))
+            Self::List(s.parse_from::<Angles<CqlType>>()?)
         } else {
             anyhow::bail!("Invalid collection type: {}", s.info())
         })
@@ -1033,6 +1131,14 @@ impl<T: Into<Term>> From<HashMap<T, T>> for MapLiteral {
     }
 }
 
+impl<T: Into<Term>> From<BTreeMap<T, T>> for MapLiteral {
+    fn from(m: BTreeMap<T, T>) -> Self {
+        Self {
+            elements: m.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct TupleLiteral {
     pub elements: Vec<Term>,
@@ -1079,15 +1185,21 @@ impl<T: Into<Term>> From<Vec<T>> for TupleLiteral {
 
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct SetLiteral {
-    pub elements: Vec<Term>,
+    pub elements: BTreeSet<Term>,
 }
 
 impl Parse for SetLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(Self {
-            elements: s.parse_from::<Braces<List<Term, Comma>>>()?,
-        })
+        let v = s.parse_from::<Braces<List<Term, Comma>>>()?;
+        let mut elements = BTreeSet::new();
+        for e in v {
+            if elements.contains(&e) {
+                anyhow::bail!("Duplicate element in set: {}", e);
+            }
+            elements.insert(e);
+        }
+        Ok(Self { elements })
     }
 }
 impl Peek for SetLiteral {
@@ -1100,7 +1212,7 @@ impl Display for SetLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[{}]",
+            "{{{}}}",
             self.elements
                 .iter()
                 .map(|t| t.to_string())
@@ -1110,8 +1222,16 @@ impl Display for SetLiteral {
     }
 }
 
-impl<T: Into<Term>> From<Vec<T>> for SetLiteral {
-    fn from(elements: Vec<T>) -> Self {
+impl<T: Into<Term>> From<HashSet<T>> for SetLiteral {
+    fn from(elements: HashSet<T>) -> Self {
+        Self {
+            elements: elements.into_iter().map(|t| t.into()).collect(),
+        }
+    }
+}
+
+impl<T: Into<Term>> From<BTreeSet<T>> for SetLiteral {
+    fn from(elements: BTreeSet<T>) -> Self {
         Self {
             elements: elements.into_iter().map(|t| t.into()).collect(),
         }

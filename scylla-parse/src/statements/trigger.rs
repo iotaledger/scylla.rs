@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum TriggerStatement {
     Create(CreateTriggerStatement),
     Drop(DropTriggerStatement),
@@ -28,9 +28,9 @@ impl Peek for TriggerStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct CreateTriggerStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
@@ -40,12 +40,21 @@ pub struct CreateTriggerStatement {
     pub using: LitStr,
 }
 
+impl CreateTriggerStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateTriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, TRIGGER)>()?;
         let mut res = CreateTriggerStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?)
             .table(s.parse::<(ON, KeyspaceQualifiedName)>()?.1)
             .using(s.parse::<(USING, LitStr)>()?.1);
@@ -75,9 +84,9 @@ impl Display for CreateTriggerStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropTriggerStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
@@ -85,12 +94,21 @@ pub struct DropTriggerStatement {
     pub table: KeyspaceQualifiedName,
 }
 
+impl DropTriggerStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
+}
+
 impl Parse for DropTriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, TRIGGER)>()?;
         let mut res = DropTriggerStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?)
             .table(s.parse::<(ON, KeyspaceQualifiedName)>()?.1);
         s.parse::<Option<Semicolon>>()?;
@@ -121,31 +139,33 @@ impl Display for DropTriggerStatement {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::KeyspaceQualifyExt;
 
     #[test]
     fn test_parse_create_trigger() {
-        let stmt = "CREATE TRIGGER my_trigger ON my_table USING 'my_function';";
-        let parsed = stmt.parse::<CreateTriggerStatement>().unwrap();
-        let test = CreateTriggerStatementBuilder::default()
-            .if_not_exists(false)
-            .name("my_trigger")
-            .table("my_table")
-            .using("my_function")
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = CreateTriggerStatementBuilder::default();
+        builder.name("test_trigger");
+        assert!(builder.build().is_err());
+        builder.table("test_keyspace".dot("my_table"));
+        assert!(builder.build().is_err());
+        builder.using("test_trigger_function");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_trigger() {
-        let stmt = "DROP TRIGGER my_trigger ON my_table;";
-        let parsed = stmt.parse::<DropTriggerStatement>().unwrap();
-        let test = DropTriggerStatementBuilder::default()
-            .if_exists(false)
-            .name("my_trigger")
-            .table("my_table")
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = DropTriggerStatementBuilder::default();
+        builder.name("test_trigger");
+        assert!(builder.build().is_err());
+        builder.table("test_keyspace".dot("my_table"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }

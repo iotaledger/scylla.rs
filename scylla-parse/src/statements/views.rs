@@ -4,7 +4,7 @@
 use super::*;
 use crate::PrimaryKey;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
 pub enum MaterializedViewStatement {
     Create(CreateMaterializedViewStatement),
     Alter(AlterMaterializedViewStatement),
@@ -36,9 +36,9 @@ impl Peek for MaterializedViewStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 pub struct CreateMaterializedViewStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
@@ -48,12 +48,21 @@ pub struct CreateMaterializedViewStatement {
     pub table_opts: TableOpts,
 }
 
+impl CreateMaterializedViewStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateMaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, MATERIALIZED, VIEW)>()?;
         let mut res = CreateMaterializedViewStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?)
             .select_statement(s.parse::<(AS, _)>()?.1)
             .primary_key(s.parse_from::<((PRIMARY, KEY), Parens<PrimaryKey>)>()?.1)
@@ -85,7 +94,7 @@ impl Display for CreateMaterializedViewStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 pub struct AlterMaterializedViewStatement {
     #[builder(setter(into))]
     pub name: Name,
@@ -118,11 +127,21 @@ impl Display for AlterMaterializedViewStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropMaterializedViewStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl DropMaterializedViewStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropMaterializedViewStatement {
@@ -130,7 +149,7 @@ impl Parse for DropMaterializedViewStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, MATERIALIZED, VIEW)>()?;
         let mut res = DropMaterializedViewStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -162,65 +181,59 @@ mod test {
 
     #[test]
     fn test_parse_create_mv() {
-        let stmt = "
-            CREATE MATERIALIZED VIEW monkeySpecies_by_population AS
-            SELECT * FROM monkeySpecies
-            WHERE population IS NOT NULL AND species IS NOT NULL
-            PRIMARY KEY (population, species)
-            WITH comment='Allow query by population instead of species';";
-        let parsed = stmt.parse::<CreateMaterializedViewStatement>().unwrap();
-        let test = CreateMaterializedViewStatementBuilder::default()
-            .name("monkeySpecies_by_population")
-            .select_statement(
-                SelectStatementBuilder::default()
-                    .select_clause(SelectClause::All)
-                    .from("monkeySpecies")
-                    .where_clause(vec![
-                        Relation::is_not_null("population"),
-                        Relation::is_not_null("species"),
-                    ])
-                    .build()
-                    .unwrap(),
-            )
-            .primary_key(vec!["population", "species"])
-            .table_opts(
-                crate::TableOptsBuilder::default()
-                    .comment("Allow query by population instead of species")
-                    .build()
-                    .unwrap(),
-            )
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = CreateMaterializedViewStatementBuilder::default();
+        builder.name("test_mv");
+        assert!(builder.build().is_err());
+        builder.select_statement(
+            SelectStatementBuilder::default()
+                .select_clause(SelectClause::All)
+                .from("test_table")
+                .where_clause(vec![
+                    Relation::is_not_null("column_1"),
+                    Relation::is_not_null("column 2"),
+                ])
+                .build()
+                .unwrap(),
+        );
+        assert!(builder.build().is_err());
+        builder.primary_key(vec!["column_1", "column 2"]);
+        assert!(builder.build().is_err());
+        builder.table_opts(
+            crate::TableOptsBuilder::default()
+                .comment(r#"test comment " "#)
+                .build()
+                .unwrap(),
+        );
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.primary_key(PrimaryKey::partition_key("column_1").clustering_columns(vec!["column 2", "column_3"]));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_alter_mv() {
-        let stmt = "
-            ALTER MATERIALIZED VIEW monkeySpecies_by_population WITH default_time_to_live=100;";
-        let parsed = stmt.parse::<AlterMaterializedViewStatement>().unwrap();
-        let test = AlterMaterializedViewStatementBuilder::default()
-            .name("monkeySpecies_by_population")
-            .table_opts(
-                crate::TableOptsBuilder::default()
-                    .default_time_to_live(100)
-                    .build()
-                    .unwrap(),
-            )
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = AlterMaterializedViewStatementBuilder::default();
+        builder.name("test mv");
+        assert!(builder.build().is_err());
+        builder.table_opts(
+            crate::TableOptsBuilder::default()
+                .default_time_to_live(100)
+                .build()
+                .unwrap(),
+        );
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_drop_mv() {
-        let stmt = "DROP MATERIALIZED VIEW IF EXISTS monkeySpecies_by_population;";
-        let parsed = stmt.parse::<DropMaterializedViewStatement>().unwrap();
-        let test = DropMaterializedViewStatementBuilder::default()
-            .if_exists(true)
-            .name("monkeySpecies_by_population")
-            .build()
-            .unwrap();
-        assert_eq!(parsed.to_string(), test.to_string());
+        let mut builder = DropMaterializedViewStatementBuilder::default();
+        builder.name("test_mv");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }

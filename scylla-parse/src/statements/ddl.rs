@@ -10,7 +10,7 @@ use crate::{
     TerminatingList,
 };
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
 pub enum DataDefinitionStatement {
     Use(UseStatement),
     CreateKeyspace(CreateKeyspaceStatement),
@@ -163,11 +163,20 @@ impl Display for KeyspaceOpts {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct CreateKeyspaceStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub keyspace: Name,
     pub options: KeyspaceOpts,
+}
+
+impl CreateKeyspaceStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for CreateKeyspaceStatement {
@@ -175,7 +184,7 @@ impl Parse for CreateKeyspaceStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, KEYSPACE)>()?;
         let mut res = CreateKeyspaceStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .keyspace(s.parse::<Name>()?);
         s.parse::<WITH>()?;
         res.options(s.parse()?);
@@ -250,10 +259,19 @@ impl Display for AlterKeyspaceStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropKeyspaceStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub keyspace: Name,
+}
+
+impl DropKeyspaceStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropKeyspaceStatement {
@@ -261,7 +279,7 @@ impl Parse for DropKeyspaceStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, KEYSPACE)>()?;
         let mut res = DropKeyspaceStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .keyspace(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -297,9 +315,9 @@ impl<T: Into<Name>> From<T> for DropKeyspaceStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
-#[builder(setter(strip_option))]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
 pub struct CreateTableStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
@@ -310,12 +328,28 @@ pub struct CreateTableStatement {
     pub options: Option<TableOpts>,
 }
 
+impl CreateTableStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.columns.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Column definitions cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
 impl Parse for CreateTableStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, TABLE)>()?;
         let mut res = CreateTableStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .table(s.parse::<KeyspaceQualifiedName>()?);
         s.parse::<LeftParen>()?;
         res.columns(s.parse_from::<TerminatingList<ColumnDefinition, Comma, (PRIMARY, KEY)>>()?);
@@ -414,12 +448,20 @@ pub enum AlterTableInstruction {
 }
 
 impl AlterTableInstruction {
-    pub fn add<T: Into<ColumnDefinition>>(defs: Vec<T>) -> Self {
-        AlterTableInstruction::Add(defs.into_iter().map(|i| i.into()).collect())
+    pub fn add<T: Into<ColumnDefinition>>(defs: Vec<T>) -> anyhow::Result<Self> {
+        if defs.is_empty() {
+            anyhow::bail!("Column definitions cannot be empty");
+        }
+        Ok(AlterTableInstruction::Add(defs.into_iter().map(|i| i.into()).collect()))
     }
 
-    pub fn drop<T: Into<Name>>(names: Vec<T>) -> Self {
-        AlterTableInstruction::Drop(names.into_iter().map(|i| i.into()).collect())
+    pub fn drop<T: Into<Name>>(names: Vec<T>) -> anyhow::Result<Self> {
+        if names.is_empty() {
+            anyhow::bail!("Column names cannot be empty");
+        }
+        Ok(AlterTableInstruction::Drop(
+            names.into_iter().map(|i| i.into()).collect(),
+        ))
     }
 
     pub fn alter<N: Into<Name>, T: Into<CqlType>>(name: N, cql_type: T) -> Self {
@@ -476,10 +518,19 @@ impl Display for AlterTableInstruction {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropTableStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
+}
+
+impl DropTableStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropTableStatement {
@@ -487,7 +538,7 @@ impl Parse for DropTableStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, TABLE)>()?;
         let mut res = DropTableStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .table(s.parse::<KeyspaceQualifiedName>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -607,7 +658,7 @@ mod test {
         builder.primary_key(vec!["tinyint", "int", "bigint"]);
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.if_not_exists(true);
+        builder.if_not_exists();
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         let mut opts_builder = crate::TableOptsBuilder::default();
@@ -655,28 +706,31 @@ mod test {
         let mut builder = AlterTableStatementBuilder::default();
         builder.table("test");
         assert!(builder.build().is_err());
-        builder.instruction(AlterTableInstruction::add(vec![
-            ("ascii", NativeType::Ascii),
-            ("bigint", NativeType::Bigint),
-            ("blob", NativeType::Blob),
-            ("boolean", NativeType::Boolean),
-            ("counter", NativeType::Counter),
-            ("decimal", NativeType::Decimal),
-            ("double", NativeType::Double),
-            ("duration", NativeType::Duration),
-            ("float", NativeType::Float),
-            ("inet", NativeType::Inet),
-            ("int", NativeType::Int),
-            ("smallint", NativeType::Smallint),
-            ("text", NativeType::Text),
-            ("time", NativeType::Time),
-            ("timestamp", NativeType::Timestamp),
-            ("timeuuid", NativeType::Timeuuid),
-            ("tinyint", NativeType::Tinyint),
-            ("uuid", NativeType::Uuid),
-            ("varchar", NativeType::Varchar),
-            ("varint", NativeType::Varint),
-        ]));
+        builder.instruction(
+            AlterTableInstruction::add(vec![
+                ("ascii", NativeType::Ascii),
+                ("bigint", NativeType::Bigint),
+                ("blob", NativeType::Blob),
+                ("boolean", NativeType::Boolean),
+                ("counter", NativeType::Counter),
+                ("decimal", NativeType::Decimal),
+                ("double", NativeType::Double),
+                ("duration", NativeType::Duration),
+                ("float", NativeType::Float),
+                ("inet", NativeType::Inet),
+                ("int", NativeType::Int),
+                ("smallint", NativeType::Smallint),
+                ("text", NativeType::Text),
+                ("time", NativeType::Time),
+                ("timestamp", NativeType::Timestamp),
+                ("timeuuid", NativeType::Timeuuid),
+                ("tinyint", NativeType::Tinyint),
+                ("uuid", NativeType::Uuid),
+                ("varchar", NativeType::Varchar),
+                ("varint", NativeType::Varint),
+            ])
+            .unwrap(),
+        );
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         builder.table("test".dot("test"));
@@ -685,7 +739,7 @@ mod test {
         builder.instruction(AlterTableInstruction::alter("ascii", NativeType::Blob));
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.instruction(AlterTableInstruction::drop(vec!["ascii", "timestamp", "varint"]));
+        builder.instruction(AlterTableInstruction::drop(vec!["ascii", "timestamp", "varint"]).unwrap());
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         let mut opts_builder = crate::TableOptsBuilder::default();
@@ -756,7 +810,7 @@ mod test {
         builder.table("test");
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.if_exists(true).table("test".dot("test"));
+        builder.if_exists().table("test".dot("test"));
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
@@ -766,7 +820,7 @@ mod test {
         let mut builder = CreateKeyspaceStatementBuilder::default();
         builder.keyspace("test");
         assert!(builder.build().is_err());
-        builder.if_not_exists(true);
+        builder.if_not_exists();
         assert!(builder.build().is_err());
         builder.options(
             KeyspaceOptsBuilder::default()
@@ -820,7 +874,7 @@ mod test {
         builder.keyspace("test");
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
-        builder.if_exists(true);
+        builder.if_exists();
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }

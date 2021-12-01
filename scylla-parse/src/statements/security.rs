@@ -1,10 +1,10 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
 use super::*;
+use std::collections::BTreeSet;
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum RoleStatement {
     Create(CreateRoleStatement),
     Alter(AlterRoleStatement),
@@ -54,6 +54,32 @@ pub enum RoleOpt {
     Options(MapLiteral),
     AccessToDatacenters(SetLiteral),
     AccessToAllDatacenters,
+}
+
+impl RoleOpt {
+    pub fn password<T: Into<LitStr>>(password: T) -> Self {
+        Self::Password(password.into())
+    }
+
+    pub fn login(login: bool) -> Self {
+        Self::Login(login)
+    }
+
+    pub fn superuser(superuser: bool) -> Self {
+        Self::Superuser(superuser)
+    }
+
+    pub fn options<T: Into<MapLiteral>>(options: T) -> Self {
+        Self::Options(options.into())
+    }
+
+    pub fn access_to_datacenters<T: Into<SetLiteral>>(datacenters: T) -> Self {
+        Self::AccessToDatacenters(datacenters.into())
+    }
+
+    pub fn access_to_all_datacenters() -> Self {
+        Self::AccessToAllDatacenters
+    }
 }
 
 impl PartialEq for RoleOpt {
@@ -142,10 +168,10 @@ pub trait RoleOptBuilderExt {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct CreateRoleStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
@@ -153,12 +179,21 @@ pub struct CreateRoleStatement {
     pub options: Option<BTreeSet<RoleOpt>>,
 }
 
+impl CreateRoleStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, ROLE)>()?;
         let mut res = CreateRoleStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?);
         if let Some(o) = s.parse_from::<If<WITH, List<RoleOpt, AND>>>()? {
             let mut opts = BTreeSet::new();
@@ -192,10 +227,14 @@ impl Display for CreateRoleStatement {
             if self.if_not_exists { "IF NOT EXISTS" } else { "" },
             self.name,
             if let Some(ref opts) = self.options {
-                format!(
-                    " WITH {}",
-                    opts.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" AND ")
-                )
+                if !opts.is_empty() {
+                    format!(
+                        " WITH {}",
+                        opts.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" AND ")
+                    )
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             }
@@ -215,11 +254,21 @@ impl RoleOptBuilderExt for CreateRoleStatementBuilder {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
 pub struct AlterRoleStatement {
     #[builder(setter(into))]
     pub name: Name,
     pub options: BTreeSet<RoleOpt>,
+}
+
+impl AlterRoleStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self.options.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Role options cannot be empty".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for AlterRoleStatement {
@@ -272,12 +321,21 @@ impl RoleOptBuilderExt for AlterRoleStatementBuilder {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropRoleStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl DropRoleStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropRoleStatement {
@@ -290,7 +348,7 @@ impl Parse for DropRoleStatement {
                 break;
             }
             if s.parse::<Option<(IF, EXISTS)>>()?.is_some() {
-                res.if_exists(true);
+                res.if_exists();
             } else if let Some(n) = s.parse::<Option<Name>>()? {
                 res.name(n);
             } else {
@@ -322,7 +380,8 @@ impl Display for DropRoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(into))]
 pub struct GrantRoleStatement {
     pub name: Name,
     pub to: Name,
@@ -333,9 +392,9 @@ impl Parse for GrantRoleStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<GRANT>()?;
         let mut res = GrantRoleStatementBuilder::default();
-        res.name(s.parse()?);
+        res.name(s.parse::<Name>()?);
         s.parse::<TO>()?;
-        res.to(s.parse()?);
+        res.to(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -355,7 +414,8 @@ impl Display for GrantRoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(into))]
 pub struct RevokeRoleStatement {
     pub name: Name,
     pub from: Name,
@@ -366,9 +426,9 @@ impl Parse for RevokeRoleStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<REVOKE>()?;
         let mut res = RevokeRoleStatementBuilder::default();
-        res.name(s.parse()?);
+        res.name(s.parse::<Name>()?);
         s.parse::<FROM>()?;
-        res.from(s.parse()?);
+        res.from(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -388,13 +448,22 @@ impl Display for RevokeRoleStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct ListRolesStatement {
     #[builder(setter(into), default)]
-    pub name: Option<Name>,
-    #[builder(default)]
+    pub of: Option<Name>,
+    #[builder(setter(name = "set_no_recursive"), default)]
     pub no_recursive: bool,
+}
+
+impl ListRolesStatementBuilder {
+    /// Set NO RECURSIVE on the statement.
+    /// To undo this, use `set_no_recursive(false)`.
+    pub fn no_recursive(&mut self) -> &mut Self {
+        self.no_recursive.replace(true);
+        self
+    }
 }
 
 impl Parse for ListRolesStatement {
@@ -403,9 +472,9 @@ impl Parse for ListRolesStatement {
         s.parse::<(LIST, ROLES)>()?;
         let mut res = ListRolesStatementBuilder::default();
         if let Some(n) = s.parse_from::<If<OF, Name>>()? {
-            res.name(n);
+            res.of(n);
         }
-        res.no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
+        res.set_no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -424,7 +493,7 @@ impl Display for ListRolesStatement {
         write!(
             f,
             "LIST ROLES{}{}",
-            if let Some(n) = &self.name {
+            if let Some(n) = &self.of {
                 format!(" OF {}", n)
             } else {
                 String::new()
@@ -434,7 +503,7 @@ impl Display for ListRolesStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Permission {
     Create,
     Alter,
@@ -482,7 +551,7 @@ impl Display for Permission {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum PermissionKind {
     All,
     One(Permission),
@@ -520,7 +589,7 @@ impl From<Permission> for PermissionKind {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Resource {
     AllKeyspaces,
     Keyspace(Name),
@@ -554,9 +623,13 @@ impl Resource {
         Resource::Role(name.into())
     }
 
-    pub fn all_functions(keyspace: impl Into<Option<Name>>) -> Self {
+    pub fn all_functions() -> Self {
+        Resource::AllFunctions { keyspace: None }
+    }
+
+    pub fn all_functions_in_keyspace(keyspace: impl Into<Name>) -> Self {
         Resource::AllFunctions {
-            keyspace: keyspace.into(),
+            keyspace: Some(keyspace.into()),
         }
     }
 
@@ -643,7 +716,7 @@ impl Display for Resource {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum PermissionStatement {
     Grant(GrantPermissionStatement),
     Revoke(RevokePermissionStatement),
@@ -673,7 +746,7 @@ impl Peek for PermissionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
 pub struct GrantPermissionStatement {
     pub permission: PermissionKind,
@@ -710,7 +783,7 @@ impl Display for GrantPermissionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
 pub struct RevokePermissionStatement {
     pub permission: PermissionKind,
@@ -747,7 +820,7 @@ impl Display for RevokePermissionStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct ListPermissionsStatement {
     #[builder(setter(into))]
@@ -756,8 +829,17 @@ pub struct ListPermissionsStatement {
     pub resource: Option<Resource>,
     #[builder(setter(into), default)]
     pub of: Option<Name>,
-    #[builder(default)]
+    #[builder(setter(name = "set_no_recursive"), default)]
     pub no_recursive: bool,
+}
+
+impl ListPermissionsStatementBuilder {
+    /// Set NO RECURSIVE on the statement.
+    /// To undo this, use `set_no_recursive(false)`.
+    pub fn no_recursive(&mut self) -> &mut Self {
+        self.no_recursive.replace(true);
+        self
+    }
 }
 
 impl Parse for ListPermissionsStatement {
@@ -779,7 +861,8 @@ impl Parse for ListPermissionsStatement {
                 if res.of.is_some() {
                     anyhow::bail!("Duplicate OF ROLE clause!");
                 }
-                res.of(role).no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
+                res.of(role)
+                    .set_no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
             } else {
                 return Ok(res
                     .build()
@@ -820,7 +903,7 @@ impl Display for ListPermissionsStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum UserStatement {
     Create(CreateUserStatement),
     Alter(AlterUserStatement),
@@ -854,10 +937,10 @@ impl Peek for UserStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct CreateUserStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
@@ -867,12 +950,21 @@ pub struct CreateUserStatement {
     pub superuser: Option<bool>,
 }
 
+impl CreateUserStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+}
+
 impl Parse for CreateUserStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, USER)>()?;
         let mut res = CreateUserStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
@@ -929,7 +1021,7 @@ impl Display for CreateUserStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct AlterUserStatement {
     #[builder(setter(into))]
@@ -996,12 +1088,21 @@ impl Display for AlterUserStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropUserStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl DropUserStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropUserStatement {
@@ -1009,7 +1110,7 @@ impl Parse for DropUserStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, USER)>()?;
         let mut res = DropUserStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
             .name(s.parse::<Name>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -1035,7 +1136,7 @@ impl Display for DropUserStatement {
     }
 }
 
-#[derive(Copy, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct ListUsersStatement;
 
 impl Parse for ListUsersStatement {
@@ -1058,7 +1159,7 @@ impl Display for ListUsersStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
 pub enum UserDefinedTypeStatement {
     Create(CreateUserDefinedTypeStatement),
     Alter(AlterUserDefinedTypeStatement),
@@ -1090,12 +1191,30 @@ impl Peek for UserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
 pub struct CreateUserDefinedTypeStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
+    #[builder(setter(into))]
     pub name: KeyspaceQualifiedName,
     pub fields: Vec<FieldDefinition>,
+}
+
+impl CreateUserDefinedTypeStatementBuilder {
+    /// Set IF NOT EXISTS on the statement.
+    /// To undo this, use `set_if_not_exists(false)`.
+    pub fn if_not_exists(&mut self) -> &mut Self {
+        self.if_not_exists.replace(true);
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.fields.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Field definitions cannot be empty".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for CreateUserDefinedTypeStatement {
@@ -1103,8 +1222,8 @@ impl Parse for CreateUserDefinedTypeStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, TYPE)>()?;
         let mut res = CreateUserDefinedTypeStatementBuilder::default();
-        res.if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse()?)
+        res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
+            .name(s.parse::<KeyspaceQualifiedName>()?)
             .fields(s.parse_from::<Parens<List<FieldDefinition, Comma>>>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -1131,10 +1250,29 @@ impl Display for CreateUserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
 pub struct AlterUserDefinedTypeStatement {
+    #[builder(setter(into))]
     pub name: KeyspaceQualifiedName,
     pub instruction: AlterTypeInstruction,
+}
+
+impl AlterUserDefinedTypeStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .instruction
+            .as_ref()
+            .map(|s| match s {
+                AlterTypeInstruction::Rename(s) => s.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("RENAME clause cannot be empty".to_string());
+        }
+        Ok(())
+    }
 }
 
 impl Parse for AlterUserDefinedTypeStatement {
@@ -1142,7 +1280,7 @@ impl Parse for AlterUserDefinedTypeStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, TYPE)>()?;
         let mut res = AlterUserDefinedTypeStatementBuilder::default();
-        res.name(s.parse()?).instruction(s.parse()?);
+        res.name(s.parse::<KeyspaceQualifiedName>()?).instruction(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -1162,10 +1300,20 @@ impl Display for AlterUserDefinedTypeStatement {
     }
 }
 
-#[derive(ParseFromStr, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum AlterTypeInstruction {
     Add(FieldDefinition),
     Rename(Vec<(Name, Name)>),
+}
+
+impl AlterTypeInstruction {
+    pub fn add<T: Into<FieldDefinition>>(field: T) -> Self {
+        Self::Add(field.into())
+    }
+
+    pub fn rename(renames: Vec<(impl Into<Name>, impl Into<Name>)>) -> Self {
+        Self::Rename(renames.into_iter().map(|(from, to)| (from.into(), to.into())).collect())
+    }
 }
 
 impl Parse for AlterTypeInstruction {
@@ -1201,11 +1349,21 @@ impl Display for AlterTypeInstruction {
     }
 }
 
-#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct DropUserDefinedTypeStatement {
-    #[builder(default)]
+    #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
+    #[builder(setter(into))]
     pub name: KeyspaceQualifiedName,
+}
+
+impl DropUserDefinedTypeStatementBuilder {
+    /// Set IF EXISTS on the statement.
+    /// To undo this, use `set_if_exists(false)`.
+    pub fn if_exists(&mut self) -> &mut Self {
+        self.if_exists.replace(true);
+        self
+    }
 }
 
 impl Parse for DropUserDefinedTypeStatement {
@@ -1213,8 +1371,8 @@ impl Parse for DropUserDefinedTypeStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, TYPE)>()?;
         let mut res = DropUserDefinedTypeStatementBuilder::default();
-        res.if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse()?);
+        res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
+            .name(s.parse::<KeyspaceQualifiedName>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -1241,86 +1399,411 @@ impl Display for DropUserDefinedTypeStatement {
 
 #[cfg(test)]
 mod test {
+    use crate::{
+        CollectionType,
+        Constant,
+        KeyspaceQualifyExt,
+        NativeType,
+    };
+
     use super::*;
 
     #[test]
     fn test_parse_create_role() {
-        let s = "CREATE ROLE IF NOT EXISTS admin WITH PASSWORD = 'admin' AND SUPERUSER = true AND LOGIN = true";
-        let stmt = s.parse::<CreateRoleStatement>().unwrap();
-        let test = CreateRoleStatementBuilder::default()
-            .if_not_exists(true)
-            .name("admin")
-            .password("admin")
-            .superuser(true)
-            .login(true)
-            .build()
-            .unwrap();
-        assert_eq!(stmt.to_string(), test.to_string());
+        let mut builder = CreateRoleStatementBuilder::default();
+        builder.name("test_role");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.options(maplit::btreeset! {
+            RoleOpt::password("test_password"),
+        });
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.options(maplit::btreeset! {
+            RoleOpt::password("test_password"),
+            RoleOpt::login(true),
+            RoleOpt::superuser(false),
+            RoleOpt::access_to_datacenters(maplit::btreeset!{
+                Constant::string("dc1"),
+                Constant::string("dc2"),
+            }),
+            RoleOpt::access_to_all_datacenters(),
+            RoleOpt::options(maplit::btreemap! {
+                Constant::string("custom_option1") => Constant::string("custom value1"),
+                Constant::string("custom_option2") => 99_i32.into(),
+            })
+        });
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_alter_role() {
-        let s = "ALTER ROLE admin WITH PASSWORD = 'admin' AND SUPERUSER = true AND LOGIN = true";
-        let stmt = s.parse::<AlterRoleStatement>().unwrap();
-        let test = AlterRoleStatementBuilder::default()
-            .name("admin")
-            .password("admin")
-            .superuser(true)
-            .login(true)
-            .build()
-            .unwrap();
-        assert_eq!(stmt.to_string(), test.to_string());
+        let mut builder = AlterRoleStatementBuilder::default();
+        builder.name("test_role");
+        assert!(builder.build().is_err());
+        builder.options(BTreeSet::new());
+        assert!(builder.build().is_err());
+        builder.options(maplit::btreeset! {
+            RoleOpt::password("test_password"),
+        });
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.options(maplit::btreeset! {
+            RoleOpt::password("test_password"),
+            RoleOpt::login(true),
+            RoleOpt::superuser(false),
+            RoleOpt::access_to_datacenters(maplit::btreeset!{
+                Constant::string("dc1"),
+                Constant::string("dc2"),
+            }),
+            RoleOpt::access_to_all_datacenters(),
+            RoleOpt::options(maplit::btreemap! {
+                Constant::string("custom_option1") => Constant::string("custom value1"),
+                Constant::string("custom_option2") => 99_i32.into(),
+            })
+        });
     }
 
     #[test]
     fn test_parse_drop_role() {
-        let s = "DROP ROLE admin IF EXISTS";
-        let stmt = s.parse::<DropRoleStatement>().unwrap();
-        let test = DropRoleStatementBuilder::default()
-            .if_exists(true)
-            .name("admin")
-            .build()
-            .unwrap();
-        assert_eq!(stmt.to_string(), test.to_string());
+        let mut builder = DropRoleStatementBuilder::default();
+        builder.name("test_role");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_grant_role() {
+        let mut builder = GrantRoleStatementBuilder::default();
+        builder.name("test_role");
+        assert!(builder.build().is_err());
+        builder.to("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_revoke_role() {
+        let mut builder = RevokeRoleStatementBuilder::default();
+        builder.name("test_role");
+        assert!(builder.build().is_err());
+        builder.from("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_list_roles() {
+        let mut builder = ListRolesStatementBuilder::default();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.of("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.no_recursive();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_grant_permission() {
-        let s = "GRANT MODIFY PERMISSION ON KEYSPACE test TO admin";
-        let stmt = s.parse::<GrantPermissionStatement>().unwrap();
-        let test = GrantPermissionStatementBuilder::default()
-            .permission(Permission::Modify)
-            .resource(Resource::keyspace("test"))
-            .to("admin")
-            .build()
-            .unwrap();
-        assert_eq!(stmt.to_string(), test.to_string());
+        let mut builder = GrantPermissionStatementBuilder::default();
+        builder.permission(Permission::Create);
+        assert!(builder.build().is_err());
+        builder.resource(Resource::keyspace("test_keyspace"));
+        assert!(builder.build().is_err());
+        builder.to("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Alter);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Drop);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Select);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Modify);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Authorize);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Describe);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Execute);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(PermissionKind::All);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_keyspaces());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::table("test_table"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_roles());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::role("test_role"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_functions_in_keyspace("test_keyspace"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_functions());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::function("test_keyspace".dot("func")));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_mbeans());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::mbean("test_mbean"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_revoke_permission() {
-        let s = "REVOKE ALL PERMISSIONS ON TABLE test FROM admin";
-        let stmt = s.parse::<RevokePermissionStatement>().unwrap();
-        let test = RevokePermissionStatementBuilder::default()
-            .permission(PermissionKind::All)
-            .resource(Resource::table("test"))
-            .from("admin")
-            .build()
-            .unwrap();
-        assert_eq!(stmt.to_string(), test.to_string());
+        let mut builder = RevokePermissionStatementBuilder::default();
+        builder.permission(PermissionKind::All);
+        assert!(builder.build().is_err());
+        builder.resource(Resource::keyspace("test_keyspace"));
+        assert!(builder.build().is_err());
+        builder.from("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Alter);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Drop);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Select);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Modify);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Authorize);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Describe);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Execute);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Create);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_keyspaces());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::table("test_table"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_roles());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::role("test_role"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_functions_in_keyspace("test_keyspace"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_functions());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::function("test_keyspace".dot("func")));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_mbeans());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::mbean("test_mbean"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 
     #[test]
     fn test_parse_list_permissions() {
-        let s = "LIST SELECT PERMISSION ON MBEAN 'test' OF admin NORECURSIVE";
-        let stmt = s.parse::<ListPermissionsStatement>().unwrap();
-        let test = ListPermissionsStatementBuilder::default()
-            .permission(Permission::Select)
-            .resource(Resource::mbean("test"))
-            .of("admin")
-            .no_recursive(true)
-            .build()
-            .unwrap();
-        assert_eq!(stmt.to_string(), test.to_string());
+        let mut builder = ListPermissionsStatementBuilder::default();
+        builder.permission(PermissionKind::All);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::keyspace("test_keyspace"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.of("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.no_recursive();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Alter);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Drop);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Select);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Modify);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Authorize);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Describe);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Execute);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.permission(Permission::Create);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_keyspaces());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::table("test_table"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_roles());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::role("test_role"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_functions_in_keyspace("test_keyspace"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_functions());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::function("test_keyspace".dot("func")));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::all_mbeans());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.resource(Resource::mbean("test_mbean"));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_create_user() {
+        let mut builder = CreateUserStatementBuilder::default();
+        builder.name("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.with_password("test_password");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.superuser(true);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.superuser(false);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_alter_user() {
+        let mut builder = AlterUserStatementBuilder::default();
+        builder.name("test_person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.with_password("test_password");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.superuser(true);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.superuser(false);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_drop_user() {
+        let mut builder = DropUserStatementBuilder::default();
+        builder.name("test person");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_list_users() {
+        assert_eq!(ListUsersStatement, ListUsersStatement.to_string().parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_create_udt() {
+        let mut builder = CreateUserDefinedTypeStatementBuilder::default();
+        builder.name("test_udt");
+        assert!(builder.build().is_err());
+        builder.fields(vec![]);
+        assert!(builder.build().is_err());
+        builder.fields(vec![
+            ("test_field1", NativeType::Int).into(),
+            ("test field2", CollectionType::list(NativeType::Text)).into(),
+        ]);
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_not_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_alter_udt() {
+        let mut builder = AlterUserDefinedTypeStatementBuilder::default();
+        builder.name("test_udt");
+        assert!(builder.build().is_err());
+        builder.instruction(AlterTypeInstruction::add((
+            "test_field1",
+            vec![NativeType::Float.into(), NativeType::Date.into()],
+        )));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.instruction(AlterTypeInstruction::rename(vec![
+            ("test_field1", "tuple field"),
+            ("test_field2", "list_field"),
+        ]));
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_drop_udt() {
+        let mut builder = DropUserDefinedTypeStatementBuilder::default();
+        builder.name("test_udt");
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+        builder.if_exists();
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
 }
