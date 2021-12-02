@@ -101,6 +101,12 @@ macro_rules! impl_try_into_statements {
                     }
                 }
             }
+
+            impl From<$stmt> for Statement {
+                fn from(v: $stmt) -> Self {
+                    <$via>::from(v).into()
+                }
+            }
         )*)*
     };
 }
@@ -145,6 +151,39 @@ impl Parse for Statement {
         } else {
             anyhow::bail!("Invalid statement: {}", s.info())
         })
+    }
+}
+
+impl Display for Statement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataDefinition(stmt) => stmt.fmt(f),
+            Self::DataManipulation(stmt) => stmt.fmt(f),
+            Self::SecondaryIndex(stmt) => stmt.fmt(f),
+            Self::MaterializedView(stmt) => stmt.fmt(f),
+            Self::Role(stmt) => stmt.fmt(f),
+            Self::Permission(stmt) => stmt.fmt(f),
+            Self::User(stmt) => stmt.fmt(f),
+            Self::UserDefinedFunction(stmt) => stmt.fmt(f),
+            Self::UserDefinedType(stmt) => stmt.fmt(f),
+            Self::Trigger(stmt) => stmt.fmt(f),
+        }
+    }
+}
+
+impl KeyspaceExt for Statement {
+    fn get_keyspace(&self) -> Option<String> {
+        match self {
+            Statement::DataManipulation(s) => s.get_keyspace(),
+            _ => None,
+        }
+    }
+
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        match self {
+            Statement::DataManipulation(s) => s.set_keyspace(keyspace),
+            _ => (),
+        }
     }
 }
 

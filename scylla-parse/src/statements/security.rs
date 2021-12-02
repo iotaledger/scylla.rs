@@ -46,6 +46,19 @@ impl Peek for RoleStatement {
     }
 }
 
+impl Display for RoleStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Alter(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+            Self::Grant(stmt) => stmt.fmt(f),
+            Self::Revoke(stmt) => stmt.fmt(f),
+            Self::List(stmt) => stmt.fmt(f),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug, Ord, PartialOrd, Eq, ToTokens)]
 pub enum RoleOpt {
     Password(LitStr),
@@ -746,6 +759,16 @@ impl Peek for PermissionStatement {
     }
 }
 
+impl Display for PermissionStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Grant(stmt) => stmt.fmt(f),
+            Self::Revoke(stmt) => stmt.fmt(f),
+            Self::List(stmt) => stmt.fmt(f),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
 pub struct GrantPermissionStatement {
@@ -934,6 +957,17 @@ impl Peek for UserStatement {
             || s.check::<AlterUserStatement>()
             || s.check::<DropUserStatement>()
             || s.check::<ListUsersStatement>()
+    }
+}
+
+impl Display for UserStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Alter(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+            Self::List(stmt) => stmt.fmt(f),
+        }
     }
 }
 
@@ -1188,6 +1222,16 @@ impl Peek for UserDefinedTypeStatement {
         s.check::<CreateUserDefinedTypeStatement>()
             || s.check::<AlterUserDefinedTypeStatement>()
             || s.check::<DropUserDefinedTypeStatement>()
+    }
+}
+
+impl Display for UserDefinedTypeStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Alter(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+        }
     }
 }
 

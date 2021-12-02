@@ -3,6 +3,9 @@
 
 use super::*;
 
+pub trait KeyspaceExecuteExt: KeyspaceExt + Into<Statement> {}
+impl<T> KeyspaceExecuteExt for T where T: KeyspaceExt + Into<Statement> {}
+
 /// Specifies helper functions for creating dynamic requests
 pub trait GetDynamicExecuteRequest: Keyspace {
     /// Create a dynamic request from a statement and variables. Can be specified as either
@@ -25,9 +28,9 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn execute<'a>(
+    fn execute<'a, S: KeyspaceExecuteExt>(
         &self,
-        statement: &str,
+        statement: S,
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
@@ -56,16 +59,16 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn execute_query<'a>(
+    fn execute_query<'a, S: KeyspaceExecuteExt>(
         &self,
-        statement: &str,
+        statement: S,
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
+        let statement = statement.with_keyspace(self.name()).into();
         ExecuteBuilder {
-            keyspace_name: self.name().into(),
-            statement: statement.to_owned().into(),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
 
@@ -88,22 +91,22 @@ pub trait GetDynamicExecuteRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn execute_prepared<'a>(
+    fn execute_prepared<'a, S: KeyspaceExecuteExt>(
         &self,
-        statement: &str,
+        statement: S,
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
+        let statement = statement.with_keyspace(self.name()).into();
         ExecuteBuilder {
-            keyspace_name: self.name().into(),
-            statement: statement.to_owned().into(),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
 }
 
 /// Specifies helper functions for creating dynamic requests from anything that can be interpreted as a statement
-pub trait AsDynamicExecuteRequest: ToStatement
+pub trait AsDynamicExecuteRequest
 where
     Self: Sized,
 {
@@ -123,7 +126,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_execute<'a>(
-        &self,
+        self,
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
@@ -148,17 +151,9 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_execute_query<'a>(
-        &self,
+        self,
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
-        let statement = self.to_statement();
-        ExecuteBuilder {
-            keyspace_name: self.keyspace(),
-            builder: QueryStatement::encode_statement(Query::new(), &statement),
-            statement,
-            variables,
-        }
-    }
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency>;
 
     /// Create a dynamic query request from a statement and variables.
     ///
@@ -175,25 +170,40 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_execute_prepared<'a>(
-        &self,
+        self,
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency>;
+}
+
+impl<S: Keyspace> GetDynamicExecuteRequest for S {}
+impl<T: Into<Statement>> AsDynamicExecuteRequest for T {
+    fn as_execute_query<'a>(
+        self,
         variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
-        let statement = self.to_statement();
+        let statement = self.into();
         ExecuteBuilder {
-            keyspace_name: self.keyspace(),
-            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
+            variables,
+        }
+    }
+
+    fn as_execute_prepared<'a>(
+        self,
+        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
+        let statement = self.into();
+        ExecuteBuilder {
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
             statement,
             variables,
         }
     }
 }
 
-impl<S: Keyspace> GetDynamicExecuteRequest for S {}
-impl<S: ToStatement> AsDynamicExecuteRequest for S {}
-
 pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
-    pub(crate) keyspace_name: Option<String>,
-    pub(crate) statement: String,
+    pub(crate) statement: Statement,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
 }
@@ -205,7 +215,6 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryValues> {
         let builder = self.builder.consistency(consistency).bind_values().bind(self.variables);
         ExecuteBuilder {
-            keyspace_name: self.keyspace_name,
             statement: self.statement,
             variables: self.variables,
             builder,
@@ -217,7 +226,6 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
         timestamp: i64,
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
         ExecuteBuilder {
-            keyspace_name: self.keyspace_name,
             statement: self.statement,
             variables: self.variables,
             builder: self
@@ -237,13 +245,11 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
             .bind(self.variables)
             .build()?;
         // create the request
-        Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
+        Ok(ExecuteRequest {
             token: rand::random(),
             payload: query.into(),
             statement: self.statement,
-        }
-        .into())
+        })
     }
 }
 
@@ -253,7 +259,6 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
         timestamp: i64,
     ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
         ExecuteBuilder {
-            keyspace_name: self.keyspace_name,
             statement: self.statement,
             variables: self.variables,
             builder: self.builder.timestamp(timestamp),
@@ -263,13 +268,11 @@ impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], 
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
+        Ok(ExecuteRequest {
             token: rand::random(),
             payload: query.into(),
             statement: self.statement,
-        }
-        .into())
+        })
     }
 }
 
@@ -277,54 +280,47 @@ impl<'a, V: ?Sized> ExecuteBuilder<'a, V, QueryBuild> {
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
         let query = self.builder.build()?;
         // create the request
-        Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
+        Ok(ExecuteRequest {
             token: rand::random(),
             payload: query.into(),
             statement: self.statement,
-        }
-        .into())
+        })
     }
 }
 
 /// A request to execute a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct ExecuteRequest(CommonRequest);
+pub struct ExecuteRequest {
+    pub(crate) token: i64,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) statement: Statement,
+}
 
 impl From<CommonRequest> for ExecuteRequest {
     fn from(req: CommonRequest) -> Self {
-        ExecuteRequest(req)
-    }
-}
-
-impl Deref for ExecuteRequest {
-    type Target = CommonRequest;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ExecuteRequest {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        ExecuteRequest {
+            token: req.token,
+            payload: req.payload,
+            statement: req.statement.into(),
+        }
     }
 }
 
 impl Request for ExecuteRequest {
     fn token(&self) -> i64 {
-        self.0.token()
+        self.token
     }
 
-    fn statement(&self) -> &String {
-        self.0.statement()
+    fn statement(&self) -> Statement {
+        self.statement.clone().into()
     }
 
     fn payload(&self) -> Vec<u8> {
-        self.0.payload()
+        self.payload.clone()
     }
+
     fn keyspace(&self) -> Option<String> {
-        self.0.keyspace()
+        self.statement.get_keyspace()
     }
 }
 

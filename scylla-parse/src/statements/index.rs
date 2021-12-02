@@ -28,6 +28,15 @@ impl Peek for SecondaryIndexStatement {
     }
 }
 
+impl Display for SecondaryIndexStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
 pub struct CreateIndexStatement {

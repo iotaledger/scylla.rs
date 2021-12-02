@@ -34,11 +34,6 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
         V::try_decode_rows(decoder)
     }
     // TODO replication_refactor, strategy, options,etc.
-
-    /// Helper function to replace the {{keyspace}} token in dynamic statements
-    fn replace_keyspace_token(&self, statement: &str) -> String {
-        statement.replace("{{keyspace}}", &self.name())
-    }
 }
 
 impl<T> Keyspace for T

@@ -2792,7 +2792,7 @@ where
             let (k, v) = (TokenWrapper(k), TokenWrapper(v));
             quote! {#k => #v}
         });
-        tokens.extend(quote! { btreemap![#(#t),*]});
+        tokens.extend(quote! { maplit::btreemap![#(#t),*]});
     }
 }
 
@@ -2802,7 +2802,7 @@ where
 {
     fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
         let t = self.iter().map(|k| TokenWrapper(k));
-        tokens.extend(quote! { btreeset![#(#t),*]});
+        tokens.extend(quote! { maplit::btreeset![#(#t),*]});
     }
 }
 

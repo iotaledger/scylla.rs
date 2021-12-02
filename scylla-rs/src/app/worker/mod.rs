@@ -274,7 +274,7 @@ where
     let statement = worker.request().statement();
     let keyspace_name = worker.request().keyspace();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    PrepareWorker::new(keyspace_name, id, statement)
+    PrepareWorker::new(keyspace_name, id, statement.try_into().unwrap())
         .send_to_reporter(reporter)
         .ok();
     let payload = worker.request().payload();

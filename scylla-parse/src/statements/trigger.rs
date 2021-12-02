@@ -27,6 +27,14 @@ impl Peek for TriggerStatement {
         s.check::<CreateTriggerStatement>() || s.check::<DropTriggerStatement>()
     }
 }
+impl Display for TriggerStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+        }
+    }
+}
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct CreateTriggerStatement {

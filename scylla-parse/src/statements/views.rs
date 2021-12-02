@@ -36,6 +36,16 @@ impl Peek for MaterializedViewStatement {
     }
 }
 
+impl Display for MaterializedViewStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Alter(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 pub struct CreateMaterializedViewStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]

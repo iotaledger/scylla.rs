@@ -78,7 +78,6 @@ pub use delete::{
     GetDynamicDeleteRequest,
     GetStaticDeleteRequest,
 };
-use dyn_clone::DynClone;
 pub use execute::{
     AsDynamicExecuteRequest,
     ExecuteRequest,
@@ -149,76 +148,6 @@ pub enum RequestType {
     Execute = 5,
 }
 
-/// Represents anything that can be used to generate a statement.
-/// For instance, a select query string or a keyspace with a `Select<K, V>` impl.
-pub trait ToStatement: DynClone + Debug + Send + Sync {
-    /// Get the statement from this type
-    fn to_statement(&self) -> String;
-    /// Get the keyspace name from this type
-    fn keyspace(&self) -> Option<String>;
-}
-dyn_clone::clone_trait_object!(ToStatement);
-
-impl ToStatement for String {
-    fn to_statement(&self) -> String {
-        self.clone().into()
-    }
-    fn keyspace(&self) -> Option<String> {
-        // Todo parse the keyspace from the cql statement or default to empty string
-        String::new().into()
-    }
-}
-
-impl ToStatement for &str {
-    fn to_statement(&self) -> String {
-        self.to_string().into()
-    }
-    fn keyspace(&self) -> Option<String> {
-        // Todo parse the keyspace from the cql statement or default to empty string
-        String::new().into()
-    }
-}
-
-impl ToStatement for SelectStatement {
-    fn to_statement(&self) -> String {
-        self.to_string().into()
-    }
-
-    fn keyspace(&self) -> Option<String> {
-        KeyspaceExt::get_keyspace(self)
-    }
-}
-
-impl ToStatement for UpdateStatement {
-    fn to_statement(&self) -> String {
-        self.to_string().into()
-    }
-
-    fn keyspace(&self) -> Option<String> {
-        KeyspaceExt::get_keyspace(self)
-    }
-}
-
-impl ToStatement for InsertStatement {
-    fn to_statement(&self) -> String {
-        self.to_string().into()
-    }
-
-    fn keyspace(&self) -> Option<String> {
-        KeyspaceExt::get_keyspace(self)
-    }
-}
-
-impl ToStatement for DeleteStatement {
-    fn to_statement(&self) -> String {
-        self.to_string().into()
-    }
-
-    fn keyspace(&self) -> Option<String> {
-        KeyspaceExt::get_keyspace(self)
-    }
-}
-
 /// Marker for dynamic requests
 pub struct DynamicRequest;
 /// Marker for static requests
@@ -246,7 +175,7 @@ pub trait Request {
     fn token(&self) -> i64;
 
     /// Get the statement that was used to create this request
-    fn statement(&self) -> &String;
+    fn statement(&self) -> Statement;
 
     /// Get the request payload
     fn payload(&self) -> Vec<u8>;
@@ -416,20 +345,18 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 /// A common request type which contains only the bare minimum information needed
 #[derive(Debug, Clone)]
 pub struct CommonRequest {
-    pub(crate) keyspace_name: Option<String>,
     pub(crate) token: i64,
     pub(crate) payload: Vec<u8>,
-    pub(crate) statement: String,
+    pub(crate) statement: DataManipulationStatement,
 }
 
 impl CommonRequest {
     #[allow(missing_docs)]
-    pub fn new<T: Into<String>>(keyspace_name: Option<String>, statement: &str, payload: Vec<u8>) -> Self {
+    pub fn new<T: Into<String>>(statement: DataManipulationStatement, payload: Vec<u8>) -> Self {
         Self {
-            keyspace_name,
             token: 0,
             payload,
-            statement: statement.to_string().into(),
+            statement,
         }
     }
 }
@@ -439,26 +366,27 @@ impl Request for CommonRequest {
         self.token
     }
 
-    fn statement(&self) -> &String {
-        &self.statement
+    fn statement(&self) -> Statement {
+        self.statement.clone().into()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
     }
+
     fn keyspace(&self) -> Option<String> {
-        self.keyspace_name.to_owned().clone().into()
+        self.statement.get_keyspace()
     }
 }
 
 /// Defines two helper methods to specify statement / id
 #[allow(missing_docs)]
 pub trait GetStatementIdExt {
-    fn select_statement<K, V, O>(&self) -> String
+    fn select_statement<K, V, O>(&self) -> SelectStatement
     where
         Self: Select<K, V, O>,
     {
-        self.statement().to_string()
+        self.statement()
     }
 
     fn select_id<K, V, O>(&self) -> [u8; 16]
@@ -468,11 +396,11 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn insert_statement<K, V>(&self) -> String
+    fn insert_statement<K, V>(&self) -> InsertStatement
     where
         Self: Insert<K, V>,
     {
-        self.statement().to_string()
+        self.statement()
     }
 
     fn insert_id<K, V>(&self) -> [u8; 16]
@@ -482,11 +410,11 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn update_statement<K, V, U>(&self) -> String
+    fn update_statement<K, V, U>(&self) -> UpdateStatement
     where
         Self: Update<K, V, U>,
     {
-        self.statement().to_string()
+        self.statement()
     }
 
     fn update_id<K, V, U>(&self) -> [u8; 16]
@@ -496,11 +424,11 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn delete_statement<K, V, D>(&self) -> String
+    fn delete_statement<K, V, D>(&self) -> DeleteStatement
     where
         Self: Delete<K, V, D>,
     {
-        self.statement().to_string()
+        self.statement()
     }
 
     fn delete_id<K, V, D>(&self) -> [u8; 16]
@@ -747,10 +675,9 @@ pub mod tests {
     #[allow(dead_code)]
     fn test_select() {
         let keyspace = MyKeyspace::new();
-        let select_stmt: SelectStatement = parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?");
         let res = keyspace
             .select_with::<f32>(
-                "SELECT col1 FROM keyspace.table WHERE key = ?",
+                parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?"),
                 &[&3, &"str"],
                 &[],
                 StatementType::Query,
@@ -762,7 +689,7 @@ pub mod tests {
             .with_retries(3)
             .send_local();
         assert!(res.is_err());
-        let res = "SELECT col1 FROM keyspace.table WHERE key = ?"
+        let res = parse_statement!(r#"SELECT col1 FROM "keyspace"."table" WHERE key = ?"#)
             .as_select_prepared::<f32>(&[&3], &[])
             .build()
             .unwrap()
@@ -786,7 +713,7 @@ pub mod tests {
 
         "my_keyspace"
             .insert_with(
-                "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+                parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
                 &[&3],
                 &[&8.0, &"hello"],
                 StatementType::Query,
@@ -797,7 +724,7 @@ pub mod tests {
             .get_local_blocking()
             .unwrap();
 
-        "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+        parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
             .as_insert_query(&[&3], &[&8.0, &"hello"])
             //.bind_values(|binder, keys, values| binder.bind(keys).bind(values))
             .build()
@@ -841,8 +768,8 @@ pub mod tests {
             .unwrap()
             .compute_token(&3);
         let id = keyspace.insert_id::<u32, f32>();
-        let statement = req.get_statement(&id).unwrap();
-        assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
+        let statement = req.get_statement(&id).unwrap().clone();
+        assert_eq!(statement, keyspace.insert_statement::<u32, f32>().into());
         let _res = req.clone().send_local().unwrap();
     }
 
@@ -872,7 +799,7 @@ pub mod tests {
         backstage::spawn_task("adding node task", async move {
             "scylla_example"
                 .insert_query_with(
-                    "INSERT INTO {{keyspace}}.test (key, data) VALUES (?, ?)",
+                    parse_statement!("INSERT INTO test (key, data) VALUES (?, ?)"),
                     &[&"Test 1"],
                     &[&1],
                 )

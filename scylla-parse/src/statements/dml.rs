@@ -61,6 +61,28 @@ impl Display for DataManipulationStatement {
     }
 }
 
+impl KeyspaceExt for DataManipulationStatement {
+    fn get_keyspace(&self) -> Option<String> {
+        match self {
+            DataManipulationStatement::Select(s) => s.get_keyspace(),
+            DataManipulationStatement::Insert(s) => s.get_keyspace(),
+            DataManipulationStatement::Update(s) => s.get_keyspace(),
+            DataManipulationStatement::Delete(s) => s.get_keyspace(),
+            DataManipulationStatement::Batch(_) => None,
+        }
+    }
+
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        match self {
+            DataManipulationStatement::Select(s) => s.set_keyspace(keyspace),
+            DataManipulationStatement::Insert(s) => s.set_keyspace(keyspace),
+            DataManipulationStatement::Update(s) => s.set_keyspace(keyspace),
+            DataManipulationStatement::Delete(s) => s.set_keyspace(keyspace),
+            DataManipulationStatement::Batch(_) => (),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
 pub struct SelectStatement {

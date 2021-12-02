@@ -58,7 +58,7 @@ pub trait Delete<K, V, D>: Keyspace {
     /// for use when generating queries that should use
     /// the prepared statement.
     fn id(&self) -> [u8; 16] {
-        md5::compute(self.delete_statement().as_bytes()).into()
+        md5::compute(self.delete_statement().to_string().as_bytes()).into()
     }
 
     /// Bind the cql values to the builder
@@ -118,13 +118,11 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
         Self: Delete<K, V, D>,
     {
         let statement = self.statement();
-        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         DeleteBuilder {
-            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement.to_string()),
             statement,
             _marker: PhantomData,
         }
@@ -180,13 +178,11 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
         Self: Delete<K, V, D>,
     {
         let statement = self.statement();
-        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         DeleteBuilder {
-            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &statement),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
             statement,
             _marker: PhantomData,
         }
@@ -242,13 +238,11 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
         Self: Delete<K, V, D>,
     {
         let statement = self.statement();
-        let (keyspace_name, statement) = (statement.get_keyspace(), statement.to_string());
         DeleteBuilder {
-            keyspace_name,
             keyspace: PhantomData,
             key,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &statement),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
             statement,
             _marker: PhantomData,
         }
@@ -277,7 +271,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// ```
     fn delete_with<'a>(
         &'a self,
-        statement: &str,
+        statement: DeleteStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
@@ -315,7 +309,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// ```
     fn delete_query_with<'a>(
         &'a self,
-        statement: &str,
+        statement: DeleteStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> DeleteBuilder<
@@ -327,13 +321,13 @@ pub trait GetDynamicDeleteRequest: Keyspace {
         QueryConsistency,
         DynamicRequest,
     > {
+        let statement = statement.with_keyspace(self.name());
         DeleteBuilder {
-            keyspace_name: self.name().into(),
             keyspace: PhantomData,
-            statement: statement.to_owned().into(),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             key,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: PhantomData,
         }
     }
@@ -357,7 +351,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// ```
     fn delete_prepared_with<'a>(
         &'a self,
-        statement: &str,
+        statement: DeleteStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> DeleteBuilder<
@@ -369,20 +363,20 @@ pub trait GetDynamicDeleteRequest: Keyspace {
         QueryConsistency,
         DynamicRequest,
     > {
+        let statement = statement.with_keyspace(self.name());
         DeleteBuilder {
-            keyspace_name: self.name().into(),
             keyspace: PhantomData,
-            statement: statement.to_owned().into(),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             key,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: PhantomData,
         }
     }
 }
 
 /// Specifies helper functions for creating dynamic delete requests from anything that can be interpreted as a statement
-pub trait AsDynamicDeleteRequest: ToStatement
+pub trait AsDynamicDeleteRequest
 where
     Self: Sized,
 {
@@ -400,7 +394,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_delete<'a>(
-        &self,
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
@@ -432,7 +426,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_delete_query<'a>(
-        &self,
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> DeleteBuilder<
@@ -443,18 +437,7 @@ where
         (),
         QueryConsistency,
         DynamicRequest,
-    > {
-        let statement = self.to_statement();
-        DeleteBuilder {
-            keyspace_name: self.keyspace(),
-            _marker: PhantomData,
-            keyspace: PhantomData,
-            builder: QueryStatement::encode_statement(Query::new(), &statement),
-            statement,
-            key,
-            variables,
-        }
-    }
+    >;
 
     /// Create a dynamic prepared delete request from a statement and variables.
     ///
@@ -469,7 +452,25 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_delete_prepared<'a>(
-        &self,
+        self,
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> DeleteBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
+        QueryConsistency,
+        DynamicRequest,
+    >;
+}
+
+impl<S: Keyspace, K, V> GetStaticDeleteRequest<K, V> for S {}
+impl<S: Keyspace> GetDynamicDeleteRequest for S {}
+impl AsDynamicDeleteRequest for DeleteStatement {
+    fn as_delete_query<'a>(
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> DeleteBuilder<
@@ -481,27 +482,43 @@ where
         QueryConsistency,
         DynamicRequest,
     > {
-        let statement = self.to_statement();
         DeleteBuilder {
-            keyspace_name: self.keyspace(),
             _marker: PhantomData,
             keyspace: PhantomData,
-            builder: PreparedStatement::encode_statement(Query::new(), &statement),
-            statement,
+            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
+            statement: self,
+            key,
+            variables,
+        }
+    }
+
+    fn as_delete_prepared<'a>(
+        self,
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> DeleteBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        (),
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        DeleteBuilder {
+            _marker: PhantomData,
+            keyspace: PhantomData,
+            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
+            statement: self,
             key,
             variables,
         }
     }
 }
 
-impl<S: Keyspace, K, V> GetStaticDeleteRequest<K, V> for S {}
-impl<S: Keyspace> GetDynamicDeleteRequest for S {}
-impl<S: ToStatement> AsDynamicDeleteRequest for S {}
-
 pub struct DeleteBuilder<'a, S, K: ?Sized, V: ?Sized, D, Stage, T> {
-    pub(crate) keyspace_name: Option<String>,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
-    pub(crate) statement: String,
+    pub(crate) statement: DeleteStatement,
     pub(crate) key: &'a K,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -512,7 +529,6 @@ impl<'a, S: Delete<K, V, D>, K: TokenEncoder, V, D> DeleteBuilder<'a, S, K, V, D
     pub fn consistency(self, consistency: Consistency) -> DeleteBuilder<'a, S, K, V, D, QueryValues, StaticRequest> {
         DeleteBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -527,7 +543,6 @@ impl<'a, S: Delete<K, V, D>, K: TokenEncoder, V, D> DeleteBuilder<'a, S, K, V, D
 
     pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, D, QueryBuild, StaticRequest> {
         DeleteBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -551,10 +566,9 @@ impl<'a, S: Delete<K, V, D>, K: TokenEncoder, V, D> DeleteBuilder<'a, S, K, V, D
         .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -585,7 +599,6 @@ impl<'a, S: Keyspace, D>
     > {
         DeleteBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name.into(),
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -607,7 +620,6 @@ impl<'a, S: Keyspace, D>
         DynamicRequest,
     > {
         DeleteBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -631,10 +643,9 @@ impl<'a, S: Keyspace, D>
             .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -643,7 +654,6 @@ impl<'a, S: Keyspace, D>
 impl<'a, S, K: ?Sized, V: ?Sized, D, T> DeleteBuilder<'a, S, K, V, D, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> DeleteBuilder<'a, S, K, V, D, QueryBuild, T> {
         DeleteBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -659,10 +669,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, D, T> DeleteBuilder<'a, S, K, V
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -673,10 +682,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, D, T> DeleteBuilder<'a, S, K, V
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name.into(),
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -711,7 +719,7 @@ impl Request for DeleteRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> &String {
+    fn statement(&self) -> Statement {
         self.0.statement()
     }
 

@@ -178,6 +178,17 @@ impl Peek for UserDefinedFunctionStatement {
     }
 }
 
+impl Display for UserDefinedFunctionStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Create(stmt) => stmt.fmt(f),
+            Self::Drop(stmt) => stmt.fmt(f),
+            Self::CreateAggregate(stmt) => stmt.fmt(f),
+            Self::DropAggregate(stmt) => stmt.fmt(f),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub struct CreateFunctionStatement {
     #[builder(setter(name = "set_or_replace"), default)]

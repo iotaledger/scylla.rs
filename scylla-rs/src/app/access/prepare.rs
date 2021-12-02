@@ -52,9 +52,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement();
-        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -103,9 +101,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement();
-        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -163,9 +159,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Update<K, V, I>,
     {
-        let statement = self.statement();
-        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -210,9 +204,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement();
-        let (keyspace, statement) = (statement.keyspace(), statement.to_string());
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 }
 
@@ -230,15 +222,15 @@ pub trait GetDynamicPrepareRequest: Keyspace {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_with(&self, statement: &str) -> PrepareRequest {
-        PrepareRequest::new(self.name().into(), statement.to_string().into())
+    fn prepare_with(&self, statement: impl Into<DataManipulationStatement>) -> PrepareRequest {
+        PrepareRequest::new(statement)
     }
 }
 
 /// Specifies helper functions for creating dynamic prepare requests from anything that can be interpreted as a
 /// statement
 
-pub trait AsDynamicPrepareRequest: ToStatement {
+pub trait AsDynamicPrepareRequest {
     /// Create a dynamic prepare request from a statement.
     /// name.
     ///
@@ -250,30 +242,28 @@ pub trait AsDynamicPrepareRequest: ToStatement {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare(&self) -> PrepareRequest {
-        let statement = self.to_statement();
-        let keyspace_name = self.keyspace();
-        PrepareRequest::new(keyspace_name, statement)
-    }
+    fn prepare(self) -> PrepareRequest;
 }
 
 impl<S: Keyspace> GetStaticPrepareRequest for S {}
 impl<S: Keyspace> GetDynamicPrepareRequest for S {}
-impl<S: ToStatement> AsDynamicPrepareRequest for S {}
+impl AsDynamicPrepareRequest for DataManipulationStatement {
+    fn prepare(self) -> PrepareRequest {
+        PrepareRequest::new(self)
+    }
+}
 
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
-    pub(crate) keyspace_name: Option<String>,
-    pub(crate) statement: String,
+    pub(crate) statement: DataManipulationStatement,
     pub(crate) token: i64,
 }
 
 impl PrepareRequest {
-    fn new(keyspace_name: Option<String>, statement: String) -> Self {
+    fn new(statement: impl Into<DataManipulationStatement>) -> Self {
         PrepareRequest {
-            keyspace_name,
-            statement,
+            statement: statement.into(),
             token: rand::random(),
         }
     }
@@ -284,15 +274,16 @@ impl Request for PrepareRequest {
         self.token
     }
 
-    fn statement(&self) -> &String {
-        &self.statement
+    fn statement(&self) -> Statement {
+        self.statement.clone().into()
     }
 
     fn payload(&self) -> Vec<u8> {
-        Prepare::new().statement(&self.statement).build().unwrap().0
+        Prepare::new().statement(&self.statement.to_string()).build().unwrap().0
     }
+
     fn keyspace(&self) -> Option<String> {
-        self.keyspace_name.clone().into()
+        self.statement.get_keyspace()
     }
 }
 

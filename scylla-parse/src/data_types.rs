@@ -1409,7 +1409,6 @@ impl DurationLiteral {
     }
 }
 
-// TODO: Maybe rework this to parse character-by-character rather than trying to use List
 impl Parse for DurationLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {

@@ -98,40 +98,41 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let keyspace = MyKeyspace::new();
-    keyspace
-        .execute_query(
-            "CREATE KEYSPACE IF NOT EXISTS {{keyspace}}
-            WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
-            AND durable_writes = true",
-            &[],
-        )
-        .consistency(Consistency::All)
-        .build()?
-        .get_local()
-        .await
-        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
+    format!(
+        "CREATE KEYSPACE IF NOT EXISTS {}
+        WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}
+        AND durable_writes = true",
+        keyspace.name()
+    )
+    .parse::<CreateKeyspaceStatement>()
+    .unwrap()
+    .as_execute_query(&[])
+    .consistency(Consistency::All)
+    .build()?
+    .get_local()
+    .await
+    .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-    keyspace
-        .execute_query("DROP TABLE IF EXISTS {{keyspace}}.test", &[])
+    parse_statement!("DROP TABLE IF EXISTS scylla_example.test")
+        .as_execute_query(&[])
         .consistency(Consistency::All)
         .build()?
         .get_local()
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
-    keyspace
-        .execute_query(
-            "CREATE TABLE IF NOT EXISTS {{keyspace}}.test (
-                key text PRIMARY KEY,
-                data blob,
-            )",
-            &[],
-        )
-        .consistency(Consistency::All)
-        .build()?
-        .get_local()
-        .await
-        .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
+    parse_statement!(
+        "CREATE TABLE IF NOT EXISTS scylla_example.test (
+            key text PRIMARY KEY,
+            data blob
+        )"
+    )
+    .as_execute_query(&[])
+    .consistency(Consistency::All)
+    .build()?
+    .get_local()
+    .await
+    .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
     keyspace.prepare_insert::<String, i32>().get_local().await?;
     keyspace.prepare_select::<String, (), i32>().get_local().await?;
@@ -320,8 +321,8 @@ async fn drop_keyspace(node: Option<SocketAddr>) -> anyhow::Result<()> {
         let mut scylla = Scylla::default();
         scylla.insert_node(node);
         let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
-        MyKeyspace::new()
-            .execute_query("DROP KEYSPACE {{keyspace}}", &[])
+        parse_statement!("DROP KEYSPACE scylla_example")
+            .as_execute_query(&[])
             .consistency(Consistency::All)
             .build()?
             .get_local()
@@ -330,8 +331,8 @@ async fn drop_keyspace(node: Option<SocketAddr>) -> anyhow::Result<()> {
         runtime.handle().shutdown().await;
         runtime.block_on().await?;
     } else {
-        MyKeyspace::new()
-            .execute_query("DROP KEYSPACE {{keyspace}}", &[])
+        parse_statement!("DROP KEYSPACE scylla_example")
+            .as_execute_query(&[])
             .consistency(Consistency::All)
             .build()?
             .get_local()
