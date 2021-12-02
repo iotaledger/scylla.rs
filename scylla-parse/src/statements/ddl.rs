@@ -108,7 +108,7 @@ impl<T: Into<Name>> From<T> for UseStatement {
     }
 }
 
-#[derive(Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[derive(Builder, Clone, Debug, ToTokens, PartialEq, Eq, Default)]
 pub struct KeyspaceOpts {
     #[builder(setter(into))]
     pub replication: Replication,

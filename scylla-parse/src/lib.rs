@@ -1829,6 +1829,12 @@ impl Replication {
     }
 }
 
+impl Default for Replication {
+    fn default() -> Self {
+        Replication::simple(1)
+    }
+}
+
 impl Display for Replication {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

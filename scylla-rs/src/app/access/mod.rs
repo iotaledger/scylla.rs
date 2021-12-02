@@ -81,7 +81,6 @@ pub use delete::{
 pub use execute::{
     AsDynamicExecuteRequest,
     ExecuteRequest,
-    GetDynamicExecuteRequest,
 };
 pub use insert::{
     AsDynamicInsertRequest,
@@ -575,7 +574,7 @@ impl<T> Deref for DecodeResult<T> {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use scylla_rs_macros::parse_statement;
 
     use super::*;
@@ -674,6 +673,13 @@ pub mod tests {
 
     #[allow(dead_code)]
     fn test_select() {
+        parse_statement!(
+            "CREATE OR REPLACE AGGREGATE test.average(int)
+            SFUNC averageState
+            STYPE tuple<int,bigint>
+            FINALFUNC averageFinal
+            INITCOND (?, ?);"
+        );
         let keyspace = MyKeyspace::new();
         let res = keyspace
             .select_with::<f32>(

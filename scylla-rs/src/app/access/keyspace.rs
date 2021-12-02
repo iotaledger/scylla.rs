@@ -6,6 +6,12 @@ use crate::cql::{
     RowsDecoder,
     VoidDecoder,
 };
+use scylla_parse::{
+    CreateKeyspaceStatement,
+    DropKeyspaceStatement,
+    KeyspaceOpts,
+};
+
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.
 /// A keyspace can have predefined queries and functionality to
@@ -19,6 +25,9 @@ use crate::cql::{
 /// - `Insert`
 /// - `Delete`
 pub trait Keyspace: Send + Sized + Sync + Clone {
+    /// Options defined for this keyspace
+    fn opts(&self) -> KeyspaceOpts;
+
     /// Get the name of the keyspace as represented in the database
     fn name(&self) -> String;
 
@@ -33,6 +42,26 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
     {
         V::try_decode_rows(decoder)
     }
+
+    /// Retrieve a CREATE KEYSPACE statement builder for this keyspace name
+    fn create(&self) -> CreateKeyspaceStatement {
+        scylla_parse::CreateKeyspaceStatementBuilder::default()
+            .keyspace(self.name())
+            .options(self.opts())
+            .if_not_exists()
+            .build()
+            .unwrap()
+    }
+
+    /// Retrieve a DROP KEYSPACE statement builder for this keyspace name
+    fn drop(&self) -> DropKeyspaceStatement {
+        scylla_parse::DropKeyspaceStatementBuilder::default()
+            .keyspace(self.name())
+            .if_exists()
+            .build()
+            .unwrap()
+    }
+
     // TODO replication_refactor, strategy, options,etc.
 }
 
@@ -42,5 +71,9 @@ where
 {
     fn name(&self) -> String {
         self.to_string()
+    }
+
+    fn opts(&self) -> KeyspaceOpts {
+        Default::default()
     }
 }

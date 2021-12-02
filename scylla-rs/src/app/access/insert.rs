@@ -26,6 +26,16 @@ use super::*;
 ///     fn name(&self) -> String {
 ///         self.name.clone()
 ///     }
+///
+///     fn opts(&self) -> KeyspaceOpts {
+///         KeyspaceOptsBuilder::default()
+///             .replication(Replication::network_topology(maplit::btreemap! {
+///                 "datacenter1" => 1,
+///             }))
+///             .durable_writes(true)
+///             .build()
+///             .unwrap()
+///     }
 /// }
 /// # type MyKeyType = i32;
 /// # #[derive(Default)]
@@ -40,8 +50,8 @@ use super::*;
 /// }
 /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> String {
-///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+///     fn statement(&self) -> InsertStatement {
+///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
 ///     }
 ///
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -95,6 +105,16 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -104,8 +124,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -155,6 +175,16 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -164,8 +194,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -219,6 +249,16 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -228,8 +268,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -275,7 +315,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_with(
-    ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///         StatementType::Query,
@@ -313,7 +353,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_query_with(
-    ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///     )
@@ -354,7 +394,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_prepared_with(
-    ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///     )
@@ -400,7 +440,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
     ///     .as_insert(&[&3], &[&4.0, &5.0], StatementType::Prepared)
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -431,7 +471,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
     ///     .as_insert_query(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -456,7 +496,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
     ///     .as_insert_prepared(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?

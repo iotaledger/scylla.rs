@@ -26,14 +26,24 @@ use super::*;
 ///     fn name(&self) -> String {
 ///         self.name.clone()
 ///     }
+///
+///     fn opts(&self) -> KeyspaceOpts {
+///         KeyspaceOptsBuilder::default()
+///             .replication(Replication::network_topology(maplit::btreemap! {
+///                 "datacenter1" => 1,
+///             }))
+///             .durable_writes(true)
+///             .build()
+///             .unwrap()
+///     }
 /// }
 /// # type MyKeyType = i32;
 /// # type MyVarType = String;
 /// # type MyValueType = f32;
 /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> String {
-///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
+///     fn statement(&self) -> DeleteStatement {
+///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?")
 ///     }
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
 ///         builder.bind(key).bind(variables)
@@ -88,14 +98,24 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> DeleteStatement {
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -148,14 +168,24 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> DeleteStatement {
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -208,14 +238,24 @@ pub trait GetStaticDeleteRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!("DELETE FROM {}.table WHERE key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> DeleteStatement {
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -259,7 +299,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_with(
-    ///         "DELETE FROM {{keyspace}}.table WHERE key = ? AND var = ?",
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///         StatementType::Query,
@@ -298,7 +338,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_query_with(
-    ///         "DELETE FROM {{keyspace}}.table WHERE key = ? AND var = ?",
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///     )
@@ -340,7 +380,7 @@ pub trait GetDynamicDeleteRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .delete_prepared_with(
-    ///         "DELETE FROM {{keyspace}}.table WHERE key = ? AND var = ?",
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///     )
@@ -386,7 +426,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ? AND var = ?"
+    /// parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ? AND var = ?")
     ///     .as_delete(&[&3], &[&"hello"], StatementType::Prepared)
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -418,7 +458,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ? AND var = ?"
+    /// parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ? AND var = ?")
     ///     .as_delete_query(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -444,7 +484,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ? AND var = ?"
+    /// parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ? AND var = ?")
     ///     .as_delete_prepared(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?

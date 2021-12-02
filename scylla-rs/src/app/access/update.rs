@@ -26,6 +26,16 @@ use super::*;
 ///     fn name(&self) -> String {
 ///         self.name.clone()
 ///     }
+///
+///     fn opts(&self) -> KeyspaceOpts {
+///         KeyspaceOptsBuilder::default()
+///             .replication(Replication::network_topology(maplit::btreemap! {
+///                 "datacenter1" => 1,
+///             }))
+///             .durable_writes(true)
+///             .build()
+///             .unwrap()
+///     }
 /// }
 /// # type MyKeyType = i32;
 /// # type MyVarType = String;
@@ -41,12 +51,8 @@ use super::*;
 /// }
 /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> String {
-///         format!(
-///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
-///             self.name()
-///         )
-///         .into()
+///     fn statement(&self) -> UpdateStatement {
+///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
 ///     }
 ///
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
@@ -101,6 +107,16 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
@@ -111,12 +127,8 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!(
-    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
-    ///             self.name()
-    ///         )
-    ///         .into()
+    ///     fn statement(&self) -> UpdateStatement {
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
@@ -176,6 +188,16 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
@@ -186,12 +208,8 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!(
-    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
-    ///             self.name()
-    ///         )
-    ///         .into()
+    ///     fn statement(&self) -> UpdateStatement {
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
@@ -251,6 +269,16 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
@@ -261,12 +289,8 @@ pub trait GetStaticUpdateRequest<K, V, U>: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> String {
-    ///         format!(
-    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
-    ///             self.name()
-    ///         )
-    ///         .into()
+    ///     fn statement(&self) -> UpdateStatement {
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
@@ -318,7 +342,7 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .update_with(
-    ///         "UPDATE {{keyspace}}.table SET val1 = ?, val2 = ? WHERE key = ?",
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///         StatementType::Query,
@@ -357,7 +381,7 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .update_query_with(
-    ///         "UPDATE {{keyspace}}.table SET val1 = ?, val2 = ? WHERE key = ?",
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///     )
@@ -400,7 +424,7 @@ pub trait GetDynamicUpdateRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .update_prepared_with(
-    ///         "UPDATE {{keyspace}}.table SET val1 = ?, val2 = ? WHERE key = ?",
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///     )
@@ -448,7 +472,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "UPDATE my_keyspace.table SET val1 = ?, val2 = ? WHERE key = ?"
+    /// parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     .as_update(&[&3], &[&4.0, &5.0], StatementType::Query)
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -480,7 +504,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "UPDATE my_keyspace.table SET val1 = ?, val2 = ? WHERE key = ?"
+    /// parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     .as_update_query(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -506,7 +530,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "UPDATE my_keyspace.table SET val1 = ?, val2 = ? WHERE key = ?"
+    /// parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     .as_update_prepared(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?

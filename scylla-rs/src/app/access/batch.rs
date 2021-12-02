@@ -23,14 +23,69 @@ use std::collections::HashMap;
 /// and qualified for use in a Batch via batch traits ([`InsertBatch`], [`DeleteBatch`], [`UpdateBatch`])
 /// ## Example
 /// ```no_run
-/// # use scylla_rs::app::access::tests::MyKeyspace;
-/// use scylla_rs::{
-///     app::access::Batchable,
-///     cql::{
-///         Batch,
-///         Consistency,
-///     },
-/// };
+/// # #[derive(Default, Clone, Debug)]
+/// # pub struct MyKeyspace {
+/// #     pub name: String,
+/// # }
+/// #
+/// # impl MyKeyspace {
+/// #     pub fn new() -> Self {
+/// #         Self {
+/// #             name: "my_keyspace".into(),
+/// #         }
+/// #     }
+/// # }
+/// #
+/// # impl ToString for MyKeyspace {
+/// #     fn to_string(&self) -> String {
+/// #         self.name.to_string()
+/// #     }
+/// # }
+/// #
+/// # impl Insert<u32, f32> for MyKeyspace {
+/// #     type QueryOrPrepared = PreparedStatement;
+/// #     fn statement(&self) -> InsertStatement {
+/// #         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
+/// #     }
+/// #
+/// #     fn bind_values<B: Binder>(binder: B, key: &u32, values: &f32) -> B {
+/// #         binder.value(key).value(values).value(values)
+/// #     }
+/// # }
+/// #
+/// # impl Update<u32, (), f32> for MyKeyspace {
+/// #     type QueryOrPrepared = PreparedStatement;
+/// #     fn statement(&self) -> UpdateStatement {
+/// #         parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ?")
+/// #     }
+/// #
+/// #     fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &(), values: &f32) -> B {
+/// #         binder.value(values).value(values).value(key)
+/// #     }
+/// # }
+/// #
+/// # impl Delete<u32, (), f32> for MyKeyspace {
+/// #     type QueryOrPrepared = PreparedStatement;
+/// #     fn statement(&self) -> DeleteStatement {
+/// #         parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ?")
+/// #     }
+/// #
+/// #     fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
+/// #         binder.value(key).value(key)
+/// #     }
+/// # }
+/// #
+/// # impl Delete<u32, (), i32> for MyKeyspace {
+/// #     type QueryOrPrepared = PreparedStatement;
+/// #     fn statement(&self) -> DeleteStatement {
+/// #         parse_statement!("DELETE FROM my_table WHERE key = ?")
+/// #     }
+/// #
+/// #     fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
+/// #         binder.value(key)
+/// #     }
+/// # }
+/// use scylla_rs::app::access::*;
 ///
 /// # let keyspace = MyKeyspace::new();
 /// # let (my_key, my_val, token_key) = (1, 1.0, 1);

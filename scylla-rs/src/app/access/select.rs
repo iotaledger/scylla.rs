@@ -24,14 +24,24 @@ use super::*;
 ///     fn name(&self) -> String {
 ///         self.name.clone()
 ///     }
+///
+///     fn opts(&self) -> KeyspaceOpts {
+///         KeyspaceOptsBuilder::default()
+///             .replication(Replication::network_topology(maplit::btreemap! {
+///                 "datacenter1" => 1,
+///             }))
+///             .durable_writes(true)
+///             .build()
+///             .unwrap()
+///     }
 /// }
 /// # type MyKeyType = i32;
 /// # type MyVarType = String;
 /// # type MyValueType = f32;
 /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> Cow<'static, str> {
-///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+///     fn statement(&self) -> SelectStatement {
+///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
 ///     }
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
 ///         builder.bind(key).bind(variables)
@@ -86,14 +96,24 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -146,14 +166,24 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -206,14 +236,24 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -258,7 +298,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///         StatementType::Query,
@@ -297,7 +337,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_query_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///     )
@@ -339,7 +379,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_prepared_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///     )
@@ -386,7 +426,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    /// let res: Option<f32> = parse_statement!("SELECT val FROM my_keyspace.my_table where key = ? AND var = ?")
     ///     .as_select::<f32>(&[&3], &[&"hello"], StatementType::Query)
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -418,7 +458,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    /// let res: Option<f32> = parse_statement!("SELECT val FROM my_keyspace.my_table where key = ? AND var = ?")
     ///     .as_select_query::<f32>(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -444,7 +484,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    /// let res: Option<f32> = parse_statement!("SELECT val FROM my_keyspace.my_table where key = ? AND var = ?")
     ///     .as_select_prepared::<f32>(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?

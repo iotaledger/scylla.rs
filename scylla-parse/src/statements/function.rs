@@ -105,6 +105,42 @@ impl From<&str> for FunctionReference {
     }
 }
 
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+pub struct FunctionSignature {
+    pub name: FunctionName,
+    pub args: Vec<CqlType>,
+}
+
+impl FunctionSignature {
+    pub fn new<F: Into<FunctionName>, T: Into<CqlType>>(name: F, args: Vec<T>) -> Self {
+        Self {
+            name: name.into(),
+            args: args.into_iter().map(T::into).collect(),
+        }
+    }
+}
+
+impl Parse for FunctionSignature {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(Self {
+            name: s.parse()?,
+            args: s.parse_from::<Parens<List<CqlType, Comma>>>()?,
+        })
+    }
+}
+
+impl Display for FunctionSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            self.args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ")
+        )
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub struct FunctionCall {
     pub name: FunctionName,
@@ -347,7 +383,7 @@ pub struct CreateAggregateFunctionStatement {
     pub or_replace: bool,
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
-    pub func: FunctionDeclaration,
+    pub func: FunctionSignature,
     pub state_modifying_fn: FunctionName,
     #[builder(setter(into))]
     pub state_value_type: CqlType,
@@ -541,13 +577,10 @@ mod test {
     #[test]
     fn test_parse_create_aggregate_function() {
         let mut builder = CreateAggregateFunctionStatementBuilder::default();
-        builder.func(
-            FunctionDeclarationBuilder::default()
-                .name("test".dot("func"))
-                .args(vec![("a", NativeType::Int).into(), ("b", NativeType::Float).into()])
-                .build()
-                .unwrap(),
-        );
+        builder.func(FunctionSignature::new(
+            "test".dot("func"),
+            vec![NativeType::Int, NativeType::Float],
+        ));
         assert!(builder.build().is_err());
         builder.state_modifying_fn("test".dot("func_state_modifying_fn"));
         assert!(builder.build().is_err());

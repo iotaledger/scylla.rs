@@ -68,7 +68,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
         WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
         AND durable_writes = true"
     )
-    .as_execute_query(&[])
+    .execute()
     .consistency(Consistency::All)
     .build()?
     .get_local()
@@ -76,7 +76,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
     parse_statement!("DROP TABLE IF EXISTS scylla_example.test")
-        .as_execute_query(&[])
+        .execute()
         .consistency(Consistency::All)
         .build()?
         .get_local()
@@ -89,7 +89,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
             data blob
         )"
     )
-    .as_execute_query(&[])
+    .execute()
     .consistency(Consistency::All)
     .build()?
     .get_local()
@@ -137,7 +137,7 @@ async fn drop_keyspace(node: SocketAddr) -> anyhow::Result<()> {
     scylla.insert_node(node);
     let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
     parse_statement!("DROP KEYSPACE scylla_example")
-        .as_execute_query(&[])
+        .execute()
         .consistency(Consistency::All)
         .build()?
         .get_local()
