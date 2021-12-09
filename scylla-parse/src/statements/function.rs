@@ -163,11 +163,6 @@ impl Parse for FunctionCall {
         Ok(Self { name, args })
     }
 }
-impl Peek for FunctionCall {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
-    }
-}
 
 impl Display for FunctionCall {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -202,15 +197,6 @@ impl Parse for UserDefinedFunctionStatement {
         } else {
             anyhow::bail!("Expected a data manipulation statement, found {}", s.info())
         })
-    }
-}
-
-impl Peek for UserDefinedFunctionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateFunctionStatement>()
-            || s.check::<DropFunctionStatement>()
-            || s.check::<CreateAggregateFunctionStatement>()
-            || s.check::<DropAggregateFunctionStatement>()
     }
 }
 
@@ -274,12 +260,6 @@ impl Parse for CreateFunctionStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE FUNCTION statement: {}", e))?)
-    }
-}
-
-impl Peek for CreateFunctionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, Option<(OR, REPLACE)>, FUNCTION)>()
     }
 }
 
@@ -357,12 +337,6 @@ impl Parse for DropFunctionStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP FUNCTION statement: {}", e))?)
-    }
-}
-
-impl Peek for DropFunctionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, FUNCTION)>()
     }
 }
 
@@ -447,12 +421,6 @@ impl Parse for CreateAggregateFunctionStatement {
     }
 }
 
-impl Peek for CreateAggregateFunctionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, Option<(OR, REPLACE)>, AGGREGATE)>()
-    }
-}
-
 impl Display for CreateAggregateFunctionStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -502,12 +470,6 @@ impl Parse for DropAggregateFunctionStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP AGGREGATE statement: {}", e))?)
-    }
-}
-
-impl Peek for DropAggregateFunctionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, AGGREGATE)>()
     }
 }
 

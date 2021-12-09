@@ -3,7 +3,19 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use scylla_parse::{DataDefinitionStatement, DataManipulationStatement, SecondaryIndexStatement, Statement};
+use scylla_parse::{
+    DataDefinitionStatement,
+    DataManipulationStatement,
+    MaterializedViewStatement,
+    PermissionStatement,
+    RoleStatement,
+    SecondaryIndexStatement,
+    Statement,
+    TriggerStatement,
+    UserDefinedFunctionStatement,
+    UserDefinedTypeStatement,
+    UserStatement,
+};
 
 #[proc_macro_derive(ColumnEncoder, attributes(column, encode, decode))]
 pub fn column_encoder_derive(input: TokenStream) -> TokenStream {
@@ -85,7 +97,7 @@ pub fn column_encoder_derive(input: TokenStream) -> TokenStream {
                     if fields.is_empty() {
                         panic!("#[derive(ColumnEncoder)] can only be used on enums with variants containing at least one field");
                     }
-                    
+
                     for f in fields.iter() {
                         let encode_attr = f.attrs.iter().find(|a| a.path.is_ident("encode"));
                         let col_attr = f.attrs.iter().find(|a| a.path.is_ident("column") || a.path.is_ident("decode")).is_some();
@@ -135,7 +147,7 @@ pub fn column_encoder_derive(input: TokenStream) -> TokenStream {
                                 .unwrap_or(quote! {_}));
                         }
                     }
-                        
+
                     if call.is_none() {
                         panic!("For enum variants with multiple fields, mark the wrapped column with the `#[column]` or `#[encode]` attribute");
                     }
@@ -353,22 +365,24 @@ pub fn token_encoder_derive(input: TokenStream) -> TokenStream {
             }
         }
         syn::Data::Enum(e) => {
-            let variants = e
-                .variants
-                .iter()
-                .map(|v| {
-                    let syn::Variant {
-                        attrs: _,
-                        ident: var_ident,
-                        fields,
-                        discriminant: _,
-                    } = v;
-                    let mut field_ids = Vec::new();
-                    if fields.is_empty() {
-                        panic!("#[derive(TokenEncoder)] can only be used on enums with variants containing at least one field");
-                    }
-                    
-                    let calls = fields.iter().enumerate().map(|(i,f)| {
+            let variants = e.variants.iter().map(|v| {
+                let syn::Variant {
+                    attrs: _,
+                    ident: var_ident,
+                    fields,
+                    discriminant: _,
+                } = v;
+                let mut field_ids = Vec::new();
+                if fields.is_empty() {
+                    panic!(
+                        "#[derive(TokenEncoder)] can only be used on enums with variants containing at least one field"
+                    );
+                }
+
+                let calls = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| {
                         let id = f.ident.as_ref().map(|f| quote! {#f}).unwrap_or_else(|| {
                             let i = syn::Index::from(i);
                             let id = quote::format_ident!("col{}", i);
@@ -380,14 +394,15 @@ pub fn token_encoder_derive(input: TokenStream) -> TokenStream {
                         } else {
                             quote! {.chain(&#id)}
                         }
-                    }).collect::<Vec<_>>();
+                    })
+                    .collect::<Vec<_>>();
 
-                    match fields {
-                        syn::Fields::Named(_) => quote! { #ident::#var_ident {#(#field_ids),*} => {#(#calls)*} },
-                        syn::Fields::Unnamed(_) => quote! { #ident::#var_ident (#(#field_ids),*) => {#(#calls)*} },
-                        syn::Fields::Unit => panic!(),
-                    }
-                });
+                match fields {
+                    syn::Fields::Named(_) => quote! { #ident::#var_ident {#(#field_ids),*} => {#(#calls)*} },
+                    syn::Fields::Unnamed(_) => quote! { #ident::#var_ident (#(#field_ids),*) => {#(#calls)*} },
+                    syn::Fields::Unit => panic!(),
+                }
+            });
             quote! {
                 impl #imp TokenEncoder for #ident #ty #wher {
                     fn encode_token(&self) -> TokenEncodeChain {
@@ -416,13 +431,10 @@ pub fn row_derive(input: TokenStream) -> TokenStream {
     let (imp, ty, wher) = generics.split_for_impl();
     let res = match data {
         syn::Data::Struct(s) => {
-            let calls = s
-                .fields
-                .iter()
-                .map(|f| {
-                    let id = f.ident.as_ref().map(|f| quote! {#f:});
-                    quote! {#id rows.column_value()?}
-                });
+            let calls = s.fields.iter().map(|f| {
+                let id = f.ident.as_ref().map(|f| quote! {#f:});
+                quote! {#id rows.column_value()?}
+            });
 
             let s = match s.fields {
                 syn::Fields::Named(_) => quote! { Self {#(#calls),*} },
@@ -439,31 +451,28 @@ pub fn row_derive(input: TokenStream) -> TokenStream {
             }
         }
         syn::Data::Enum(e) => {
-            let variants = e
-                .variants
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    let i = i as u8;
-                    let syn::Variant {
-                        attrs: _,
-                        ident: var_ident,
-                        fields,
-                        discriminant: _,
-                    } = v;
-                    let calls = fields
-                        .iter()
-                        .map(|f| {
-                            let id = f.ident.as_ref().map(|f| quote! {#f:});
-                            quote! {#id rows.column_value()?}
-                        }).collect::<Vec<_>>();
+            let variants = e.variants.iter().enumerate().map(|(i, v)| {
+                let i = i as u8;
+                let syn::Variant {
+                    attrs: _,
+                    ident: var_ident,
+                    fields,
+                    discriminant: _,
+                } = v;
+                let calls = fields
+                    .iter()
+                    .map(|f| {
+                        let id = f.ident.as_ref().map(|f| quote! {#f:});
+                        quote! {#id rows.column_value()?}
+                    })
+                    .collect::<Vec<_>>();
 
-                    match fields {
-                        syn::Fields::Named(_) => quote! { #i => #ident::#var_ident {#(#calls),*}, },
-                        syn::Fields::Unnamed(_) => quote! { #i => #ident::#var_ident (#(#calls),*), },
-                        syn::Fields::Unit => panic!(),
-                    }
-                });
+                match fields {
+                    syn::Fields::Named(_) => quote! { #i => #ident::#var_ident {#(#calls),*}, },
+                    syn::Fields::Unnamed(_) => quote! { #i => #ident::#var_ident (#(#calls),*), },
+                    syn::Fields::Unit => panic!(),
+                }
+            });
             quote! {
                 impl #imp Row for #ident #ty #wher {
                     fn try_decode_row<R: ColumnValue>(rows: &mut R) -> anyhow::Result<Self> {
@@ -482,7 +491,10 @@ pub fn row_derive(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn parse_statement(item: TokenStream) -> TokenStream {
-    let res = syn::parse_macro_input!(item as syn::LitStr).value().parse::<Statement>().unwrap();
+    let res = syn::parse_macro_input!(item as syn::LitStr)
+        .value()
+        .parse::<Statement>()
+        .unwrap();
     let res = match res {
         Statement::DataDefinition(stmt) => match stmt {
             DataDefinitionStatement::Use(stmt) => quote!(#stmt),
@@ -506,44 +518,44 @@ pub fn parse_statement(item: TokenStream) -> TokenStream {
             SecondaryIndexStatement::Drop(stmt) => quote!(#stmt),
         },
         Statement::MaterializedView(stmt) => match stmt {
-            scylla_parse::MaterializedViewStatement::Create(stmt) => quote!(#stmt),
-            scylla_parse::MaterializedViewStatement::Alter(stmt) => quote!(#stmt),
-            scylla_parse::MaterializedViewStatement::Drop(stmt) => quote!(#stmt),
+            MaterializedViewStatement::Create(stmt) => quote!(#stmt),
+            MaterializedViewStatement::Alter(stmt) => quote!(#stmt),
+            MaterializedViewStatement::Drop(stmt) => quote!(#stmt),
         },
         Statement::Role(stmt) => match stmt {
-            scylla_parse::RoleStatement::Create(stmt) => quote!(#stmt),
-            scylla_parse::RoleStatement::Alter(stmt) => quote!(#stmt),
-            scylla_parse::RoleStatement::Drop(stmt) => quote!(#stmt),
-            scylla_parse::RoleStatement::Grant(stmt) => quote!(#stmt),
-            scylla_parse::RoleStatement::Revoke(stmt) => quote!(#stmt),
-            scylla_parse::RoleStatement::List(stmt) => quote!(#stmt),
-        }
+            RoleStatement::Create(stmt) => quote!(#stmt),
+            RoleStatement::Alter(stmt) => quote!(#stmt),
+            RoleStatement::Drop(stmt) => quote!(#stmt),
+            RoleStatement::Grant(stmt) => quote!(#stmt),
+            RoleStatement::Revoke(stmt) => quote!(#stmt),
+            RoleStatement::List(stmt) => quote!(#stmt),
+        },
         Statement::Permission(stmt) => match stmt {
-            scylla_parse::PermissionStatement::Grant(stmt) => quote!(#stmt),
-            scylla_parse::PermissionStatement::Revoke(stmt) => quote!(#stmt),
-            scylla_parse::PermissionStatement::List(stmt) => quote!(#stmt),
-        }
+            PermissionStatement::Grant(stmt) => quote!(#stmt),
+            PermissionStatement::Revoke(stmt) => quote!(#stmt),
+            PermissionStatement::List(stmt) => quote!(#stmt),
+        },
         Statement::User(stmt) => match stmt {
-            scylla_parse::UserStatement::Create(stmt) => quote!(#stmt),
-            scylla_parse::UserStatement::Alter(stmt) => quote!(#stmt),
-            scylla_parse::UserStatement::Drop(stmt) => quote!(#stmt),
-            scylla_parse::UserStatement::List(stmt) => quote!(#stmt),
-        }
+            UserStatement::Create(stmt) => quote!(#stmt),
+            UserStatement::Alter(stmt) => quote!(#stmt),
+            UserStatement::Drop(stmt) => quote!(#stmt),
+            UserStatement::List(stmt) => quote!(#stmt),
+        },
         Statement::UserDefinedFunction(stmt) => match stmt {
-            scylla_parse::UserDefinedFunctionStatement::Create(stmt) => quote!(#stmt),
-            scylla_parse::UserDefinedFunctionStatement::Drop(stmt) => quote!(#stmt),
-            scylla_parse::UserDefinedFunctionStatement::CreateAggregate(stmt) => quote!(#stmt),
-            scylla_parse::UserDefinedFunctionStatement::DropAggregate(stmt) => quote!(#stmt),
-        }
+            UserDefinedFunctionStatement::Create(stmt) => quote!(#stmt),
+            UserDefinedFunctionStatement::Drop(stmt) => quote!(#stmt),
+            UserDefinedFunctionStatement::CreateAggregate(stmt) => quote!(#stmt),
+            UserDefinedFunctionStatement::DropAggregate(stmt) => quote!(#stmt),
+        },
         Statement::UserDefinedType(stmt) => match stmt {
-            scylla_parse::UserDefinedTypeStatement::Create(stmt) => quote!(#stmt),
-            scylla_parse::UserDefinedTypeStatement::Alter(stmt) => quote!(#stmt),
-            scylla_parse::UserDefinedTypeStatement::Drop(stmt) => quote!(#stmt),
-        }
+            UserDefinedTypeStatement::Create(stmt) => quote!(#stmt),
+            UserDefinedTypeStatement::Alter(stmt) => quote!(#stmt),
+            UserDefinedTypeStatement::Drop(stmt) => quote!(#stmt),
+        },
         Statement::Trigger(stmt) => match stmt {
-            scylla_parse::TriggerStatement::Create(stmt) => quote!(#stmt),
-            scylla_parse::TriggerStatement::Drop(stmt) => quote!(#stmt),
-        }
+            TriggerStatement::Create(stmt) => quote!(#stmt),
+            TriggerStatement::Drop(stmt) => quote!(#stmt),
+        },
     };
     res.into()
 }

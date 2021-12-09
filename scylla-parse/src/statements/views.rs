@@ -28,14 +28,6 @@ impl Parse for MaterializedViewStatement {
     }
 }
 
-impl Peek for MaterializedViewStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateMaterializedViewStatement>()
-            || s.check::<AlterMaterializedViewStatement>()
-            || s.check::<DropMaterializedViewStatement>()
-    }
-}
-
 impl Display for MaterializedViewStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -84,12 +76,6 @@ impl Parse for CreateMaterializedViewStatement {
     }
 }
 
-impl Peek for CreateMaterializedViewStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, MATERIALIZED, VIEW)>()
-    }
-}
-
 impl Display for CreateMaterializedViewStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -122,12 +108,6 @@ impl Parse for AlterMaterializedViewStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid ALTER MATERIALIZED VIEW statement: {}", e))?)
-    }
-}
-
-impl Peek for AlterMaterializedViewStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALTER, MATERIALIZED, VIEW)>()
     }
 }
 
@@ -165,12 +145,6 @@ impl Parse for DropMaterializedViewStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP MATERIALIZED VIEW statement: {}", e))?)
-    }
-}
-
-impl Peek for DropMaterializedViewStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, MATERIALIZED, VIEW)>()
     }
 }
 

@@ -5,7 +5,6 @@ use super::{
     Alphanumeric,
     CustomToTokens,
     Parse,
-    Peek,
     StatementStream,
     StreamInfo,
 };
@@ -101,21 +100,6 @@ macro_rules! keyword {
                 } else {
                     anyhow::bail!("Expected keyword '{}', found end of stream", this)
                 }
-            }
-        }
-        impl Peek for $t {
-            fn peek(mut s: StatementStream<'_>) -> bool {
-                let this = stringify!($t);
-                for (s1, s2) in this.chars().zip(std::iter::repeat_with(|| s.next())) {
-                    if let Some(s2) = s2 {
-                        if s1 != s2.to_uppercase().next().unwrap() {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-                true
             }
         }
     };
@@ -406,16 +390,6 @@ impl Parse for ReservedKeyword {
     }
 }
 
-impl Peek for ReservedKeyword {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        if let Ok(token) = s.parse_from::<Alphanumeric>() {
-            ReservedKeyword::from_str(&token).is_ok()
-        } else {
-            false
-        }
-    }
-}
-
 macro_rules! punctuation {
     ($t:ident, $c:literal) => {
         #[derive(ParseFromStr, Copy, Clone, Debug)]
@@ -436,11 +410,6 @@ macro_rules! punctuation {
                     );
                 }
                 Ok($t)
-            }
-        }
-        impl Peek for $t {
-            fn peek(mut s: StatementStream<'_>) -> bool {
-                s.peek() == Some($c)
             }
         }
     };

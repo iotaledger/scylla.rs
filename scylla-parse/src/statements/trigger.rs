@@ -22,11 +22,6 @@ impl Parse for TriggerStatement {
     }
 }
 
-impl Peek for TriggerStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateTriggerStatement>() || s.check::<DropTriggerStatement>()
-    }
-}
 impl Display for TriggerStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -70,12 +65,6 @@ impl Parse for CreateTriggerStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE TRIGGER statement: {}", e))?)
-    }
-}
-
-impl Peek for CreateTriggerStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, TRIGGER)>()
     }
 }
 
@@ -123,12 +112,6 @@ impl Parse for DropTriggerStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP TRIGGER statement: {}", e))?)
-    }
-}
-
-impl Peek for DropTriggerStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, TRIGGER)>()
     }
 }
 

@@ -39,16 +39,6 @@ impl Parse for DataManipulationStatement {
     }
 }
 
-impl Peek for DataManipulationStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<InsertStatement>()
-            || s.check::<UpdateStatement>()
-            || s.check::<DeleteStatement>()
-            || s.check::<SelectStatement>()
-            || s.check::<BatchStatement>()
-    }
-}
-
 impl Display for DataManipulationStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -212,12 +202,6 @@ impl Parse for SelectStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid SELECT statement: {}", e))?)
-    }
-}
-
-impl Peek for SelectStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<SELECT>()
     }
 }
 
@@ -424,16 +408,6 @@ impl Parse for SelectorFunction {
     }
 }
 
-impl Peek for SelectorFunction {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        if s.parse::<Option<Name>>().transpose().is_some() {
-            s.check::<LeftParen>()
-        } else {
-            false
-        }
-    }
-}
-
 impl Display for SelectorFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -543,12 +517,6 @@ impl Parse for InsertStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid INSERT statement: {}", e))?)
-    }
-}
-
-impl Peek for InsertStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<INSERT>()
     }
 }
 
@@ -690,12 +658,6 @@ impl Parse for UpdateParameter {
     }
 }
 
-impl Peek for UpdateParameter {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(TTL, Limit)>() || s.check::<(TIMESTAMP, Limit)>() || s.check::<(TIMEOUT, DurationLiteral)>()
-    }
-}
-
 impl Display for UpdateParameter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -761,12 +723,6 @@ impl Parse for UpdateStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid UPDATE statement: {}", e))?)
-    }
-}
-
-impl Peek for UpdateStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<UPDATE>()
     }
 }
 
@@ -996,11 +952,6 @@ impl Parse for IfClause {
         })
     }
 }
-impl Peek for IfClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<IF>()
-    }
-}
 
 impl Display for IfClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1079,12 +1030,6 @@ impl Parse for DeleteStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DELETE statement: {}", e))?)
-    }
-}
-
-impl Peek for DeleteStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<DELETE>()
     }
 }
 
@@ -1245,12 +1190,6 @@ impl Parse for BatchStatement {
     }
 }
 
-impl Peek for BatchStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<BEGIN>()
-    }
-}
-
 impl Display for BatchStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BEGIN")?;
@@ -1311,11 +1250,6 @@ impl Parse for ModificationStatement {
         })
     }
 }
-impl Peek for ModificationStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<InsertStatement>() || s.check::<UpdateStatement>() || s.check::<DeleteStatement>()
-    }
-}
 
 impl Display for ModificationStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1366,12 +1300,6 @@ impl Parse for WhereClause {
     }
 }
 
-impl Peek for WhereClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<WHERE>()
-    }
-}
-
 impl Display for WhereClause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.relations.is_empty() {
@@ -1405,12 +1333,6 @@ impl Parse for GroupByClause {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         let (_, _, columns) = s.parse_from::<(GROUP, BY, List<Name, Comma>)>()?;
         Ok(GroupByClause { columns })
-    }
-}
-
-impl Peek for GroupByClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(GROUP, BY)>()
     }
 }
 
@@ -1449,12 +1371,6 @@ impl Parse for OrderByClause {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
         let (_, _, columns) = s.parse_from::<(ORDER, BY, List<ColumnOrder, Comma>)>()?;
         Ok(OrderByClause { columns })
-    }
-}
-
-impl Peek for OrderByClause {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ORDER, BY)>()
     }
 }
 
@@ -1501,12 +1417,6 @@ impl Parse for Limit {
     }
 }
 
-impl Peek for Limit {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<i32>() || s.check::<BindMarker>()
-    }
-}
-
 impl Display for Limit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1538,12 +1448,6 @@ impl Parse for ColumnDefault {
         } else {
             anyhow::bail!("Invalid column default: {}", s.info())
         }
-    }
-}
-
-impl Peek for ColumnDefault {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<NULL>() || s.check::<UNSET>()
     }
 }
 

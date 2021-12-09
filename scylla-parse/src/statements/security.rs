@@ -35,17 +35,6 @@ impl Parse for RoleStatement {
     }
 }
 
-impl Peek for RoleStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateRoleStatement>()
-            || s.check::<AlterRoleStatement>()
-            || s.check::<DropRoleStatement>()
-            || s.check::<GrantRoleStatement>()
-            || s.check::<RevokeRoleStatement>()
-            || s.check::<ListRolesStatement>()
-    }
-}
-
 impl Display for RoleStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -226,12 +215,6 @@ impl Parse for CreateRoleStatement {
     }
 }
 
-impl Peek for CreateRoleStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, ROLE)>()
-    }
-}
-
 impl Display for CreateRoleStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -307,12 +290,6 @@ impl Parse for AlterRoleStatement {
     }
 }
 
-impl Peek for AlterRoleStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALTER, ROLE)>()
-    }
-}
-
 impl Display for AlterRoleStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -376,12 +353,6 @@ impl Parse for DropRoleStatement {
     }
 }
 
-impl Peek for DropRoleStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, ROLE)>()
-    }
-}
-
 impl Display for DropRoleStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -415,12 +386,6 @@ impl Parse for GrantRoleStatement {
     }
 }
 
-impl Peek for GrantRoleStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(GRANT, Name, TO)>()
-    }
-}
-
 impl Display for GrantRoleStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "GRANT {} TO {}", self.name, self.to)
@@ -446,12 +411,6 @@ impl Parse for RevokeRoleStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid REVOKE ROLE statement: {}", e))?)
-    }
-}
-
-impl Peek for RevokeRoleStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(REVOKE, Name, FROM)>()
     }
 }
 
@@ -492,12 +451,6 @@ impl Parse for ListRolesStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid LIST ROLES statement: {}", e))?)
-    }
-}
-
-impl Peek for ListRolesStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(LIST, ROLES)>()
     }
 }
 
@@ -578,12 +531,6 @@ impl Parse for PermissionKind {
         } else {
             PermissionKind::One(s.parse()?)
         })
-    }
-}
-
-impl Peek for PermissionKind {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -692,21 +639,6 @@ impl Parse for Resource {
     }
 }
 
-impl Peek for Resource {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALL, KEYSPACES)>()
-            || s.check::<KEYSPACE>()
-            || s.check::<(ALL, ROLES)>()
-            || s.check::<ROLE>()
-            || s.check::<(ALL, FUNCTIONS)>()
-            || s.check::<FUNCTION>()
-            || s.check::<(ALL, MBEANS)>()
-            || s.check::<MBEAN>()
-            || s.check::<MBEANS>()
-            || s.check::<(Option<TABLE>, KeyspaceQualifiedName)>()
-    }
-}
-
 impl Display for Resource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -751,14 +683,6 @@ impl Parse for PermissionStatement {
     }
 }
 
-impl Peek for PermissionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<GrantPermissionStatement>()
-            || s.check::<RevokePermissionStatement>()
-            || s.check::<ListPermissionsStatement>()
-    }
-}
-
 impl Display for PermissionStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -794,12 +718,6 @@ impl Parse for GrantPermissionStatement {
     }
 }
 
-impl Peek for GrantPermissionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(GRANT, PermissionKind, ON)>()
-    }
-}
-
 impl Display for GrantPermissionStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "GRANT {} ON {} TO {}", self.permission, self.resource, self.to)
@@ -828,12 +746,6 @@ impl Parse for RevokePermissionStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid REVOKE PERMISSION statement: {}", e))?)
-    }
-}
-
-impl Peek for RevokePermissionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(REVOKE, PermissionKind, ON)>()
     }
 }
 
@@ -898,12 +810,6 @@ impl Parse for ListPermissionsStatement {
     }
 }
 
-impl Peek for ListPermissionsStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(LIST, PermissionKind)>()
-    }
-}
-
 impl Display for ListPermissionsStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -948,15 +854,6 @@ impl Parse for UserStatement {
         } else {
             anyhow::bail!("Expected a user statement, found {}", s.info())
         })
-    }
-}
-
-impl Peek for UserStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateUserStatement>()
-            || s.check::<AlterUserStatement>()
-            || s.check::<DropUserStatement>()
-            || s.check::<ListUsersStatement>()
     }
 }
 
@@ -1031,12 +928,6 @@ impl Parse for CreateUserStatement {
     }
 }
 
-impl Peek for CreateUserStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, USER)>()
-    }
-}
-
 impl Display for CreateUserStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1103,12 +994,6 @@ impl Parse for AlterUserStatement {
     }
 }
 
-impl Peek for AlterUserStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALTER, USER)>()
-    }
-}
-
 impl Display for AlterUserStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ALTER USER {}", self.name)?;
@@ -1153,12 +1038,6 @@ impl Parse for DropUserStatement {
     }
 }
 
-impl Peek for DropUserStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, USER)>()
-    }
-}
-
 impl Display for DropUserStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1178,12 +1057,6 @@ impl Parse for ListUsersStatement {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(LIST, USERS, Option<Semicolon>)>()?;
         Ok(ListUsersStatement)
-    }
-}
-
-impl Peek for ListUsersStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(LIST, USERS)>()
     }
 }
 
@@ -1214,14 +1087,6 @@ impl Parse for UserDefinedTypeStatement {
                 anyhow::bail!("Invalid user defined type statement!")
             },
         )
-    }
-}
-
-impl Peek for UserDefinedTypeStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateUserDefinedTypeStatement>()
-            || s.check::<AlterUserDefinedTypeStatement>()
-            || s.check::<DropUserDefinedTypeStatement>()
     }
 }
 
@@ -1276,12 +1141,6 @@ impl Parse for CreateUserDefinedTypeStatement {
     }
 }
 
-impl Peek for CreateUserDefinedTypeStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, TYPE)>()
-    }
-}
-
 impl Display for CreateUserDefinedTypeStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1329,12 +1188,6 @@ impl Parse for AlterUserDefinedTypeStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid ALTER TYPE statement: {}", e))?)
-    }
-}
-
-impl Peek for AlterUserDefinedTypeStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALTER, TYPE)>()
     }
 }
 
@@ -1421,12 +1274,6 @@ impl Parse for DropUserDefinedTypeStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP TYPE statement: {}", e))?)
-    }
-}
-
-impl Peek for DropUserDefinedTypeStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, TYPE)>()
     }
 }
 

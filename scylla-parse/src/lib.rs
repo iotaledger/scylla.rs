@@ -205,7 +205,13 @@ impl<'a> StatementStream<'a> {
             .and_then(|m| m.get::<Cached<P>>().cloned())
     }
 
-    fn set_cache<P: 'static + Parse>(&self, value: P::Output, prev_pos: usize) -> P::Output
+    fn set_cache<P: 'static + Parse>(&self, value: P::Output, prev_pos: usize) {
+        let mut cache = self.cache.borrow_mut();
+        let map = cache.entry(prev_pos).or_insert_with(Map::new);
+        map.insert(Cached::<P>::new(value, self.pos - prev_pos));
+    }
+
+    fn set_and_retrieve_cache<P: 'static + Parse>(&self, value: P::Output, prev_pos: usize) -> P::Output
     where
         P::Output: Clone,
     {
@@ -217,36 +223,41 @@ impl<'a> StatementStream<'a> {
             .clone()
     }
 
-    pub fn check<P: 'static + Peek>(&self) -> bool {
+    pub fn check<P: 'static + Parse>(&self) -> bool
+    where
+        P::Output: 'static + Clone,
+    {
         if self.check_cache::<P>() {
             return true;
         }
         let mut this = self.clone();
         this.skip_whitespace();
-        P::peek(this)
+        P::parse(&mut this).map(|p| this.set_cache::<P>(p, self.pos)).is_ok()
     }
 
     pub fn find<P: 'static + Parse<Output = P> + Clone>(&self) -> Option<P> {
-        let pos = self.pos;
         if let Some(cached) = self.retrieve_cache::<P>() {
             return Some(cached.value);
         }
         let mut this = self.clone();
         this.skip_whitespace();
-        P::parse(&mut this).ok().map(|p| self.set_cache::<P>(p, pos))
+        P::parse(&mut this)
+            .ok()
+            .map(|p| this.set_and_retrieve_cache::<P>(p, self.pos))
     }
 
     pub fn find_from<P: 'static + Parse>(&self) -> Option<P::Output>
     where
         P::Output: 'static + Clone,
     {
-        let pos = self.pos;
         if let Some(cached) = self.retrieve_cache::<P>() {
             return Some(cached.value);
         }
         let mut this = self.clone();
         this.skip_whitespace();
-        P::parse(&mut this).ok().map(|p| self.set_cache::<P>(p, pos))
+        P::parse(&mut this)
+            .ok()
+            .map(|p| this.set_and_retrieve_cache::<P>(p, self.pos))
     }
 
     pub fn parse<P: 'static + Parse<Output = P> + Clone>(&mut self) -> anyhow::Result<P> {
@@ -256,7 +267,7 @@ impl<'a> StatementStream<'a> {
             return Ok(cached.value);
         }
         self.skip_whitespace();
-        P::parse(self).map(|p| self.set_cache::<P>(p, pos))
+        P::parse(self).map(|p| self.set_and_retrieve_cache::<P>(p, pos))
     }
 
     pub fn parse_from<P: 'static + Parse>(&mut self) -> anyhow::Result<P::Output>
@@ -269,12 +280,8 @@ impl<'a> StatementStream<'a> {
             return Ok(cached.value);
         }
         self.skip_whitespace();
-        P::parse(self).map(|p| self.set_cache::<P>(p, pos))
+        P::parse(self).map(|p| self.set_and_retrieve_cache::<P>(p, pos))
     }
-}
-
-pub trait Peek: Parse {
-    fn peek(s: StatementStream<'_>) -> bool;
 }
 
 pub trait Parse {
@@ -282,23 +289,8 @@ pub trait Parse {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>;
 }
 
-macro_rules! peek_parse_tuple {
+macro_rules! parse_tuple {
     ($($t:ident),+) => {
-        impl<$($t: Peek + Parse),+> Peek for ($($t),+,)
-        where
-            $($t: 'static  + Clone),+,
-            $($t::Output: 'static  + Clone),+
-        {
-            fn peek(mut s: StatementStream<'_>) -> bool {
-                $(
-                    if s.parse_from::<Option<$t>>().transpose().is_none() {
-                        return false;
-                    }
-                )+
-                true
-            }
-        }
-
         impl<$($t: Parse),+> Parse for ($($t),+,)
         where
             $($t: 'static  + Clone),+,
@@ -314,16 +306,16 @@ macro_rules! peek_parse_tuple {
     };
 }
 
-peek_parse_tuple!(T0);
-peek_parse_tuple!(T0, T1);
-peek_parse_tuple!(T0, T1, T2);
-peek_parse_tuple!(T0, T1, T2, T3);
-peek_parse_tuple!(T0, T1, T2, T3, T4);
-peek_parse_tuple!(T0, T1, T2, T3, T4, T5);
-peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6);
-peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7);
-peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
-peek_parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
+parse_tuple!(T0);
+parse_tuple!(T0, T1);
+parse_tuple!(T0, T1, T2);
+parse_tuple!(T0, T1, T2, T3);
+parse_tuple!(T0, T1, T2, T3, T4);
+parse_tuple!(T0, T1, T2, T3, T4, T5);
+parse_tuple!(T0, T1, T2, T3, T4, T5, T6);
+parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7);
+parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
+parse_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
 
 impl Parse for char {
     type Output = Self;
@@ -332,12 +324,6 @@ impl Parse for char {
             Some(c) => Ok(c),
             None => Err(anyhow::anyhow!("End of statement!")),
         }
-    }
-}
-
-impl Peek for char {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.next().is_some()
     }
 }
 
@@ -354,13 +340,7 @@ impl Parse for bool {
     }
 }
 
-impl Peek for bool {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<TRUE>() || s.check::<FALSE>()
-    }
-}
-
-macro_rules! peek_parse_number {
+macro_rules! parse_number {
     ($n:ident, $t:ident) => {
         impl Parse for $n {
             type Output = Self;
@@ -370,29 +350,23 @@ macro_rules! peek_parse_number {
                     .map_err(|_| anyhow::anyhow!("Invalid {}!", std::any::type_name::<$n>()))
             }
         }
-
-        impl Peek for $n {
-            fn peek(mut s: StatementStream<'_>) -> bool {
-                s.parse::<Self>().is_ok()
-            }
-        }
     };
 }
 
-peek_parse_number!(i8, SignedNumber);
-peek_parse_number!(i16, SignedNumber);
-peek_parse_number!(i32, SignedNumber);
-peek_parse_number!(i64, SignedNumber);
-peek_parse_number!(u8, Number);
-peek_parse_number!(u16, Number);
-peek_parse_number!(u32, Number);
-peek_parse_number!(u64, Number);
-peek_parse_number!(f32, Float);
-peek_parse_number!(f64, Float);
+parse_number!(i8, SignedNumber);
+parse_number!(i16, SignedNumber);
+parse_number!(i32, SignedNumber);
+parse_number!(i64, SignedNumber);
+parse_number!(u8, Number);
+parse_number!(u16, Number);
+parse_number!(u32, Number);
+parse_number!(u64, Number);
+parse_number!(f32, Float);
+parse_number!(f64, Float);
 
 #[derive(Debug)]
 pub struct If<Cond, Res>(PhantomData<fn(Cond, Res) -> (Cond, Res)>);
-impl<Cond: Peek + Parse, Res: 'static + Parse> Parse for If<Cond, Res>
+impl<Cond: Parse, Res: 'static + Parse> Parse for If<Cond, Res>
 where
     Cond: 'static + Clone,
     Cond::Output: 'static + Clone,
@@ -407,16 +381,7 @@ where
     }
 }
 
-impl<T: 'static + Peek + Clone> Peek for Option<T>
-where
-    T::Output: 'static + Clone,
-{
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<T>()
-    }
-}
-
-impl<T: 'static + Parse + Peek + Clone> Parse for Option<T>
+impl<T: 'static + Parse + Clone> Parse for Option<T>
 where
     T::Output: 'static + Clone,
 {
@@ -431,16 +396,13 @@ where
 }
 
 pub struct Not<T>(PhantomData<fn(T) -> T>);
-impl<T: 'static + Peek> Parse for Not<T> {
+impl<T: 'static + Parse> Parse for Not<T>
+where
+    T::Output: 'static + Clone,
+{
     type Output = bool;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(!s.check::<T>())
-    }
-}
-
-impl<T: 'static + Peek> Peek for Not<T> {
-    fn peek(s: StatementStream<'_>) -> bool {
-        !s.check::<T>()
     }
 }
 
@@ -448,11 +410,11 @@ pub type List<T, Delim> = TerminatingList<T, Delim, EmptyPeek>;
 
 #[derive(Debug)]
 pub struct TerminatingList<T, Delim, End>(PhantomData<fn(T, Delim, End) -> (T, Delim, End)>);
-impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, End: 'static + Peek> Parse
-    for TerminatingList<T, Delim, End>
+impl<T: 'static + Parse, Delim: 'static + Parse + Clone, End: 'static + Parse> Parse for TerminatingList<T, Delim, End>
 where
     Delim::Output: 'static + Clone,
     T::Output: 'static + Clone,
+    End::Output: 'static + Clone,
 {
     type Output = Vec<T::Output>;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
@@ -472,16 +434,6 @@ where
         Ok(res)
     }
 }
-impl<T: 'static + Parse, Delim: 'static + Parse + Peek + Clone, End: 'static + Peek> Peek
-    for TerminatingList<T, Delim, End>
-where
-    T::Output: 'static + Clone,
-    Delim::Output: 'static + Clone,
-{
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<Self>().is_ok()
-    }
-}
 
 impl<T, Delim, End> Clone for TerminatingList<T, Delim, End> {
     fn clone(&self) -> Self {
@@ -497,11 +449,6 @@ impl Parse for Nothing {
         Ok(Self)
     }
 }
-impl Peek for Nothing {
-    fn peek(_: StatementStream<'_>) -> bool {
-        true
-    }
-}
 
 #[derive(Copy, Clone, Debug)]
 pub struct EmptyPeek;
@@ -509,11 +456,6 @@ impl Parse for EmptyPeek {
     type Output = Self;
     fn parse(_: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         anyhow::bail!("Empty peek!")
-    }
-}
-impl Peek for EmptyPeek {
-    fn peek(_: StatementStream<'_>) -> bool {
-        false
     }
 }
 
@@ -530,11 +472,6 @@ impl Parse for Whitespace {
             }
         }
         Ok(Whitespace)
-    }
-}
-impl Peek for Whitespace {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.peek().map(|c| c.is_whitespace()).unwrap_or(false)
     }
 }
 
@@ -555,11 +492,6 @@ impl Parse for Token {
             anyhow::bail!("End of statement!")
         }
         Ok(res)
-    }
-}
-impl Peek for Token {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.peek().is_some()
     }
 }
 
@@ -583,11 +515,6 @@ impl Parse for Alpha {
         Ok(res)
     }
 }
-impl Peek for Alpha {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<Alpha>().is_ok()
-    }
-}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Hex;
@@ -607,11 +534,6 @@ impl Parse for Hex {
             anyhow::bail!("End of statement!")
         }
         Ok(hex::decode(res)?)
-    }
-}
-impl Peek for Hex {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<Hex>().is_ok()
     }
 }
 
@@ -635,11 +557,6 @@ impl Parse for Alphanumeric {
         Ok(res)
     }
 }
-impl Peek for Alphanumeric {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<Alphanumeric>().is_ok()
-    }
-}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Number;
@@ -659,11 +576,6 @@ impl Parse for Number {
             anyhow::bail!("End of statement!")
         }
         Ok(res)
-    }
-}
-impl Peek for Number {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<Number>().is_ok()
     }
 }
 
@@ -699,11 +611,6 @@ impl Parse for SignedNumber {
             anyhow::bail!("End of statement!")
         }
         Ok(res)
-    }
-}
-impl Peek for SignedNumber {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<SignedNumber>().is_ok()
     }
 }
 
@@ -777,11 +684,6 @@ impl Parse for Float {
         Ok(res)
     }
 }
-impl Peek for Float {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse_from::<Float>().is_ok()
-    }
-}
 
 macro_rules! parse_peek_group {
     ($g:ident, $l:ident, $r:ident) => {
@@ -797,14 +699,6 @@ macro_rules! parse_peek_group {
                 let res = s.parse_from::<T>()?;
                 s.parse_from::<$r>()?;
                 Ok(res)
-            }
-        }
-        impl<T: 'static + Parse> Peek for $g<T>
-        where
-            T::Output: 'static + Clone,
-        {
-            fn peek(s: StatementStream<'_>) -> bool {
-                s.check::<$l>()
             }
         }
     };
@@ -836,12 +730,6 @@ impl Parse for BindMarker {
     }
 }
 
-impl Peek for BindMarker {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<Question>() || s.check::<(Colon, Name)>()
-    }
-}
-
 impl Display for BindMarker {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -865,11 +753,6 @@ impl Parse for Uuid {
         } else {
             anyhow::bail!("Invalid UUID: {}", s.info())
         }
-    }
-}
-impl Peek for Uuid {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -935,11 +818,6 @@ impl Parse for LitStr {
             }
         }
         anyhow::bail!("End of statement!")
-    }
-}
-impl Peek for LitStr {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -1031,12 +909,6 @@ impl Parse for Name {
     }
 }
 
-impl Peek for Name {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
-    }
-}
-
 impl Display for Name {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1098,12 +970,6 @@ impl Parse for KeyspaceQualifiedName {
             keyspace: keyspace.map(|(i, _)| i),
             name,
         })
-    }
-}
-
-impl Peek for KeyspaceQualifiedName {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(Option<(Name, Dot)>, Name)>()
     }
 }
 
@@ -1224,12 +1090,6 @@ impl Parse for ColumnDefinition {
             static_column: s.parse::<Option<STATIC>>()?.is_some(),
             primary_key: s.parse::<Option<(PRIMARY, KEY)>>()?.is_some(),
         })
-    }
-}
-
-impl Peek for ColumnDefinition {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(Name, CqlType)>()
     }
 }
 
@@ -2784,7 +2644,7 @@ where
             let (k, v) = (TokenWrapper(k), TokenWrapper(v));
             quote! {#k => #v}
         });
-        tokens.extend(quote! { hashmap![#(#t),*]});
+        tokens.extend(quote! { maplit::hashmap![#(#t),*]});
     }
 }
 
@@ -2809,6 +2669,12 @@ where
     fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
         let t = self.iter().map(|k| TokenWrapper(k));
         tokens.extend(quote! { maplit::btreeset![#(#t),*]});
+    }
+}
+impl<'a> CustomToTokens<'a> for &str {
+    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+        let s = self;
+        tokens.extend(quote! { #s });
     }
 }
 

@@ -20,7 +20,6 @@ use super::{
     Name,
     Parens,
     Parse,
-    Peek,
     SignedNumber,
     StatementStream,
     TokenWrapper,
@@ -109,12 +108,6 @@ impl Parse for ArithmeticOp {
     }
 }
 
-impl Peek for ArithmeticOp {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
-    }
-}
-
 #[derive(ParseFromStr, Copy, Clone, Debug, ToTokens, PartialEq, Eq)]
 pub enum Operator {
     Equal,
@@ -190,12 +183,6 @@ impl Parse for Operator {
         } else {
             anyhow::bail!("Invalid token for operator: {}", s.info())
         }
-    }
-}
-
-impl Peek for Operator {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -293,12 +280,6 @@ impl Parse for TimeUnit {
         } else {
             anyhow::bail!("Invalid token for time unit: {}", s.info())
         }
-    }
-}
-
-impl Peek for TimeUnit {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -424,17 +405,6 @@ impl Parse for Term {
         } else {
             anyhow::bail!("Invalid term: {}", s.info())
         })
-    }
-}
-
-impl Peek for Term {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<Constant>()
-            || s.check::<Literal>()
-            || s.check::<FunctionCall>()
-            || s.check::<(Option<Term>, ArithmeticOp, Term)>()
-            || s.check::<(CqlType, Name)>()
-            || s.check::<BindMarker>()
     }
 }
 
@@ -623,18 +593,6 @@ impl Parse for Constant {
         })
     }
 }
-impl Peek for Constant {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.check::<NULL>()
-            || s.check::<LitStr>()
-            || s.check::<SignedNumber>()
-            || s.check::<Float>()
-            || s.check::<bool>()
-            || s.check::<Uuid>()
-            || s.check::<Hex>()
-            || s.nextn(2).map(|s| s.to_lowercase().as_str() == "0x").unwrap_or(false)
-    }
-}
 
 impl Display for Constant {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -798,11 +756,6 @@ impl Parse for Literal {
         })
     }
 }
-impl Peek for Literal {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CollectionTypeLiteral>() || s.check::<UserDefinedTypeLiteral>() || s.check::<TupleLiteral>()
-    }
-}
 
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -843,15 +796,6 @@ impl Parse for CqlType {
         } else {
             anyhow::bail!("Invalid CQL Type: {}", s.info())
         })
-    }
-}
-impl Peek for CqlType {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CollectionType>()
-            || s.check::<TUPLE>()
-            || s.check::<NativeType>()
-            || s.check::<UserDefinedType>()
-            || s.check::<LitStr>()
     }
 }
 
@@ -976,16 +920,6 @@ impl Parse for NativeType {
     }
 }
 
-impl Peek for NativeType {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        if let Ok(token) = s.parse_from::<Alpha>() {
-            NativeType::from_str(&token).is_ok()
-        } else {
-            false
-        }
-    }
-}
-
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
 pub enum CollectionTypeLiteral {
     List(ListLiteral),
@@ -1005,11 +939,6 @@ impl Parse for CollectionTypeLiteral {
         } else {
             anyhow::bail!("Invalid collection literal type: {}", s.info())
         })
-    }
-}
-impl Peek for CollectionTypeLiteral {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<ListLiteral>() || s.check::<SetLiteral>() || s.check::<MapLiteral>()
     }
 }
 
@@ -1063,12 +992,6 @@ impl Parse for CollectionType {
     }
 }
 
-impl Peek for CollectionType {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<MAP>() || s.check::<SET>() || s.check::<LIST>()
-    }
-}
-
 impl Display for CollectionType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1097,11 +1020,6 @@ impl Parse for MapLiteral {
                 .map(|(k, _, v)| (k, v))
                 .collect(),
         })
-    }
-}
-impl Peek for MapLiteral {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -1151,11 +1069,6 @@ impl Parse for TupleLiteral {
         })
     }
 }
-impl Peek for TupleLiteral {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
-    }
-}
 
 impl Display for TupleLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1196,11 +1109,6 @@ impl Parse for SetLiteral {
             elements.insert(e);
         }
         Ok(Self { elements })
-    }
-}
-impl Peek for SetLiteral {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -1245,11 +1153,6 @@ impl Parse for ListLiteral {
         Ok(Self {
             elements: s.parse_from::<Brackets<List<Term, Comma>>>()?,
         })
-    }
-}
-impl Peek for ListLiteral {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 
@@ -1676,11 +1579,6 @@ impl Parse for DurationLiteral {
         }
     }
 }
-impl Peek for DurationLiteral {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
-    }
-}
 
 impl Display for DurationLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1756,11 +1654,6 @@ impl Parse for UserDefinedTypeLiteral {
                     acc
                 }),
         })
-    }
-}
-impl Peek for UserDefinedTypeLiteral {
-    fn peek(mut s: StatementStream<'_>) -> bool {
-        s.parse::<Self>().is_ok()
     }
 }
 

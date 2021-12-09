@@ -47,19 +47,6 @@ impl Parse for DataDefinitionStatement {
     }
 }
 
-impl Peek for DataDefinitionStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<UseStatement>()
-            || s.check::<CreateKeyspaceStatement>()
-            || s.check::<AlterKeyspaceStatement>()
-            || s.check::<DropKeyspaceStatement>()
-            || s.check::<CreateTableStatement>()
-            || s.check::<AlterTableStatement>()
-            || s.check::<DropTableStatement>()
-            || s.check::<TruncateStatement>()
-    }
-}
-
 impl Display for DataDefinitionStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -87,12 +74,6 @@ impl Parse for UseStatement {
         let keyspace = s.parse()?;
         s.parse::<Option<Semicolon>>()?;
         Ok(Self { keyspace })
-    }
-}
-
-impl Peek for UseStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<USE>()
     }
 }
 
@@ -195,12 +176,6 @@ impl Parse for CreateKeyspaceStatement {
     }
 }
 
-impl Peek for CreateKeyspaceStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, KEYSPACE)>()
-    }
-}
-
 impl Display for CreateKeyspaceStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -245,12 +220,6 @@ impl Parse for AlterKeyspaceStatement {
     }
 }
 
-impl Peek for AlterKeyspaceStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALTER, KEYSPACE)>()
-    }
-}
-
 impl Display for AlterKeyspaceStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ALTER KEYSPACE {} WITH {}", self.keyspace, self.options)
@@ -285,12 +254,6 @@ impl Parse for DropKeyspaceStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP KEYSPACE statement: {}", e))?)
-    }
-}
-
-impl Peek for DropKeyspaceStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, KEYSPACE)>()
     }
 }
 
@@ -367,12 +330,6 @@ impl Parse for CreateTableStatement {
     }
 }
 
-impl Peek for CreateTableStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, TABLE)>()
-    }
-}
-
 impl Display for CreateTableStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -424,12 +381,6 @@ impl Parse for AlterTableStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid ALTER TABLE statement: {}", e))?)
-    }
-}
-
-impl Peek for AlterTableStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(ALTER, TABLE)>()
     }
 }
 
@@ -547,12 +498,6 @@ impl Parse for DropTableStatement {
     }
 }
 
-impl Peek for DropTableStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, TABLE)>()
-    }
-}
-
 impl Display for DropTableStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -589,12 +534,6 @@ impl Parse for TruncateStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid TRUNCATE statement: {}", e))?)
-    }
-}
-
-impl Peek for TruncateStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<TRUNCATE>()
     }
 }
 

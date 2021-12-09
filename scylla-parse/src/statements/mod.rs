@@ -20,7 +20,6 @@ use crate::{
     Nothing,
     Parens,
     Parse,
-    Peek,
     Relation,
     Replication,
     SetLiteral,
@@ -200,12 +199,6 @@ impl Parse for FieldDefinition {
             name: s.parse()?,
             data_type: s.parse()?,
         })
-    }
-}
-
-impl Peek for FieldDefinition {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(Name, CqlType)>()
     }
 }
 

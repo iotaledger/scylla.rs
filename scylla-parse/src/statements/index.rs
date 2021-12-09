@@ -22,12 +22,6 @@ impl Parse for SecondaryIndexStatement {
     }
 }
 
-impl Peek for SecondaryIndexStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<CreateIndexStatement>() || s.check::<DropIndexStatement>()
-    }
-}
-
 impl Display for SecondaryIndexStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -91,12 +85,6 @@ impl Parse for CreateIndexStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid CREATE INDEX statement: {}", e))?)
-    }
-}
-
-impl Peek for CreateIndexStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(CREATE, Option<CUSTOM>, INDEX)>()
     }
 }
 
@@ -239,12 +227,6 @@ impl Parse for IndexClass {
     }
 }
 
-impl Peek for IndexClass {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<USING>()
-    }
-}
-
 impl Display for IndexClass {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.path)?;
@@ -285,12 +267,6 @@ impl Parse for DropIndexStatement {
         Ok(res
             .build()
             .map_err(|e| anyhow::anyhow!("Invalid DROP INDEX statement: {}", e))?)
-    }
-}
-
-impl Peek for DropIndexStatement {
-    fn peek(s: StatementStream<'_>) -> bool {
-        s.check::<(DROP, INDEX)>()
     }
 }
 
