@@ -5,21 +5,41 @@ use super::*;
 use crate::PrimaryKey;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
+#[parse_via(TaggedMaterializedViewStatement)]
 pub enum MaterializedViewStatement {
     Create(CreateMaterializedViewStatement),
     Alter(AlterMaterializedViewStatement),
     Drop(DropMaterializedViewStatement),
 }
 
-impl Parse for MaterializedViewStatement {
+impl TryFrom<TaggedMaterializedViewStatement> for MaterializedViewStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedMaterializedViewStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedMaterializedViewStatement::Create(s) => MaterializedViewStatement::Create(s.try_into()?),
+            TaggedMaterializedViewStatement::Alter(s) => MaterializedViewStatement::Alter(s.try_into()?),
+            TaggedMaterializedViewStatement::Drop(s) => MaterializedViewStatement::Drop(s.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
+#[tokenize_as(MaterializedViewStatement)]
+pub enum TaggedMaterializedViewStatement {
+    Create(TaggedCreateMaterializedViewStatement),
+    Alter(TaggedAlterMaterializedViewStatement),
+    Drop(TaggedDropMaterializedViewStatement),
+}
+
+impl Parse for TaggedMaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(
-            if let Some(stmt) = s.parse::<Option<CreateMaterializedViewStatement>>()? {
+            if let Some(stmt) = s.parse::<Option<TaggedCreateMaterializedViewStatement>>()? {
                 Self::Create(stmt)
-            } else if let Some(stmt) = s.parse::<Option<AlterMaterializedViewStatement>>()? {
+            } else if let Some(stmt) = s.parse::<Option<TaggedAlterMaterializedViewStatement>>()? {
                 Self::Alter(stmt)
-            } else if let Some(stmt) = s.parse::<Option<DropMaterializedViewStatement>>()? {
+            } else if let Some(stmt) = s.parse::<Option<TaggedDropMaterializedViewStatement>>()? {
                 Self::Drop(stmt)
             } else {
                 anyhow::bail!("Invalid MATERIALIZED VIEW statement!")
@@ -39,6 +59,7 @@ impl Display for MaterializedViewStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[parse_via(TaggedCreateMaterializedViewStatement)]
 pub struct CreateMaterializedViewStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
@@ -50,6 +71,30 @@ pub struct CreateMaterializedViewStatement {
     pub table_opts: TableOpts,
 }
 
+impl TryFrom<TaggedCreateMaterializedViewStatement> for CreateMaterializedViewStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateMaterializedViewStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            name: value.name.into_value()?,
+            select_statement: value.select_statement.into_value()?,
+            primary_key: value.primary_key.into_value()?,
+            table_opts: value.table_opts.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[tokenize_as(CreateMaterializedViewStatement)]
+pub struct TaggedCreateMaterializedViewStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub name: Tag<Name>,
+    pub select_statement: Tag<SelectStatement>,
+    pub primary_key: Tag<PrimaryKey>,
+    pub table_opts: Tag<TableOpts>,
+}
+
 impl CreateMaterializedViewStatementBuilder {
     /// Set IF NOT EXISTS on the statement.
     /// To undo this, use `set_if_not_exists(false)`.
@@ -59,16 +104,16 @@ impl CreateMaterializedViewStatementBuilder {
     }
 }
 
-impl Parse for CreateMaterializedViewStatement {
+impl Parse for TaggedCreateMaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, MATERIALIZED, VIEW)>()?;
-        let mut res = CreateMaterializedViewStatementBuilder::default();
+        let mut res = TaggedCreateMaterializedViewStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?)
+            .name(s.parse()?)
             .select_statement(s.parse::<(AS, _)>()?.1)
-            .primary_key(s.parse_from::<((PRIMARY, KEY), Parens<PrimaryKey>)>()?.1)
-            .table_opts(s.parse_from::<(WITH, TableOpts)>()?.1);
+            .primary_key(s.parse_from::<((PRIMARY, KEY), Parens<Tag<PrimaryKey>>)>()?.1)
+            .table_opts(s.parse::<(WITH, _)>()?.1);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -91,19 +136,36 @@ impl Display for CreateMaterializedViewStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[parse_via(TaggedAlterMaterializedViewStatement)]
 pub struct AlterMaterializedViewStatement {
     #[builder(setter(into))]
     pub name: Name,
     pub table_opts: TableOpts,
 }
 
-impl Parse for AlterMaterializedViewStatement {
+impl TryFrom<TaggedAlterMaterializedViewStatement> for AlterMaterializedViewStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedAlterMaterializedViewStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name.into_value()?,
+            table_opts: value.table_opts.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[tokenize_as(AlterMaterializedViewStatement)]
+pub struct TaggedAlterMaterializedViewStatement {
+    pub name: Tag<Name>,
+    pub table_opts: Tag<TableOpts>,
+}
+
+impl Parse for TaggedAlterMaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, MATERIALIZED, VIEW)>()?;
-        let mut res = AlterMaterializedViewStatementBuilder::default();
-        res.name(s.parse::<Name>()?)
-            .table_opts(s.parse_from::<(WITH, TableOpts)>()?.1);
+        let mut res = TaggedAlterMaterializedViewStatementBuilder::default();
+        res.name(s.parse()?).table_opts(s.parse::<(WITH, _)>()?.1);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -118,11 +180,30 @@ impl Display for AlterMaterializedViewStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropMaterializedViewStatement)]
 pub struct DropMaterializedViewStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl TryFrom<TaggedDropMaterializedViewStatement> for DropMaterializedViewStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropMaterializedViewStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            name: value.name.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropMaterializedViewStatement)]
+pub struct TaggedDropMaterializedViewStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub name: Tag<Name>,
 }
 
 impl DropMaterializedViewStatementBuilder {
@@ -134,13 +215,13 @@ impl DropMaterializedViewStatementBuilder {
     }
 }
 
-impl Parse for DropMaterializedViewStatement {
+impl Parse for TaggedDropMaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, MATERIALIZED, VIEW)>()?;
-        let mut res = DropMaterializedViewStatementBuilder::default();
+        let mut res = TaggedDropMaterializedViewStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?);
+            .name(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()

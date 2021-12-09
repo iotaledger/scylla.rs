@@ -4,17 +4,17 @@
 use proc_macro::TokenStream;
 use quote::quote;
 
-#[proc_macro_derive(ParseFromStr)]
+#[proc_macro_derive(ParseFromStr, attributes(parse_via))]
 pub fn parse_from_str_derive(input: TokenStream) -> TokenStream {
     let syn::DeriveInput {
-        attrs: _,
+        attrs,
         vis: _,
         ident,
         generics,
         data: _,
     } = syn::parse_macro_input!(input as syn::DeriveInput);
     let (imp, ty, wher) = generics.split_for_impl();
-    let res = quote! {
+    let mut res = quote! {
         impl #imp FromStr for #ident #ty #wher {
             type Err = anyhow::Error;
             fn from_str(s: &str) -> anyhow::Result<Self> {
@@ -22,6 +22,28 @@ pub fn parse_from_str_derive(input: TokenStream) -> TokenStream {
             }
         }
     };
+    if let Some(a) = attrs.iter().find(|a| a.path.is_ident("parse_via")) {
+        let via = match a.parse_meta().expect("Invalid parse_via attribute") {
+            syn::Meta::List(l) => {
+                if l.nested.len() != 1 {
+                    panic!("parse_via attribute must have exactly one argument");
+                }
+                match l.nested.into_iter().next().unwrap() {
+                    syn::NestedMeta::Meta(syn::Meta::Path(p)) => p,
+                    _ => panic!("parse_via attribute must contain a path to the via type"),
+                }
+            }
+            _ => panic!("parse_via attribute must be a list"),
+        };
+        res.extend(quote! {
+            impl #imp Parse for #ident #ty #wher {
+                type Output = Self;
+                fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+                    s.parse::<#via>()?.try_into()
+                }
+            }
+        });
+    }
     res.into()
 }
 
@@ -40,16 +62,34 @@ fn is_wrappable(ty: &syn::Type) -> bool {
     false
 }
 
-#[proc_macro_derive(ToTokens, attributes(wrap))]
+#[proc_macro_derive(ToTokens, attributes(wrap, tokenize_as))]
 pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
     let syn::DeriveInput {
-        attrs: _,
+        attrs,
         vis: _,
         ident,
         generics,
         data,
     } = syn::parse_macro_input!(input as syn::DeriveInput);
+    let mut imp_c = generics.clone();
+    imp_c.params.push(syn::parse_quote!('a));
+    let imp_ct = imp_c.split_for_impl().0;
     let (imp, ty, wher) = generics.split_for_impl();
+    let mut tokenized: syn::Path = syn::parse_quote!(#ident);
+    if let Some(a) = attrs.iter().find(|a| a.path.is_ident("tokenize_as")) {
+        tokenized = match a.parse_meta().expect("Invalid tokenize_as attribute") {
+            syn::Meta::List(l) => {
+                if l.nested.len() != 1 {
+                    panic!("tokenize_as attribute must have exactly one argument");
+                }
+                match l.nested.into_iter().next().unwrap() {
+                    syn::NestedMeta::Meta(syn::Meta::Path(p)) => p,
+                    _ => panic!("tokenize_as attribute must contain a path to the tokenize type"),
+                }
+            }
+            _ => panic!("tokenize_as attribute must be a list"),
+        };
+    }
     let res = match data {
         syn::Data::Struct(s) => {
             let (destr, restr) = match s.fields {
@@ -73,7 +113,7 @@ pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
                             let (#(#names),*) = (#(#wrapped),*);
                         },
                         quote! {
-                            #ident { #(#assigns),* }
+                            #tokenized { #(#assigns),* }
                         },
                     )
                 }
@@ -106,14 +146,14 @@ pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
                             let (#(#names),*) = (#(#wrapped),*);
                         },
                         quote! {
-                            #ident ( #(#assigns),* )
+                            #tokenized ( #(#assigns),* )
                         },
                     )
                 }
-                syn::Fields::Unit => (quote!(), quote!( #ident )),
+                syn::Fields::Unit => (quote!(), quote!( #tokenized )),
             };
             quote! {
-                impl<'a> #imp CustomToTokens<'a> for #ident #ty #wher {
+                impl #imp_ct CustomToTokens<'a> for #ident #ty #wher {
                     fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
                         #destr
                         tokens.extend(quote::quote!(#restr));
@@ -147,7 +187,7 @@ pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
                             quote! {
                                 {
                                     let (#(#names),*) = (#(#wrapped),*);
-                                    quote::quote!(#ident::#var_id { #(#assigns),* })
+                                    quote::quote!(#tokenized::#var_id { #(#assigns),* })
                                 }
                             },
                         )
@@ -176,19 +216,19 @@ pub fn to_tokens_derive(input: TokenStream) -> TokenStream {
                             quote! {
                                 {
                                     let (#(#names),*) = (#(#wrapped),*);
-                                    quote::quote!(#ident::#var_id ( #(#assigns),* ))
+                                    quote::quote!(#tokenized::#var_id ( #(#assigns),* ))
                                 }
                             },
                         )
                     }
-                    syn::Fields::Unit => (quote!(), quote!(quote::quote!(#ident::#var_id))),
+                    syn::Fields::Unit => (quote!(), quote!(quote::quote!(#tokenized::#var_id))),
                 };
                 quote! {
                     #ident::#var_id #destr => #restr
                 }
             });
             quote! {
-                impl<'a> #imp CustomToTokens<'a> for #ident #ty #wher {
+                impl #imp_ct CustomToTokens<'a> for #ident #ty #wher {
                     fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
                         tokens.extend(match self {
                             #(#variants),*

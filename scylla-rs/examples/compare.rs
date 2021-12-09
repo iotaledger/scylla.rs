@@ -98,14 +98,12 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let keyspace = MyKeyspace::new();
-    format!(
-        "CREATE KEYSPACE IF NOT EXISTS {}
-        WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}}
+    parse_statement!(
+        "CREATE KEYSPACE IF NOT EXISTS #
+        WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
         AND durable_writes = true",
         keyspace.name()
     )
-    .parse::<CreateKeyspaceStatement>()
-    .unwrap()
     .execute()
     .consistency(Consistency::All)
     .build()?
@@ -113,7 +111,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     .await
     .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-    parse_statement!("DROP TABLE IF EXISTS scylla_example.test")
+    parse_statement!("DROP TABLE IF EXISTS #.test", keyspace.name())
         .execute()
         .consistency(Consistency::All)
         .build()?
@@ -122,10 +120,11 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
     parse_statement!(
-        "CREATE TABLE IF NOT EXISTS scylla_example.test (
+        "CREATE TABLE IF NOT EXISTS #.test (
             key text PRIMARY KEY,
             data blob
-        )"
+        )",
+        keyspace.name()
     )
     .execute()
     .consistency(Consistency::All)
@@ -364,7 +363,7 @@ impl ToString for MyKeyspace {
 impl Insert<String, i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
     fn statement(&self) -> InsertStatement {
-        parse_statement!("INSERT INTO test (key, data) VALUES (?, ?)").with_keyspace(self.name())
+        parse_statement!("INSERT INTO #.test (key, data) VALUES (?, ?)", self.name())
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, value: &i32) -> T {
@@ -376,7 +375,7 @@ impl Select<String, (), i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
 
     fn statement(&self) -> SelectStatement {
-        parse_statement!("SELECT data FROM test WHERE key = ?").with_keyspace(self.name())
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, _variables: &()) -> T {

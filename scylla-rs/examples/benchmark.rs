@@ -64,9 +64,10 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     let keyspace = MyKeyspace::new();
 
     parse_statement!(
-        "CREATE KEYSPACE IF NOT EXISTS scylla_example
+        "CREATE KEYSPACE IF NOT EXISTS #
         WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
-        AND durable_writes = true"
+        AND durable_writes = true",
+        keyspace.name()
     )
     .execute()
     .consistency(Consistency::All)
@@ -75,7 +76,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     .await
     .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-    parse_statement!("DROP TABLE IF EXISTS scylla_example.test")
+    parse_statement!("DROP TABLE IF EXISTS #.test", keyspace.name())
         .execute()
         .consistency(Consistency::All)
         .build()?
@@ -84,10 +85,11 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
         .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
     parse_statement!(
-        "CREATE TABLE IF NOT EXISTS scylla_example.test (
+        "CREATE TABLE IF NOT EXISTS #.test (
             key text PRIMARY KEY,
             data blob
-        )"
+        )",
+        keyspace.name()
     )
     .execute()
     .consistency(Consistency::All)
@@ -170,7 +172,7 @@ impl ToString for MyKeyspace {
 impl Insert<String, i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
     fn statement(&self) -> InsertStatement {
-        parse_statement!("INSERT INTO scylla_example.test (key, data) VALUES (?, ?)")
+        parse_statement!("INSERT INTO #.test (key, data) VALUES (?, ?)", self.name())
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, value: &i32) -> T {
@@ -182,7 +184,7 @@ impl Select<String, (), i32> for MyKeyspace {
     type QueryOrPrepared = PreparedStatement;
 
     fn statement(&self) -> SelectStatement {
-        parse_statement!("SELECT data FROM scylla_example.test WHERE key = ?")
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
     }
 
     fn bind_values<T: Binder>(builder: T, key: &String, _variables: &()) -> T {

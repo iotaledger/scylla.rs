@@ -13,6 +13,7 @@ use crate::{
 };
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDataManipulationStatement)]
 pub enum DataManipulationStatement {
     Select(SelectStatement),
     Insert(InsertStatement),
@@ -21,7 +22,29 @@ pub enum DataManipulationStatement {
     Batch(BatchStatement),
 }
 
-impl Parse for DataManipulationStatement {
+impl TryFrom<TaggedDataManipulationStatement> for DataManipulationStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDataManipulationStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedDataManipulationStatement::Select(value) => DataManipulationStatement::Select(value.try_into()?),
+            TaggedDataManipulationStatement::Insert(value) => DataManipulationStatement::Insert(value.try_into()?),
+            TaggedDataManipulationStatement::Update(value) => DataManipulationStatement::Update(value.try_into()?),
+            TaggedDataManipulationStatement::Delete(value) => DataManipulationStatement::Delete(value.try_into()?),
+            TaggedDataManipulationStatement::Batch(value) => DataManipulationStatement::Batch(value.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+pub enum TaggedDataManipulationStatement {
+    Select(TaggedSelectStatement),
+    Insert(TaggedInsertStatement),
+    Update(TaggedUpdateStatement),
+    Delete(TaggedDeleteStatement),
+    Batch(TaggedBatchStatement),
+}
+
+impl Parse for TaggedDataManipulationStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(keyword) = s.find::<ReservedKeyword>() {
@@ -75,6 +98,7 @@ impl KeyspaceExt for DataManipulationStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedSelectStatement)]
 pub struct SelectStatement {
     #[builder(setter(name = "set_distinct"), default)]
     pub distinct: bool,
@@ -98,6 +122,51 @@ pub struct SelectStatement {
     pub bypass_cache: bool,
     #[builder(setter(into), default)]
     pub timeout: Option<DurationLiteral>,
+}
+
+impl TryFrom<TaggedSelectStatement> for SelectStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedSelectStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            distinct: value.distinct,
+            select_clause: value.select_clause.into_value()?,
+            from: value.from.try_into()?,
+            where_clause: value.where_clause.map(|v| v.into_value()).transpose()?,
+            group_by_clause: value.group_by_clause.map(|v| v.into_value()).transpose()?,
+            order_by_clause: value.order_by_clause.map(|v| v.into_value()).transpose()?,
+            per_partition_limit: value.per_partition_limit.map(|v| v.into_value()).transpose()?,
+            limit: value.limit.map(|v| v.into_value()).transpose()?,
+            allow_filtering: value.allow_filtering,
+            bypass_cache: value.bypass_cache,
+            timeout: value.timeout.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[tokenize_as(SelectStatement)]
+pub struct TaggedSelectStatement {
+    #[builder(setter(name = "set_distinct"), default)]
+    pub distinct: bool,
+    pub select_clause: Tag<SelectClause>,
+    pub from: TaggedKeyspaceQualifiedName,
+    #[builder(default)]
+    pub where_clause: Option<Tag<WhereClause>>,
+    #[builder(default)]
+    pub group_by_clause: Option<Tag<GroupByClause>>,
+    #[builder(default)]
+    pub order_by_clause: Option<Tag<OrderByClause>>,
+    #[builder(default)]
+    pub per_partition_limit: Option<Tag<Limit>>,
+    #[builder(default)]
+    pub limit: Option<Tag<Limit>>,
+    #[builder(setter(name = "set_allow_filtering"), default)]
+    pub allow_filtering: bool,
+    #[builder(setter(name = "set_bypass_cache"), default)]
+    pub bypass_cache: bool,
+    #[builder(default)]
+    pub timeout: Option<Tag<DurationLiteral>>,
 }
 
 impl SelectStatementBuilder {
@@ -138,32 +207,49 @@ impl SelectStatementBuilder {
     }
 }
 
-impl Parse for SelectStatement {
+impl TaggedSelectStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .select_clause
+            .as_ref()
+            .map(|s| match s {
+                Tag::Value(SelectClause::Selectors(s)) => s.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("SELECT clause selectors cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedSelectStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
     {
         s.parse::<SELECT>()?;
-        let mut res = SelectStatementBuilder::default();
+        let mut res = TaggedSelectStatementBuilder::default();
         res.set_distinct(s.parse::<Option<DISTINCT>>()?.is_some())
-            .select_clause(s.parse::<SelectClause>()?)
-            .from(s.parse::<(FROM, KeyspaceQualifiedName)>()?.1);
+            .select_clause(s.parse()?)
+            .from(s.parse::<(FROM, _)>()?.1);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
             }
-            if let Some(where_clause) = s.parse::<Option<WhereClause>>()? {
+            if let Some(where_clause) = s.parse()? {
                 if res.where_clause.is_some() {
                     anyhow::bail!("Duplicate WHERE clause!");
                 }
                 res.where_clause(where_clause);
-            } else if let Some(group_by_clause) = s.parse::<Option<GroupByClause>>()? {
+            } else if let Some(group_by_clause) = s.parse()? {
                 if res.group_by_clause.is_some() {
                     anyhow::bail!("Duplicate GROUP BY clause!");
                 }
                 res.group_by_clause(group_by_clause);
-            } else if let Some(order_by_clause) = s.parse::<Option<OrderByClause>>()? {
+            } else if let Some(order_by_clause) = s.parse()? {
                 if res.order_by_clause.is_some() {
                     anyhow::bail!("Duplicate ORDER BY clause!");
                 }
@@ -172,23 +258,23 @@ impl Parse for SelectStatement {
                 if res.per_partition_limit.is_some() {
                     anyhow::bail!("Duplicate PER PARTITION LIMIT clause!");
                 }
-                res.per_partition_limit(s.parse::<Limit>()?);
+                res.per_partition_limit(s.parse()?);
             } else if s.parse::<Option<LIMIT>>()?.is_some() {
                 if res.limit.is_some() {
                     anyhow::bail!("Duplicate LIMIT clause!");
                 }
-                res.limit(s.parse::<Limit>()?);
+                res.limit(s.parse()?);
             } else if s.parse::<Option<(ALLOW, FILTERING)>>()?.is_some() {
                 if res.allow_filtering.is_some() {
                     anyhow::bail!("Duplicate ALLOW FILTERING clause!");
                 }
-                res.allow_filtering();
+                res.set_allow_filtering(true);
             } else if s.parse::<Option<(BYPASS, CACHE)>>()?.is_some() {
                 if res.bypass_cache.is_some() {
                     anyhow::bail!("Duplicate BYPASS CACHE clause!");
                 }
-                res.bypass_cache();
-            } else if let Some(t) = s.parse_from::<If<(USING, TIMEOUT), DurationLiteral>>()? {
+                res.set_bypass_cache(true);
+            } else if let Some(t) = s.parse_from::<If<(USING, TIMEOUT), Tag<DurationLiteral>>>()? {
                 if res.timeout.is_some() {
                     anyhow::bail!("Duplicate USING TIMEOUT clause!");
                 }
@@ -467,6 +553,7 @@ impl Display for SelectorKind {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedInsertStatement)]
 pub struct InsertStatement {
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
@@ -478,6 +565,30 @@ pub struct InsertStatement {
     pub using: Option<Vec<UpdateParameter>>,
 }
 
+impl TryFrom<TaggedInsertStatement> for InsertStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedInsertStatement) -> Result<Self, Self::Error> {
+        Ok(InsertStatement {
+            table: value.table.try_into()?,
+            kind: value.kind,
+            if_not_exists: value.if_not_exists,
+            using: value.using.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(InsertStatement)]
+pub struct TaggedInsertStatement {
+    pub table: TaggedKeyspaceQualifiedName,
+    pub kind: InsertKind,
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    #[builder(default)]
+    pub using: Option<Tag<Vec<UpdateParameter>>>,
+}
+
 impl InsertStatementBuilder {
     /// Set IF NOT EXISTS on the statement.
     /// To undo this, use `set_if_not_exists(false)`.
@@ -487,13 +598,12 @@ impl InsertStatementBuilder {
     }
 }
 
-impl Parse for InsertStatement {
+impl Parse for TaggedInsertStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(INSERT, INTO)>()?;
-        let mut res = InsertStatementBuilder::default();
-        res.table(s.parse::<KeyspaceQualifiedName>()?)
-            .kind(s.parse::<InsertKind>()?);
+        let mut res = TaggedInsertStatementBuilder::default();
+        res.table(s.parse()?).kind(s.parse()?);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
@@ -502,12 +612,12 @@ impl Parse for InsertStatement {
                 if res.if_not_exists.is_some() {
                     anyhow::bail!("Duplicate IF NOT EXISTS clause!");
                 }
-                res.if_not_exists();
+                res.set_if_not_exists(true);
             } else if s.parse::<Option<USING>>()?.is_some() {
                 if res.using.is_some() {
                     anyhow::bail!("Duplicate USING clause!");
                 }
-                res.using(s.parse_from::<List<UpdateParameter, AND>>()?);
+                res.using(s.parse_from::<Tag<List<UpdateParameter, AND>>>()?);
             } else {
                 return Ok(res
                     .build()
@@ -670,6 +780,7 @@ impl Display for UpdateParameter {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedUpdateStatement)]
 pub struct UpdateStatement {
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
@@ -680,6 +791,32 @@ pub struct UpdateStatement {
     pub where_clause: WhereClause,
     #[builder(setter(into), default)]
     pub if_clause: Option<IfClause>,
+}
+
+impl TryFrom<TaggedUpdateStatement> for UpdateStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedUpdateStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            table: value.table.try_into()?,
+            using: value.using.map(|v| v.into_value()).transpose()?,
+            set_clause: value.set_clause.into_value()?,
+            where_clause: value.where_clause.into_value()?,
+            if_clause: value.if_clause.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[tokenize_as(UpdateStatement)]
+pub struct TaggedUpdateStatement {
+    pub table: TaggedKeyspaceQualifiedName,
+    #[builder(default)]
+    pub using: Option<Tag<Vec<UpdateParameter>>>,
+    pub set_clause: Tag<Vec<Assignment>>,
+    pub where_clause: Tag<WhereClause>,
+    #[builder(default)]
+    pub if_clause: Option<Tag<IfClause>>,
 }
 
 impl UpdateStatementBuilder {
@@ -705,18 +842,46 @@ impl UpdateStatementBuilder {
     }
 }
 
-impl Parse for UpdateStatement {
+impl TaggedUpdateStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .set_clause
+            .as_ref()
+            .map(|s| match s {
+                Tag::Value(v) => v.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("SET clause assignments cannot be empty".to_string());
+        }
+        if self
+            .where_clause
+            .as_ref()
+            .map(|s| match s {
+                Tag::Value(v) => v.relations.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("WHERE clause cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedUpdateStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<UPDATE>()?;
-        let mut res = UpdateStatementBuilder::default();
-        res.table(s.parse::<KeyspaceQualifiedName>()?);
-        if let Some(u) = s.parse_from::<If<USING, List<UpdateParameter, AND>>>()? {
+        let mut res = TaggedUpdateStatementBuilder::default();
+        res.table(s.parse()?);
+        if let Some(u) = s.parse_from::<If<USING, Tag<List<UpdateParameter, AND>>>>()? {
             res.using(u);
         }
-        res.set_clause(s.parse_from::<(SET, List<Assignment, Comma>)>()?.1)
-            .where_clause(s.parse::<WhereClause>()?);
-        if let Some(i) = s.parse::<Option<IfClause>>()? {
+        res.set_clause(s.parse_from::<(SET, Tag<List<Assignment, Comma>>)>()?.1)
+            .where_clause(s.parse()?);
+        if let Some(i) = s.parse()? {
             res.if_clause(i);
         }
         s.parse::<Option<Semicolon>>()?;
@@ -977,6 +1142,7 @@ impl Display for IfClause {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedDeleteStatement)]
 pub struct DeleteStatement {
     #[builder(default)]
     pub selections: Option<Vec<SimpleSelection>>,
@@ -988,6 +1154,33 @@ pub struct DeleteStatement {
     pub where_clause: WhereClause,
     #[builder(default)]
     pub if_clause: Option<IfClause>,
+}
+
+impl TryFrom<TaggedDeleteStatement> for DeleteStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDeleteStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            selections: value.selections.map(|v| v.into_value()).transpose()?,
+            from: value.from.try_into()?,
+            using: value.using.map(|v| v.into_value()).transpose()?,
+            where_clause: value.where_clause.into_value()?,
+            if_clause: value.if_clause.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[tokenize_as(DeleteStatement)]
+pub struct TaggedDeleteStatement {
+    #[builder(default)]
+    pub selections: Option<Tag<Vec<SimpleSelection>>>,
+    pub from: TaggedKeyspaceQualifiedName,
+    #[builder(default)]
+    pub using: Option<Tag<Vec<UpdateParameter>>>,
+    pub where_clause: Tag<WhereClause>,
+    #[builder(default)]
+    pub if_clause: Option<Tag<IfClause>>,
 }
 
 impl DeleteStatementBuilder {
@@ -1010,20 +1203,37 @@ impl DeleteStatementBuilder {
     }
 }
 
-impl Parse for DeleteStatement {
+impl TaggedDeleteStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .where_clause
+            .as_ref()
+            .map(|s| match s {
+                Tag::Value(v) => v.relations.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("WHERE clause cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedDeleteStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<DELETE>()?;
-        let mut res = DeleteStatementBuilder::default();
-        if let Some(s) = s.parse_from::<Option<List<SimpleSelection, Comma>>>()? {
+        let mut res = TaggedDeleteStatementBuilder::default();
+        if let Some(s) = s.parse_from::<Option<Tag<List<SimpleSelection, Comma>>>>()? {
             res.selections(s);
         }
-        res.from(s.parse::<(FROM, KeyspaceQualifiedName)>()?.1);
-        if let Some(u) = s.parse_from::<If<USING, List<UpdateParameter, AND>>>()? {
+        res.from(s.parse::<(FROM, _)>()?.1);
+        if let Some(u) = s.parse_from::<If<USING, Tag<List<UpdateParameter, AND>>>>()? {
             res.using(u);
         }
-        res.where_clause(s.parse::<WhereClause>()?);
-        if let Some(i) = s.parse::<Option<IfClause>>()? {
+        res.where_clause(s.parse()?);
+        if let Some(i) = s.parse()? {
             res.if_clause(i);
         }
         s.parse::<Option<Semicolon>>()?;
@@ -1081,12 +1291,39 @@ impl WhereExt for DeleteStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedBatchStatement)]
 pub struct BatchStatement {
     #[builder(default)]
     pub kind: BatchKind,
     #[builder(setter(strip_option), default)]
     pub using: Option<Vec<UpdateParameter>>,
     pub statements: Vec<ModificationStatement>,
+}
+
+impl TryFrom<TaggedBatchStatement> for BatchStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedBatchStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            kind: value.kind,
+            using: value.using.map(|v| v.into_value()).transpose()?,
+            statements: value
+                .statements
+                .into_iter()
+                .map(|v| v.into_value())
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
+#[tokenize_as(BatchStatement)]
+pub struct TaggedBatchStatement {
+    #[builder(default)]
+    pub kind: BatchKind,
+    #[builder(setter(strip_option), default)]
+    pub using: Option<Tag<Vec<UpdateParameter>>>,
+    pub statements: Vec<Tag<ModificationStatement>>,
 }
 
 impl BatchStatement {
@@ -1167,18 +1404,27 @@ impl BatchStatementBuilder {
     }
 }
 
-impl Parse for BatchStatement {
+impl TaggedBatchStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self.statements.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Batch cannot contain zero statements".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedBatchStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<BEGIN>()?;
-        let mut res = BatchStatementBuilder::default();
+        let mut res = TaggedBatchStatementBuilder::default();
         res.kind(s.parse()?);
         s.parse::<BATCH>()?;
-        if let Some(u) = s.parse_from::<If<USING, List<UpdateParameter, AND>>>()? {
+        if let Some(u) = s.parse_from::<If<USING, Tag<List<UpdateParameter, AND>>>>()? {
             res.using(u);
         }
         let mut statements = Vec::new();
-        while let Some(res) = s.parse::<Option<ModificationStatement>>()? {
+        while let Some(res) = s.parse()? {
             statements.push(res);
         }
         res.statements(statements);
@@ -1223,13 +1469,33 @@ impl Display for BatchStatement {
 }
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedModificationStatement)]
 pub enum ModificationStatement {
     Insert(InsertStatement),
     Update(UpdateStatement),
     Delete(DeleteStatement),
 }
 
-impl Parse for ModificationStatement {
+impl TryFrom<TaggedModificationStatement> for ModificationStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedModificationStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedModificationStatement::Insert(s) => ModificationStatement::Insert(s.try_into()?),
+            TaggedModificationStatement::Update(s) => ModificationStatement::Update(s.try_into()?),
+            TaggedModificationStatement::Delete(s) => ModificationStatement::Delete(s.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(ModificationStatement)]
+pub enum TaggedModificationStatement {
+    Insert(TaggedInsertStatement),
+    Update(TaggedUpdateStatement),
+    Delete(TaggedDeleteStatement),
+}
+
+impl Parse for TaggedModificationStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(keyword) = s.find::<ReservedKeyword>() {

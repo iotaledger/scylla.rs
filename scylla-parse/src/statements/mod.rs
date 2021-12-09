@@ -27,6 +27,8 @@ use crate::{
     StatementOpt,
     StatementStream,
     TableOpts,
+    Tag,
+    TaggedKeyspaceQualifiedName,
     Term,
     TokenWrapper,
 };
@@ -40,7 +42,10 @@ use scylla_parse_macros::{
     ToTokens,
 };
 use std::{
-    convert::TryFrom,
+    convert::{
+        TryFrom,
+        TryInto,
+    },
     fmt::{
         Display,
         Formatter,
@@ -70,6 +75,7 @@ mod trigger;
 pub use trigger::*;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
+#[parse_via(TaggedStatement)]
 pub enum Statement {
     DataDefinition(DataDefinitionStatement),
     DataManipulation(DataManipulationStatement),
@@ -81,6 +87,24 @@ pub enum Statement {
     UserDefinedFunction(UserDefinedFunctionStatement),
     UserDefinedType(UserDefinedTypeStatement),
     Trigger(TriggerStatement),
+}
+
+impl TryFrom<TaggedStatement> for Statement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedStatement::DataDefinition(value) => Statement::DataDefinition(value.try_into()?),
+            TaggedStatement::DataManipulation(value) => Statement::DataManipulation(value.try_into()?),
+            TaggedStatement::SecondaryIndex(value) => Statement::SecondaryIndex(value.try_into()?),
+            TaggedStatement::MaterializedView(value) => Statement::MaterializedView(value.try_into()?),
+            TaggedStatement::Role(value) => Statement::Role(value.try_into()?),
+            TaggedStatement::Permission(value) => Statement::Permission(value.try_into()?),
+            TaggedStatement::User(value) => Statement::User(value.try_into()?),
+            TaggedStatement::UserDefinedFunction(value) => Statement::UserDefinedFunction(value.try_into()?),
+            TaggedStatement::UserDefinedType(value) => Statement::UserDefinedType(value.try_into()?),
+            TaggedStatement::Trigger(value) => Statement::Trigger(value.try_into()?),
+        })
+    }
 }
 
 macro_rules! impl_try_into_statements {
@@ -123,9 +147,63 @@ impl_try_into_statements!(
     TriggerStatement => {CreateTriggerStatement, DropTriggerStatement}
 );
 
-impl Parse for Statement {
-    type Output = Statement;
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
+#[tokenize_as(Statement)]
+pub enum TaggedStatement {
+    DataDefinition(TaggedDataDefinitionStatement),
+    DataManipulation(TaggedDataManipulationStatement),
+    SecondaryIndex(TaggedSecondaryIndexStatement),
+    MaterializedView(TaggedMaterializedViewStatement),
+    Role(TaggedRoleStatement),
+    Permission(TaggedPermissionStatement),
+    User(TaggedUserStatement),
+    UserDefinedFunction(TaggedUserDefinedFunctionStatement),
+    UserDefinedType(TaggedUserDefinedTypeStatement),
+    Trigger(TaggedTriggerStatement),
+}
 
+macro_rules! impl_try_into_tagged_statements {
+    ($($via:ty => {$($stmt:ty),*}),*) => {
+        $($(
+            impl std::convert::TryInto<$stmt> for TaggedStatement {
+                type Error = anyhow::Error;
+
+                fn try_into(self) -> Result<$stmt, Self::Error> {
+                    match <$via>::try_from(self) {
+                        Ok(v) => v.try_into().map_err(|e: &str| anyhow::anyhow!(e)),
+                        Err(err) => Err(anyhow::anyhow!(
+                            "Could not convert Statement to {}: {}",
+                            std::any::type_name::<$stmt>(),
+                            err
+                        )),
+                    }
+                }
+            }
+
+            impl From<$stmt> for TaggedStatement {
+                fn from(v: $stmt) -> Self {
+                    <$via>::from(v).into()
+                }
+            }
+        )*)*
+    };
+}
+
+impl_try_into_tagged_statements!(
+    TaggedDataDefinitionStatement => {TaggedUseStatement, TaggedCreateKeyspaceStatement, TaggedAlterKeyspaceStatement, TaggedDropKeyspaceStatement, TaggedCreateTableStatement, TaggedAlterTableStatement, TaggedDropTableStatement, TaggedTruncateStatement},
+    TaggedDataManipulationStatement => {TaggedInsertStatement, TaggedUpdateStatement, TaggedDeleteStatement, TaggedSelectStatement, TaggedBatchStatement},
+    TaggedSecondaryIndexStatement => {TaggedCreateIndexStatement, TaggedDropIndexStatement},
+    TaggedMaterializedViewStatement => {TaggedCreateMaterializedViewStatement, TaggedAlterMaterializedViewStatement, TaggedDropMaterializedViewStatement},
+    TaggedRoleStatement => {TaggedCreateRoleStatement, TaggedAlterRoleStatement, TaggedDropRoleStatement, TaggedGrantRoleStatement, TaggedRevokeRoleStatement, TaggedListRolesStatement},
+    TaggedPermissionStatement => {TaggedGrantPermissionStatement, TaggedRevokePermissionStatement, TaggedListPermissionsStatement},
+    TaggedUserStatement => {TaggedCreateUserStatement, TaggedAlterUserStatement, TaggedDropUserStatement, ListUsersStatement},
+    TaggedUserDefinedFunctionStatement => {TaggedCreateFunctionStatement, TaggedDropFunctionStatement, TaggedCreateAggregateFunctionStatement, TaggedDropAggregateFunctionStatement},
+    TaggedUserDefinedTypeStatement => {TaggedCreateUserDefinedTypeStatement, TaggedAlterUserDefinedTypeStatement, TaggedDropUserDefinedTypeStatement},
+    TaggedTriggerStatement => {TaggedCreateTriggerStatement, TaggedDropTriggerStatement}
+);
+
+impl Parse for TaggedStatement {
+    type Output = Self;
     fn parse(s: &mut crate::StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if let Some(stmt) = s.parse()? {
             Self::DataDefinition(stmt)

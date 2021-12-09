@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
+#[parse_via(TaggedDataDefinitionStatement)]
 pub enum DataDefinitionStatement {
     Use(UseStatement),
     CreateKeyspace(CreateKeyspaceStatement),
@@ -22,24 +23,61 @@ pub enum DataDefinitionStatement {
     Truncate(TruncateStatement),
 }
 
-impl Parse for DataDefinitionStatement {
+impl TryFrom<TaggedDataDefinitionStatement> for DataDefinitionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDataDefinitionStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedDataDefinitionStatement::Use(value) => DataDefinitionStatement::Use(value.try_into()?),
+            TaggedDataDefinitionStatement::CreateKeyspace(value) => {
+                DataDefinitionStatement::CreateKeyspace(value.try_into()?)
+            }
+            TaggedDataDefinitionStatement::AlterKeyspace(value) => {
+                DataDefinitionStatement::AlterKeyspace(value.try_into()?)
+            }
+            TaggedDataDefinitionStatement::DropKeyspace(value) => {
+                DataDefinitionStatement::DropKeyspace(value.try_into()?)
+            }
+            TaggedDataDefinitionStatement::CreateTable(value) => {
+                DataDefinitionStatement::CreateTable(value.try_into()?)
+            }
+            TaggedDataDefinitionStatement::AlterTable(value) => DataDefinitionStatement::AlterTable(value.try_into()?),
+            TaggedDataDefinitionStatement::DropTable(value) => DataDefinitionStatement::DropTable(value.try_into()?),
+            TaggedDataDefinitionStatement::Truncate(value) => DataDefinitionStatement::Truncate(value.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
+#[tokenize_as(DataDefinitionStatement)]
+pub enum TaggedDataDefinitionStatement {
+    Use(TaggedUseStatement),
+    CreateKeyspace(TaggedCreateKeyspaceStatement),
+    AlterKeyspace(TaggedAlterKeyspaceStatement),
+    DropKeyspace(TaggedDropKeyspaceStatement),
+    CreateTable(TaggedCreateTableStatement),
+    AlterTable(TaggedAlterTableStatement),
+    DropTable(TaggedDropTableStatement),
+    Truncate(TaggedTruncateStatement),
+}
+
+impl Parse for TaggedDataDefinitionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<UseStatement>>()? {
+        Ok(if let Some(stmt) = s.parse::<Option<TaggedUseStatement>>()? {
             Self::Use(stmt)
-        } else if let Some(stmt) = s.parse::<Option<CreateKeyspaceStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedCreateKeyspaceStatement>>()? {
             Self::CreateKeyspace(stmt)
-        } else if let Some(stmt) = s.parse::<Option<AlterKeyspaceStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedAlterKeyspaceStatement>>()? {
             Self::AlterKeyspace(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropKeyspaceStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedDropKeyspaceStatement>>()? {
             Self::DropKeyspace(stmt)
-        } else if let Some(stmt) = s.parse::<Option<CreateTableStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedCreateTableStatement>>()? {
             Self::CreateTable(stmt)
-        } else if let Some(stmt) = s.parse::<Option<AlterTableStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedAlterTableStatement>>()? {
             Self::AlterTable(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropTableStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedDropTableStatement>>()? {
             Self::DropTable(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TruncateStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedTruncateStatement>>()? {
             Self::Truncate(stmt)
         } else {
             anyhow::bail!("Expected data definition statement, found {}", s.info())
@@ -63,11 +101,27 @@ impl Display for DataDefinitionStatement {
 }
 
 #[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedUseStatement)]
 pub struct UseStatement {
     pub keyspace: Name,
 }
 
-impl Parse for UseStatement {
+impl TryFrom<TaggedUseStatement> for UseStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedUseStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            keyspace: value.keyspace.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(UseStatement)]
+pub struct TaggedUseStatement {
+    pub keyspace: Tag<Name>,
+}
+
+impl Parse for TaggedUseStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<USE>()?;
@@ -143,11 +197,32 @@ impl Display for KeyspaceOpts {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedCreateKeyspaceStatement)]
 pub struct CreateKeyspaceStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub keyspace: Name,
+    pub options: KeyspaceOpts,
+}
+
+impl TryFrom<TaggedCreateKeyspaceStatement> for CreateKeyspaceStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateKeyspaceStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            keyspace: value.keyspace.into_value()?,
+            options: value.options,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(CreateKeyspaceStatement)]
+pub struct TaggedCreateKeyspaceStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub keyspace: Tag<Name>,
     pub options: KeyspaceOpts,
 }
 
@@ -160,13 +235,13 @@ impl CreateKeyspaceStatementBuilder {
     }
 }
 
-impl Parse for CreateKeyspaceStatement {
+impl Parse for TaggedCreateKeyspaceStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, KEYSPACE)>()?;
-        let mut res = CreateKeyspaceStatementBuilder::default();
+        let mut res = TaggedCreateKeyspaceStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .keyspace(s.parse::<Name>()?);
+            .keyspace(s.parse()?);
         s.parse::<WITH>()?;
         res.options(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
@@ -199,18 +274,36 @@ impl KeyspaceOptionsExt for CreateKeyspaceStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedAlterKeyspaceStatement)]
 pub struct AlterKeyspaceStatement {
     #[builder(setter(into))]
     pub keyspace: Name,
     pub options: KeyspaceOpts,
 }
 
-impl Parse for AlterKeyspaceStatement {
+impl TryFrom<TaggedAlterKeyspaceStatement> for AlterKeyspaceStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedAlterKeyspaceStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            keyspace: value.keyspace.into_value()?,
+            options: value.options,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(AlterKeyspaceStatement)]
+pub struct TaggedAlterKeyspaceStatement {
+    pub keyspace: Tag<Name>,
+    pub options: KeyspaceOpts,
+}
+
+impl Parse for TaggedAlterKeyspaceStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, KEYSPACE)>()?;
-        let mut res = AlterKeyspaceStatementBuilder::default();
-        res.keyspace(s.parse::<Name>()?);
+        let mut res = TaggedAlterKeyspaceStatementBuilder::default();
+        res.keyspace(s.parse()?);
         s.parse::<WITH>()?;
         res.options(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
@@ -227,11 +320,30 @@ impl Display for AlterKeyspaceStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropKeyspaceStatement)]
 pub struct DropKeyspaceStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub keyspace: Name,
+}
+
+impl TryFrom<TaggedDropKeyspaceStatement> for DropKeyspaceStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropKeyspaceStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            keyspace: value.keyspace.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropKeyspaceStatement)]
+pub struct TaggedDropKeyspaceStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub keyspace: Tag<Name>,
 }
 
 impl DropKeyspaceStatementBuilder {
@@ -243,13 +355,13 @@ impl DropKeyspaceStatementBuilder {
     }
 }
 
-impl Parse for DropKeyspaceStatement {
+impl Parse for TaggedDropKeyspaceStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, KEYSPACE)>()?;
-        let mut res = DropKeyspaceStatementBuilder::default();
+        let mut res = TaggedDropKeyspaceStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .keyspace(s.parse::<Name>()?);
+            .keyspace(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -279,6 +391,7 @@ impl<T: Into<Name>> From<T> for DropKeyspaceStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 #[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedCreateTableStatement)]
 pub struct CreateTableStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
@@ -286,6 +399,33 @@ pub struct CreateTableStatement {
     pub table: KeyspaceQualifiedName,
     pub columns: Vec<ColumnDefinition>,
     #[builder(setter(into), default)]
+    pub primary_key: Option<PrimaryKey>,
+    #[builder(default)]
+    pub options: Option<TableOpts>,
+}
+
+impl TryFrom<TaggedCreateTableStatement> for CreateTableStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateTableStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            table: value.table.try_into()?,
+            columns: value.columns,
+            primary_key: value.primary_key,
+            options: value.options,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[builder(setter(strip_option), build_fn(validate = "Self::validate"))]
+#[tokenize_as(CreateTableStatement)]
+pub struct TaggedCreateTableStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub table: TaggedKeyspaceQualifiedName,
+    pub columns: Vec<ColumnDefinition>,
+    #[builder(default)]
     pub primary_key: Option<PrimaryKey>,
     #[builder(default)]
     pub options: Option<TableOpts>,
@@ -307,13 +447,22 @@ impl CreateTableStatementBuilder {
     }
 }
 
-impl Parse for CreateTableStatement {
+impl TaggedCreateTableStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self.columns.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Column definitions cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedCreateTableStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, TABLE)>()?;
-        let mut res = CreateTableStatementBuilder::default();
+        let mut res = TaggedCreateTableStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .table(s.parse::<KeyspaceQualifiedName>()?);
+            .table(s.parse()?);
         s.parse::<LeftParen>()?;
         res.columns(s.parse_from::<TerminatingList<ColumnDefinition, Comma, (PRIMARY, KEY)>>()?);
         if let Some(p) = s.parse_from::<If<(PRIMARY, KEY), Parens<PrimaryKey>>>()? {
@@ -365,18 +514,36 @@ impl TableOptionsExt for CreateTableStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[parse_via(TaggedAlterTableStatement)]
 pub struct AlterTableStatement {
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
     pub instruction: AlterTableInstruction,
 }
 
-impl Parse for AlterTableStatement {
+impl TryFrom<TaggedAlterTableStatement> for AlterTableStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedAlterTableStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            table: value.table.try_into()?,
+            instruction: value.instruction,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
+#[tokenize_as(AlterTableStatement)]
+pub struct TaggedAlterTableStatement {
+    pub table: TaggedKeyspaceQualifiedName,
+    pub instruction: AlterTableInstruction,
+}
+
+impl Parse for TaggedAlterTableStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, TABLE)>()?;
-        let mut res = AlterTableStatementBuilder::default();
-        res.table(s.parse::<KeyspaceQualifiedName>()?).instruction(s.parse()?);
+        let mut res = TaggedAlterTableStatementBuilder::default();
+        res.table(s.parse()?).instruction(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -468,11 +635,30 @@ impl Display for AlterTableInstruction {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropTableStatement)]
 pub struct DropTableStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
+}
+
+impl TryFrom<TaggedDropTableStatement> for DropTableStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropTableStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            table: value.table.try_into()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropTableStatement)]
+pub struct TaggedDropTableStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub table: TaggedKeyspaceQualifiedName,
 }
 
 impl DropTableStatementBuilder {
@@ -484,13 +670,13 @@ impl DropTableStatementBuilder {
     }
 }
 
-impl Parse for DropTableStatement {
+impl Parse for TaggedDropTableStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, TABLE)>()?;
-        let mut res = DropTableStatementBuilder::default();
+        let mut res = TaggedDropTableStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .table(s.parse::<KeyspaceQualifiedName>()?);
+            .table(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -519,17 +705,33 @@ impl<T: Into<KeyspaceQualifiedName>> From<T> for DropTableStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedTruncateStatement)]
 pub struct TruncateStatement {
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
 }
 
-impl Parse for TruncateStatement {
+impl TryFrom<TaggedTruncateStatement> for TruncateStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedTruncateStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            table: value.table.try_into()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(TruncateStatement)]
+pub struct TaggedTruncateStatement {
+    pub table: TaggedKeyspaceQualifiedName,
+}
+
+impl Parse for TaggedTruncateStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<TRUNCATE>()?;
-        let mut res = TruncateStatementBuilder::default();
-        res.table(s.parse::<KeyspaceQualifiedName>()?);
+        let mut res = TaggedTruncateStatementBuilder::default();
+        res.table(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()

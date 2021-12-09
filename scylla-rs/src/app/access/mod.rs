@@ -107,7 +107,10 @@ pub use select::{
 };
 pub use std::{
     borrow::Cow,
-    convert::TryInto,
+    convert::{
+        TryFrom,
+        TryInto,
+    },
 };
 use std::{
     fmt::Debug,

@@ -4,17 +4,36 @@
 use super::*;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedTriggerStatement)]
 pub enum TriggerStatement {
     Create(CreateTriggerStatement),
     Drop(DropTriggerStatement),
 }
 
-impl Parse for TriggerStatement {
+impl TryFrom<TaggedTriggerStatement> for TriggerStatement {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TaggedTriggerStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedTriggerStatement::Create(value) => TriggerStatement::Create(value.try_into()?),
+            TaggedTriggerStatement::Drop(value) => TriggerStatement::Drop(value.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(TriggerStatement)]
+pub enum TaggedTriggerStatement {
+    Create(TaggedCreateTriggerStatement),
+    Drop(TaggedDropTriggerStatement),
+}
+
+impl Parse for TaggedTriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<CreateTriggerStatement>>()? {
+        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateTriggerStatement>>()? {
             Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropTriggerStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedDropTriggerStatement>>()? {
             Self::Drop(stmt)
         } else {
             anyhow::bail!("Invalid TRIGGER statement!")
@@ -32,6 +51,7 @@ impl Display for TriggerStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedCreateTriggerStatement)]
 pub struct CreateTriggerStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
@@ -43,6 +63,29 @@ pub struct CreateTriggerStatement {
     pub using: LitStr,
 }
 
+impl TryFrom<TaggedCreateTriggerStatement> for CreateTriggerStatement {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TaggedCreateTriggerStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            name: value.name.into_value()?,
+            table: value.table.try_into()?,
+            using: value.using.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(CreateTriggerStatement)]
+pub struct TaggedCreateTriggerStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub name: Tag<Name>,
+    pub table: TaggedKeyspaceQualifiedName,
+    pub using: Tag<LitStr>,
+}
+
 impl CreateTriggerStatementBuilder {
     /// Set IF NOT EXISTS on the statement.
     /// To undo this, use `set_if_not_exists(false)`.
@@ -52,15 +95,15 @@ impl CreateTriggerStatementBuilder {
     }
 }
 
-impl Parse for CreateTriggerStatement {
+impl Parse for TaggedCreateTriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, TRIGGER)>()?;
-        let mut res = CreateTriggerStatementBuilder::default();
+        let mut res = TaggedCreateTriggerStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?)
-            .table(s.parse::<(ON, KeyspaceQualifiedName)>()?.1)
-            .using(s.parse::<(USING, LitStr)>()?.1);
+            .name(s.parse()?)
+            .table(s.parse::<(ON, _)>()?.1)
+            .using(s.parse::<(USING, _)>()?.1);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -82,6 +125,7 @@ impl Display for CreateTriggerStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropTriggerStatement)]
 pub struct DropTriggerStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
@@ -89,6 +133,26 @@ pub struct DropTriggerStatement {
     pub name: Name,
     #[builder(setter(into))]
     pub table: KeyspaceQualifiedName,
+}
+
+impl TryFrom<TaggedDropTriggerStatement> for DropTriggerStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropTriggerStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            name: value.name.into_value()?,
+            table: value.table.try_into()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropTriggerStatement)]
+pub struct TaggedDropTriggerStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub name: Tag<Name>,
+    pub table: TaggedKeyspaceQualifiedName,
 }
 
 impl DropTriggerStatementBuilder {
@@ -100,14 +164,14 @@ impl DropTriggerStatementBuilder {
     }
 }
 
-impl Parse for DropTriggerStatement {
+impl Parse for TaggedDropTriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, TRIGGER)>()?;
-        let mut res = DropTriggerStatementBuilder::default();
+        let mut res = TaggedDropTriggerStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?)
-            .table(s.parse::<(ON, KeyspaceQualifiedName)>()?.1);
+            .name(s.parse()?)
+            .table(s.parse::<(ON, _)>()?.1);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()

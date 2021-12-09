@@ -13,6 +13,7 @@ use derive_more::{
 use quote::{
     quote,
     ToTokens,
+    __private::TokenStream,
 };
 use scylla_parse_macros::{
     ParseFromStr,
@@ -24,6 +25,7 @@ use std::{
         BTreeMap,
         BTreeSet,
         HashMap,
+        VecDeque,
     },
     convert::{
         TryFrom,
@@ -97,6 +99,8 @@ pub struct StatementStream<'a> {
     pos: usize,
     rem: usize,
     cache: Rc<RefCell<HashMap<usize, AnyMap>>>,
+    ordered_tags: Rc<RefCell<VecDeque<TokenStream>>>,
+    keyed_tags: Rc<RefCell<HashMap<String, TokenStream>>>,
 }
 
 impl<'a> StatementStream<'a> {
@@ -106,7 +110,17 @@ impl<'a> StatementStream<'a> {
             pos: 0,
             rem: statement.chars().count(),
             cache: Default::default(),
+            ordered_tags: Default::default(),
+            keyed_tags: Default::default(),
         }
+    }
+
+    pub fn push_ordered_tag(&mut self, tag: TokenStream) {
+        self.ordered_tags.borrow_mut().push_back(tag);
+    }
+
+    pub fn insert_keyed_tag(&mut self, key: String, tag: TokenStream) {
+        self.keyed_tags.borrow_mut().insert(key, tag);
     }
 
     pub fn info(&self) -> StreamInfo {
@@ -221,6 +235,14 @@ impl<'a> StatementStream<'a> {
             .or_insert(Cached::new(value, self.pos - prev_pos))
             .value
             .clone()
+    }
+
+    fn next_ordered_tag(&self) -> Option<TokenStream> {
+        self.ordered_tags.borrow_mut().pop_front()
+    }
+
+    fn mapped_tag(&self, key: &String) -> Option<TokenStream> {
+        self.keyed_tags.borrow_mut().get(key).cloned()
     }
 
     pub fn check<P: 'static + Parse>(&self) -> bool
@@ -495,6 +517,107 @@ impl Parse for Token {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub enum Tag<T> {
+    Tag(String),
+    Value(T),
+}
+impl<T> Tag<T> {
+    pub(crate) fn into_value(self) -> anyhow::Result<T> {
+        match self {
+            Tag::Value(v) => Ok(v),
+            _ => anyhow::bail!("Expected value!"),
+        }
+    }
+}
+impl<T: 'static + Parse + Clone> Parse for Tag<T>
+where
+    T::Output: 'static + Clone,
+{
+    type Output = Tag<T::Output>;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        Ok(if s.check::<HashTag>() {
+            let tag = s.parse_from::<HashTag>()?;
+            let tag = match tag {
+                Some(key) => s
+                    .mapped_tag(&key)
+                    .ok_or_else(|| anyhow::anyhow!("No tokens found for key: {}", key))?,
+                None => s
+                    .next_ordered_tag()
+                    .ok_or_else(|| anyhow::anyhow!("No tokens remaining!"))?,
+            };
+            Tag::Tag(tag.to_string())
+        } else {
+            Tag::Value(s.parse_from::<T>()?)
+        })
+    }
+}
+impl<T> From<T> for Tag<T> {
+    fn from(t: T) -> Self {
+        Tag::Value(t)
+    }
+}
+impl<T: Display> Display for Tag<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Tag::Tag(t) => t.fmt(f),
+            Tag::Value(v) => v.fmt(f),
+        }
+    }
+}
+
+impl<'a, T: 'a> CustomToTokens<'a> for Tag<T>
+where
+    TokenWrapper<'a, T>: ToTokens,
+{
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Tag::Tag(t) => {
+                let t = TokenStream::from_str(t).unwrap();
+                quote!(#t.into())
+            }
+            Tag::Value(v) => {
+                let v = TokenWrapper(v);
+                quote! {#v}
+            }
+        });
+    }
+}
+
+impl<T> ToTokens for Tag<T>
+where
+    for<'a> TokenWrapper<'a, T>: ToTokens,
+{
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        CustomToTokens::to_tokens(self, tokens);
+    }
+}
+#[derive(Copy, Clone, Debug)]
+pub struct HashTag;
+impl Parse for HashTag {
+    type Output = Option<String>;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        if let Some(c) = s.next() {
+            let mut res = String::new();
+            if c == '#' {
+                while let Some(c) = s.peek() {
+                    if c.is_alphanumeric() || c == '_' {
+                        s.next();
+                        res.push(c);
+                    } else {
+                        break;
+                    }
+                }
+                Ok(if res.is_empty() { None } else { Some(res) })
+            } else {
+                anyhow::bail!("Expected #")
+            }
+        } else {
+            anyhow::bail!("End of statement!")
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct Alpha;
 impl Parse for Alpha {
@@ -757,7 +880,7 @@ impl Parse for Uuid {
 }
 
 impl<'a> CustomToTokens<'a> for Uuid {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let u = self.to_string();
         tokens.extend(quote!(Uuid::parse_str(#u).unwrap()));
     }
@@ -957,16 +1080,34 @@ impl<N: Into<Name>> KeyspaceQualifyExt for N {
 }
 
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[parse_via(TaggedKeyspaceQualifiedName)]
 pub struct KeyspaceQualifiedName {
     pub keyspace: Option<Name>,
     pub name: Name,
 }
 
-impl Parse for KeyspaceQualifiedName {
+impl TryFrom<TaggedKeyspaceQualifiedName> for KeyspaceQualifiedName {
+    type Error = anyhow::Error;
+    fn try_from(t: TaggedKeyspaceQualifiedName) -> anyhow::Result<Self> {
+        Ok(KeyspaceQualifiedName {
+            keyspace: t.keyspace.map(|s| s.into_value()).transpose()?,
+            name: t.name.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[tokenize_as(KeyspaceQualifiedName)]
+pub struct TaggedKeyspaceQualifiedName {
+    pub keyspace: Option<Tag<Name>>,
+    pub name: Tag<Name>,
+}
+
+impl Parse for TaggedKeyspaceQualifiedName {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (keyspace, name) = s.parse::<(Option<(Name, Dot)>, Name)>()?;
-        Ok(KeyspaceQualifiedName {
+        let (keyspace, name) = s.parse::<(Option<(Tag<Name>, Dot)>, Tag<Name>)>()?;
+        Ok(Self {
             keyspace: keyspace.map(|(i, _)| i),
             name,
         })
@@ -2584,17 +2725,17 @@ pub fn format_cql_f64(f: f64) -> String {
     }
 }
 
-trait CustomToTokens<'a> {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream);
+pub trait CustomToTokens<'a> {
+    fn to_tokens(&'a self, tokens: &mut TokenStream);
 }
 
-struct TokenWrapper<'a, T>(pub &'a T);
+pub struct TokenWrapper<'a, T>(pub &'a T);
 
 impl<'a, T> ToTokens for TokenWrapper<'a, T>
 where
     T: CustomToTokens<'a>,
 {
-    fn to_tokens(&self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
         self.0.to_tokens(tokens);
     }
 }
@@ -2603,7 +2744,7 @@ impl<'a, T: 'a> CustomToTokens<'a> for Option<T>
 where
     TokenWrapper<'a, T>: ToTokens,
 {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         tokens.extend(match self {
             Some(t) => {
                 let t = TokenWrapper(t);
@@ -2618,7 +2759,7 @@ impl<'a, T: 'a> CustomToTokens<'a> for Box<T>
 where
     T: ToTokens,
 {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let i = self;
         tokens.extend(quote! {Box::new(#i)});
     }
@@ -2628,7 +2769,7 @@ impl<'a, T: 'a> CustomToTokens<'a> for Vec<T>
 where
     TokenWrapper<'a, T>: ToTokens,
 {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let t = self.iter().map(|t| TokenWrapper(t));
         tokens.extend(quote! { vec![#(#t),*]});
     }
@@ -2639,7 +2780,7 @@ where
     TokenWrapper<'a, K>: ToTokens,
     TokenWrapper<'a, V>: ToTokens,
 {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let t = self.iter().map(|(k, v)| {
             let (k, v) = (TokenWrapper(k), TokenWrapper(v));
             quote! {#k => #v}
@@ -2653,7 +2794,7 @@ where
     TokenWrapper<'a, K>: ToTokens,
     TokenWrapper<'a, V>: ToTokens,
 {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let t = self.iter().map(|(k, v)| {
             let (k, v) = (TokenWrapper(k), TokenWrapper(v));
             quote! {#k => #v}
@@ -2666,20 +2807,20 @@ impl<'a, K: 'static> CustomToTokens<'a> for BTreeSet<K>
 where
     TokenWrapper<'a, K>: ToTokens,
 {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let t = self.iter().map(|k| TokenWrapper(k));
         tokens.extend(quote! { maplit::btreeset![#(#t),*]});
     }
 }
 impl<'a> CustomToTokens<'a> for &str {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let s = self;
         tokens.extend(quote! { #s });
     }
 }
 
 impl<'a> CustomToTokens<'a> for String {
-    fn to_tokens(&'a self, tokens: &mut quote::__private::TokenStream) {
+    fn to_tokens(&'a self, tokens: &mut TokenStream) {
         let s = self;
         tokens.extend(quote! { #s.to_string() });
     }

@@ -5,6 +5,7 @@ use super::*;
 use std::collections::BTreeSet;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedRoleStatement)]
 pub enum RoleStatement {
     Create(CreateRoleStatement),
     Alter(AlterRoleStatement),
@@ -14,20 +15,46 @@ pub enum RoleStatement {
     List(ListRolesStatement),
 }
 
-impl Parse for RoleStatement {
+impl TryFrom<TaggedRoleStatement> for RoleStatement {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TaggedRoleStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedRoleStatement::Create(v) => RoleStatement::Create(v.try_into()?),
+            TaggedRoleStatement::Alter(v) => RoleStatement::Alter(v.try_into()?),
+            TaggedRoleStatement::Drop(v) => RoleStatement::Drop(v.try_into()?),
+            TaggedRoleStatement::Grant(v) => RoleStatement::Grant(v.try_into()?),
+            TaggedRoleStatement::Revoke(v) => RoleStatement::Revoke(v.try_into()?),
+            TaggedRoleStatement::List(v) => RoleStatement::List(v.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(RoleStatement)]
+pub enum TaggedRoleStatement {
+    Create(TaggedCreateRoleStatement),
+    Alter(TaggedAlterRoleStatement),
+    Drop(TaggedDropRoleStatement),
+    Grant(TaggedGrantRoleStatement),
+    Revoke(TaggedRevokeRoleStatement),
+    List(TaggedListRolesStatement),
+}
+
+impl Parse for TaggedRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<CreateRoleStatement>>()? {
+        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateRoleStatement>>()? {
             Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<AlterRoleStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedAlterRoleStatement>>()? {
             Self::Alter(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropRoleStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedDropRoleStatement>>()? {
             Self::Drop(stmt)
-        } else if let Some(stmt) = s.parse::<Option<GrantRoleStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedGrantRoleStatement>>()? {
             Self::Grant(stmt)
-        } else if let Some(stmt) = s.parse::<Option<RevokeRoleStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedRevokeRoleStatement>>()? {
             Self::Revoke(stmt)
-        } else if let Some(stmt) = s.parse::<Option<ListRolesStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedListRolesStatement>>()? {
             Self::List(stmt)
         } else {
             anyhow::bail!("Expected a role statement, found {}", s.info())
@@ -172,6 +199,7 @@ pub trait RoleOptBuilderExt {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedCreateRoleStatement)]
 pub struct CreateRoleStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
@@ -179,6 +207,28 @@ pub struct CreateRoleStatement {
     pub name: Name,
     #[builder(default)]
     pub options: Option<BTreeSet<RoleOpt>>,
+}
+
+impl TryFrom<TaggedCreateRoleStatement> for CreateRoleStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateRoleStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            name: value.name.into_value()?,
+            options: value.options.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(CreateRoleStatement)]
+pub struct TaggedCreateRoleStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub name: Tag<Name>,
+    #[builder(default)]
+    pub options: Option<Tag<BTreeSet<RoleOpt>>>,
 }
 
 impl CreateRoleStatementBuilder {
@@ -190,23 +240,29 @@ impl CreateRoleStatementBuilder {
     }
 }
 
-impl Parse for CreateRoleStatement {
+impl Parse for TaggedCreateRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, ROLE)>()?;
-        let mut res = CreateRoleStatementBuilder::default();
+        let mut res = TaggedCreateRoleStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?);
-        if let Some(o) = s.parse_from::<If<WITH, List<RoleOpt, AND>>>()? {
-            let mut opts = BTreeSet::new();
-            for opt in o {
-                if opts.contains(&opt) {
-                    anyhow::bail!("Duplicate option: {}", opt);
-                } else {
-                    opts.insert(opt);
+            .name(s.parse()?);
+        match s.parse_from::<If<WITH, Tag<List<RoleOpt, AND>>>>()? {
+            Some(Tag::Value(o)) => {
+                let mut opts = BTreeSet::new();
+                for opt in o {
+                    if opts.contains(&opt) {
+                        anyhow::bail!("Duplicate option: {}", opt);
+                    } else {
+                        opts.insert(opt);
+                    }
                 }
+                res.options(Tag::Value(opts));
             }
-            res.options(opts);
+            Some(Tag::Tag(t)) => {
+                res.options(Tag::Tag(t));
+            }
+            _ => (),
         }
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -252,10 +308,29 @@ impl RoleOptBuilderExt for CreateRoleStatementBuilder {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedAlterRoleStatement)]
 pub struct AlterRoleStatement {
     #[builder(setter(into))]
     pub name: Name,
     pub options: BTreeSet<RoleOpt>,
+}
+
+impl TryFrom<TaggedAlterRoleStatement> for AlterRoleStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedAlterRoleStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name.into_value()?,
+            options: value.options.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
+#[tokenize_as(AlterRoleStatement)]
+pub struct TaggedAlterRoleStatement {
+    pub name: Tag<Name>,
+    pub options: Tag<BTreeSet<RoleOpt>>,
 }
 
 impl AlterRoleStatementBuilder {
@@ -267,22 +342,47 @@ impl AlterRoleStatementBuilder {
     }
 }
 
-impl Parse for AlterRoleStatement {
+impl TaggedAlterRoleStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .options
+            .as_ref()
+            .map(|s| match s {
+                Tag::Value(v) => v.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("Role options cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedAlterRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, ROLE)>()?;
-        let mut res = AlterRoleStatementBuilder::default();
-        res.name(s.parse::<Name>()?);
-        let o = s.parse_from::<(WITH, List<RoleOpt, AND>)>()?.1;
-        let mut opts = BTreeSet::new();
-        for opt in o {
-            if opts.contains(&opt) {
-                anyhow::bail!("Duplicate option: {}", opt);
-            } else {
-                opts.insert(opt);
+        let mut res = TaggedAlterRoleStatementBuilder::default();
+        res.name(s.parse()?);
+        let o = s.parse_from::<(WITH, Tag<List<RoleOpt, AND>>)>()?.1;
+        match o {
+            Tag::Value(o) => {
+                let mut opts = BTreeSet::new();
+                for opt in o {
+                    if opts.contains(&opt) {
+                        anyhow::bail!("Duplicate option: {}", opt);
+                    } else {
+                        opts.insert(opt);
+                    }
+                }
+                res.options(Tag::Value(opts));
+            }
+            Tag::Tag(t) => {
+                res.options(Tag::Tag(t));
             }
         }
-        res.options(opts);
+
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -312,11 +412,30 @@ impl RoleOptBuilderExt for AlterRoleStatementBuilder {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropRoleStatement)]
 pub struct DropRoleStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl TryFrom<TaggedDropRoleStatement> for DropRoleStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropRoleStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            name: value.name.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropRoleStatement)]
+pub struct TaggedDropRoleStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub name: Tag<Name>,
 }
 
 impl DropRoleStatementBuilder {
@@ -328,18 +447,18 @@ impl DropRoleStatementBuilder {
     }
 }
 
-impl Parse for DropRoleStatement {
+impl Parse for TaggedDropRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, ROLE)>()?;
-        let mut res = DropRoleStatementBuilder::default();
+        let mut res = TaggedDropRoleStatementBuilder::default();
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
             }
             if s.parse::<Option<(IF, EXISTS)>>()?.is_some() {
-                res.if_exists();
-            } else if let Some(n) = s.parse::<Option<Name>>()? {
+                res.set_if_exists(true);
+            } else if let Some(n) = s.parse()? {
                 res.name(n);
             } else {
                 return Ok(res
@@ -366,19 +485,37 @@ impl Display for DropRoleStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
+#[parse_via(TaggedGrantRoleStatement)]
 pub struct GrantRoleStatement {
     pub name: Name,
     pub to: Name,
 }
 
-impl Parse for GrantRoleStatement {
+impl TryFrom<TaggedGrantRoleStatement> for GrantRoleStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedGrantRoleStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name.into_value()?,
+            to: value.to.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(GrantRoleStatement)]
+pub struct TaggedGrantRoleStatement {
+    pub name: Tag<Name>,
+    pub to: Tag<Name>,
+}
+
+impl Parse for TaggedGrantRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<GRANT>()?;
-        let mut res = GrantRoleStatementBuilder::default();
-        res.name(s.parse::<Name>()?);
+        let mut res = TaggedGrantRoleStatementBuilder::default();
+        res.name(s.parse()?);
         s.parse::<TO>()?;
-        res.to(s.parse::<Name>()?);
+        res.to(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -394,19 +531,37 @@ impl Display for GrantRoleStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
+#[parse_via(TaggedRevokeRoleStatement)]
 pub struct RevokeRoleStatement {
     pub name: Name,
     pub from: Name,
 }
 
-impl Parse for RevokeRoleStatement {
+impl TryFrom<TaggedRevokeRoleStatement> for RevokeRoleStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedRevokeRoleStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name.into_value()?,
+            from: value.from.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(RevokeRoleStatement)]
+pub struct TaggedRevokeRoleStatement {
+    pub name: Tag<Name>,
+    pub from: Tag<Name>,
+}
+
+impl Parse for TaggedRevokeRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<REVOKE>()?;
-        let mut res = RevokeRoleStatementBuilder::default();
-        res.name(s.parse::<Name>()?);
+        let mut res = TaggedRevokeRoleStatementBuilder::default();
+        res.name(s.parse()?);
         s.parse::<FROM>()?;
-        res.from(s.parse::<Name>()?);
+        res.from(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -422,9 +577,30 @@ impl Display for RevokeRoleStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedListRolesStatement)]
 pub struct ListRolesStatement {
     #[builder(setter(into), default)]
     pub of: Option<Name>,
+    #[builder(setter(name = "set_no_recursive"), default)]
+    pub no_recursive: bool,
+}
+
+impl TryFrom<TaggedListRolesStatement> for ListRolesStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedListRolesStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            of: value.of.map(|v| v.into_value()).transpose()?,
+            no_recursive: value.no_recursive,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(ListRolesStatement)]
+pub struct TaggedListRolesStatement {
+    #[builder(default)]
+    pub of: Option<Tag<Name>>,
     #[builder(setter(name = "set_no_recursive"), default)]
     pub no_recursive: bool,
 }
@@ -438,12 +614,12 @@ impl ListRolesStatementBuilder {
     }
 }
 
-impl Parse for ListRolesStatement {
+impl Parse for TaggedListRolesStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(LIST, ROLES)>()?;
-        let mut res = ListRolesStatementBuilder::default();
-        if let Some(n) = s.parse_from::<If<OF, Name>>()? {
+        let mut res = TaggedListRolesStatementBuilder::default();
+        if let Some(n) = s.parse_from::<If<OF, Tag<Name>>>()? {
             res.of(n);
         }
         res.set_no_recursive(s.parse::<Option<NORECURSIVE>>()?.is_some());
@@ -662,24 +838,46 @@ impl Display for Resource {
 }
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedPermissionStatement)]
 pub enum PermissionStatement {
     Grant(GrantPermissionStatement),
     Revoke(RevokePermissionStatement),
     List(ListPermissionsStatement),
 }
 
-impl Parse for PermissionStatement {
+impl TryFrom<TaggedPermissionStatement> for PermissionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedPermissionStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedPermissionStatement::Grant(s) => PermissionStatement::Grant(s.try_into()?),
+            TaggedPermissionStatement::Revoke(s) => PermissionStatement::Revoke(s.try_into()?),
+            TaggedPermissionStatement::List(s) => PermissionStatement::List(s.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(PermissionStatement)]
+pub enum TaggedPermissionStatement {
+    Grant(TaggedGrantPermissionStatement),
+    Revoke(TaggedRevokePermissionStatement),
+    List(TaggedListPermissionsStatement),
+}
+
+impl Parse for TaggedPermissionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<GrantPermissionStatement>>()? {
-            Self::Grant(stmt)
-        } else if let Some(stmt) = s.parse::<Option<RevokePermissionStatement>>()? {
-            Self::Revoke(stmt)
-        } else if let Some(stmt) = s.parse::<Option<ListPermissionsStatement>>()? {
-            Self::List(stmt)
-        } else {
-            anyhow::bail!("Expected a permission statement, found {}", s.info())
-        })
+        Ok(
+            if let Some(stmt) = s.parse::<Option<TaggedGrantPermissionStatement>>()? {
+                Self::Grant(stmt)
+            } else if let Some(stmt) = s.parse::<Option<TaggedRevokePermissionStatement>>()? {
+                Self::Revoke(stmt)
+            } else if let Some(stmt) = s.parse::<Option<TaggedListPermissionsStatement>>()? {
+                Self::List(stmt)
+            } else {
+                anyhow::bail!("Expected a permission statement, found {}", s.info())
+            },
+        )
     }
 }
 
@@ -695,22 +893,42 @@ impl Display for PermissionStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
+#[parse_via(TaggedGrantPermissionStatement)]
 pub struct GrantPermissionStatement {
     pub permission: PermissionKind,
     pub resource: Resource,
     pub to: Name,
 }
 
-impl Parse for GrantPermissionStatement {
+impl TryFrom<TaggedGrantPermissionStatement> for GrantPermissionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedGrantPermissionStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            permission: value.permission.into_value()?,
+            resource: value.resource.into_value()?,
+            to: value.to.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(GrantPermissionStatement)]
+pub struct TaggedGrantPermissionStatement {
+    pub permission: Tag<PermissionKind>,
+    pub resource: Tag<Resource>,
+    pub to: Tag<Name>,
+}
+
+impl Parse for TaggedGrantPermissionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<GRANT>()?;
-        let mut res = GrantPermissionStatementBuilder::default();
-        res.permission(s.parse::<PermissionKind>()?);
+        let mut res = TaggedGrantPermissionStatementBuilder::default();
+        res.permission(s.parse()?);
         s.parse::<ON>()?;
-        res.resource(s.parse::<Resource>()?);
+        res.resource(s.parse()?);
         s.parse::<TO>()?;
-        res.to(s.parse::<Name>()?);
+        res.to(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -726,22 +944,42 @@ impl Display for GrantPermissionStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(into))]
+#[parse_via(TaggedRevokePermissionStatement)]
 pub struct RevokePermissionStatement {
     pub permission: PermissionKind,
     pub resource: Resource,
     pub from: Name,
 }
 
-impl Parse for RevokePermissionStatement {
+impl TryFrom<TaggedRevokePermissionStatement> for RevokePermissionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedRevokePermissionStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            permission: value.permission.into_value()?,
+            resource: value.resource.into_value()?,
+            from: value.from.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(RevokePermissionStatement)]
+pub struct TaggedRevokePermissionStatement {
+    pub permission: Tag<PermissionKind>,
+    pub resource: Tag<Resource>,
+    pub from: Tag<Name>,
+}
+
+impl Parse for TaggedRevokePermissionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<REVOKE>()?;
-        let mut res = RevokePermissionStatementBuilder::default();
-        res.permission(s.parse::<PermissionKind>()?);
+        let mut res = TaggedRevokePermissionStatementBuilder::default();
+        res.permission(s.parse()?);
         s.parse::<ON>()?;
-        res.resource(s.parse::<Resource>()?);
+        res.resource(s.parse()?);
         s.parse::<FROM>()?;
-        res.from(s.parse::<Name>()?);
+        res.from(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -757,6 +995,7 @@ impl Display for RevokePermissionStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedListPermissionsStatement)]
 pub struct ListPermissionsStatement {
     #[builder(setter(into))]
     pub permission: PermissionKind,
@@ -764,6 +1003,31 @@ pub struct ListPermissionsStatement {
     pub resource: Option<Resource>,
     #[builder(setter(into), default)]
     pub of: Option<Name>,
+    #[builder(setter(name = "set_no_recursive"), default)]
+    pub no_recursive: bool,
+}
+
+impl TryFrom<TaggedListPermissionsStatement> for ListPermissionsStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedListPermissionsStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            permission: value.permission.into_value()?,
+            resource: value.resource.map(|v| v.into_value()).transpose()?,
+            of: value.of.map(|v| v.into_value()).transpose()?,
+            no_recursive: value.no_recursive,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(ListPermissionsStatement)]
+pub struct TaggedListPermissionsStatement {
+    pub permission: Tag<PermissionKind>,
+    #[builder(default)]
+    pub resource: Option<Tag<Resource>>,
+    #[builder(default)]
+    pub of: Option<Tag<Name>>,
     #[builder(setter(name = "set_no_recursive"), default)]
     pub no_recursive: bool,
 }
@@ -777,22 +1041,22 @@ impl ListPermissionsStatementBuilder {
     }
 }
 
-impl Parse for ListPermissionsStatement {
+impl Parse for TaggedListPermissionsStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<LIST>()?;
-        let mut res = ListPermissionsStatementBuilder::default();
-        res.permission(s.parse::<PermissionKind>()?);
+        let mut res = TaggedListPermissionsStatementBuilder::default();
+        res.permission(s.parse()?);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
             }
-            if let Some(resource) = s.parse_from::<If<ON, Resource>>()? {
+            if let Some(resource) = s.parse_from::<If<ON, Tag<Resource>>>()? {
                 if res.resource.is_some() {
                     anyhow::bail!("Duplicate ON RESOURCE clause!");
                 }
                 res.resource(resource);
-            } else if let Some(role) = s.parse_from::<If<OF, Name>>()? {
+            } else if let Some(role) = s.parse_from::<If<OF, Tag<Name>>>()? {
                 if res.of.is_some() {
                     anyhow::bail!("Duplicate OF ROLE clause!");
                 }
@@ -833,6 +1097,7 @@ impl Display for ListPermissionsStatement {
 }
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedUserStatement)]
 pub enum UserStatement {
     Create(CreateUserStatement),
     Alter(AlterUserStatement),
@@ -840,14 +1105,35 @@ pub enum UserStatement {
     List(ListUsersStatement),
 }
 
-impl Parse for UserStatement {
+impl TryFrom<TaggedUserStatement> for UserStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedUserStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedUserStatement::Create(v) => Self::Create(v.try_into()?),
+            TaggedUserStatement::Alter(v) => Self::Alter(v.try_into()?),
+            TaggedUserStatement::Drop(v) => Self::Drop(v.try_into()?),
+            TaggedUserStatement::List(v) => Self::List(v.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(UserStatement)]
+pub enum TaggedUserStatement {
+    Create(TaggedCreateUserStatement),
+    Alter(TaggedAlterUserStatement),
+    Drop(TaggedDropUserStatement),
+    List(ListUsersStatement),
+}
+
+impl Parse for TaggedUserStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<CreateUserStatement>>()? {
+        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateUserStatement>>()? {
             Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<AlterUserStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedAlterUserStatement>>()? {
             Self::Alter(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropUserStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedDropUserStatement>>()? {
             Self::Drop(stmt)
         } else if let Some(stmt) = s.parse::<Option<ListUsersStatement>>()? {
             Self::List(stmt)
@@ -870,6 +1156,7 @@ impl Display for UserStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedCreateUserStatement)]
 pub struct CreateUserStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
@@ -877,6 +1164,31 @@ pub struct CreateUserStatement {
     pub name: Name,
     #[builder(setter(into), default)]
     pub with_password: Option<LitStr>,
+    #[builder(default)]
+    pub superuser: Option<bool>,
+}
+
+impl TryFrom<TaggedCreateUserStatement> for CreateUserStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateUserStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            name: value.name.into_value()?,
+            with_password: value.with_password.map(|v| v.into_value()).transpose()?,
+            superuser: value.superuser,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(CreateUserStatement)]
+pub struct TaggedCreateUserStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub name: Tag<Name>,
+    #[builder(default)]
+    pub with_password: Option<Tag<LitStr>>,
     #[builder(default)]
     pub superuser: Option<bool>,
 }
@@ -890,18 +1202,18 @@ impl CreateUserStatementBuilder {
     }
 }
 
-impl Parse for CreateUserStatement {
+impl Parse for TaggedCreateUserStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, USER)>()?;
-        let mut res = CreateUserStatementBuilder::default();
+        let mut res = TaggedCreateUserStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?);
+            .name(s.parse()?);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
             }
-            if let Some(password) = s.parse_from::<If<(WITH, PASSWORD), LitStr>>()? {
+            if let Some(password) = s.parse_from::<If<(WITH, PASSWORD), Tag<LitStr>>>()? {
                 if res.with_password.is_some() {
                     anyhow::bail!("Duplicate WITH PASSWORD clause!");
                 }
@@ -948,6 +1260,7 @@ impl Display for CreateUserStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedAlterUserStatement)]
 pub struct AlterUserStatement {
     #[builder(setter(into))]
     pub name: Name,
@@ -957,17 +1270,39 @@ pub struct AlterUserStatement {
     pub superuser: Option<bool>,
 }
 
-impl Parse for AlterUserStatement {
+impl TryFrom<TaggedAlterUserStatement> for AlterUserStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedAlterUserStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name.into_value()?,
+            with_password: value.with_password.map(|v| v.into_value()).transpose()?,
+            superuser: value.superuser,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(AlterUserStatement)]
+pub struct TaggedAlterUserStatement {
+    pub name: Tag<Name>,
+    #[builder(default)]
+    pub with_password: Option<Tag<LitStr>>,
+    #[builder(default)]
+    pub superuser: Option<bool>,
+}
+
+impl Parse for TaggedAlterUserStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, USER)>()?;
-        let mut res = AlterUserStatementBuilder::default();
-        res.name(s.parse::<Name>()?);
+        let mut res = TaggedAlterUserStatementBuilder::default();
+        res.name(s.parse()?);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
             }
-            if let Some(password) = s.parse_from::<If<(WITH, PASSWORD), LitStr>>()? {
+            if let Some(password) = s.parse_from::<If<(WITH, PASSWORD), Tag<LitStr>>>()? {
                 if res.with_password.is_some() {
                     anyhow::bail!("Duplicate WITH PASSWORD clause!");
                 }
@@ -1008,11 +1343,30 @@ impl Display for AlterUserStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropUserStatement)]
 pub struct DropUserStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl TryFrom<TaggedDropUserStatement> for DropUserStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropUserStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            name: value.name.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropUserStatement)]
+pub struct TaggedDropUserStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub name: Tag<Name>,
 }
 
 impl DropUserStatementBuilder {
@@ -1024,13 +1378,13 @@ impl DropUserStatementBuilder {
     }
 }
 
-impl Parse for DropUserStatement {
+impl Parse for TaggedDropUserStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, USER)>()?;
-        let mut res = DropUserStatementBuilder::default();
+        let mut res = TaggedDropUserStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse::<Name>()?);
+            .name(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -1067,21 +1421,41 @@ impl Display for ListUsersStatement {
 }
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedUserDefinedTypeStatement)]
 pub enum UserDefinedTypeStatement {
     Create(CreateUserDefinedTypeStatement),
     Alter(AlterUserDefinedTypeStatement),
     Drop(DropUserDefinedTypeStatement),
 }
 
-impl Parse for UserDefinedTypeStatement {
+impl TryFrom<TaggedUserDefinedTypeStatement> for UserDefinedTypeStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedUserDefinedTypeStatement) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedUserDefinedTypeStatement::Create(s) => UserDefinedTypeStatement::Create(s.try_into()?),
+            TaggedUserDefinedTypeStatement::Alter(s) => UserDefinedTypeStatement::Alter(s.try_into()?),
+            TaggedUserDefinedTypeStatement::Drop(s) => UserDefinedTypeStatement::Drop(s.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(UserDefinedTypeStatement)]
+pub enum TaggedUserDefinedTypeStatement {
+    Create(TaggedCreateUserDefinedTypeStatement),
+    Alter(TaggedAlterUserDefinedTypeStatement),
+    Drop(TaggedDropUserDefinedTypeStatement),
+}
+
+impl Parse for TaggedUserDefinedTypeStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(
-            if let Some(stmt) = s.parse::<Option<CreateUserDefinedTypeStatement>>()? {
+            if let Some(stmt) = s.parse::<Option<TaggedCreateUserDefinedTypeStatement>>()? {
                 Self::Create(stmt)
-            } else if let Some(stmt) = s.parse::<Option<AlterUserDefinedTypeStatement>>()? {
+            } else if let Some(stmt) = s.parse::<Option<TaggedAlterUserDefinedTypeStatement>>()? {
                 Self::Alter(stmt)
-            } else if let Some(stmt) = s.parse::<Option<DropUserDefinedTypeStatement>>()? {
+            } else if let Some(stmt) = s.parse::<Option<TaggedDropUserDefinedTypeStatement>>()? {
                 Self::Drop(stmt)
             } else {
                 anyhow::bail!("Invalid user defined type statement!")
@@ -1102,11 +1476,33 @@ impl Display for UserDefinedTypeStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedCreateUserDefinedTypeStatement)]
 pub struct CreateUserDefinedTypeStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
     pub name: KeyspaceQualifiedName,
+    pub fields: Vec<FieldDefinition>,
+}
+
+impl TryFrom<TaggedCreateUserDefinedTypeStatement> for CreateUserDefinedTypeStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateUserDefinedTypeStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_not_exists: value.if_not_exists,
+            name: value.name.try_into()?,
+            fields: value.fields,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
+#[tokenize_as(CreateUserDefinedTypeStatement)]
+pub struct TaggedCreateUserDefinedTypeStatement {
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub name: TaggedKeyspaceQualifiedName,
     pub fields: Vec<FieldDefinition>,
 }
 
@@ -1126,13 +1522,22 @@ impl CreateUserDefinedTypeStatementBuilder {
     }
 }
 
-impl Parse for CreateUserDefinedTypeStatement {
+impl TaggedCreateUserDefinedTypeStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self.fields.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            return Err("Field definitions cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedCreateUserDefinedTypeStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(CREATE, TYPE)>()?;
-        let mut res = CreateUserDefinedTypeStatementBuilder::default();
+        let mut res = TaggedCreateUserDefinedTypeStatementBuilder::default();
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
-            .name(s.parse::<KeyspaceQualifiedName>()?)
+            .name(s.parse()?)
             .fields(s.parse_from::<Parens<List<FieldDefinition, Comma>>>()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
@@ -1155,9 +1560,28 @@ impl Display for CreateUserDefinedTypeStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(build_fn(validate = "Self::validate"))]
+#[parse_via(TaggedAlterUserDefinedTypeStatement)]
 pub struct AlterUserDefinedTypeStatement {
     #[builder(setter(into))]
     pub name: KeyspaceQualifiedName,
+    pub instruction: AlterTypeInstruction,
+}
+
+impl TryFrom<TaggedAlterUserDefinedTypeStatement> for AlterUserDefinedTypeStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedAlterUserDefinedTypeStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name.try_into()?,
+            instruction: value.instruction,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(build_fn(validate = "Self::validate"))]
+#[tokenize_as(AlterUserDefinedTypeStatement)]
+pub struct TaggedAlterUserDefinedTypeStatement {
+    pub name: TaggedKeyspaceQualifiedName,
     pub instruction: AlterTypeInstruction,
 }
 
@@ -1178,12 +1602,29 @@ impl AlterUserDefinedTypeStatementBuilder {
     }
 }
 
-impl Parse for AlterUserDefinedTypeStatement {
+impl TaggedAlterUserDefinedTypeStatementBuilder {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .instruction
+            .as_ref()
+            .map(|s| match s {
+                AlterTypeInstruction::Rename(s) => s.is_empty(),
+                _ => false,
+            })
+            .unwrap_or(false)
+        {
+            return Err("RENAME clause cannot be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Parse for TaggedAlterUserDefinedTypeStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(ALTER, TYPE)>()?;
-        let mut res = AlterUserDefinedTypeStatementBuilder::default();
-        res.name(s.parse::<KeyspaceQualifiedName>()?).instruction(s.parse()?);
+        let mut res = TaggedAlterUserDefinedTypeStatementBuilder::default();
+        res.name(s.parse()?).instruction(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -1247,11 +1688,30 @@ impl Display for AlterTypeInstruction {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropUserDefinedTypeStatement)]
 pub struct DropUserDefinedTypeStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: KeyspaceQualifiedName,
+}
+
+impl TryFrom<TaggedDropUserDefinedTypeStatement> for DropUserDefinedTypeStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropUserDefinedTypeStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            name: value.name.try_into()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropUserDefinedTypeStatement)]
+pub struct TaggedDropUserDefinedTypeStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub name: TaggedKeyspaceQualifiedName,
 }
 
 impl DropUserDefinedTypeStatementBuilder {
@@ -1263,13 +1723,13 @@ impl DropUserDefinedTypeStatementBuilder {
     }
 }
 
-impl Parse for DropUserDefinedTypeStatement {
+impl Parse for TaggedDropUserDefinedTypeStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, TYPE)>()?;
-        let mut res = DropUserDefinedTypeStatementBuilder::default();
+        let mut res = TaggedDropUserDefinedTypeStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .name(s.parse::<KeyspaceQualifiedName>()?);
+            .name(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()

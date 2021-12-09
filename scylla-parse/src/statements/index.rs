@@ -4,17 +4,37 @@
 use super::*;
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedSecondaryIndexStatement)]
 pub enum SecondaryIndexStatement {
     Create(CreateIndexStatement),
     Drop(DropIndexStatement),
 }
 
-impl Parse for SecondaryIndexStatement {
+impl TryFrom<TaggedSecondaryIndexStatement> for SecondaryIndexStatement {
+    type Error = anyhow::Error;
+    fn try_from(statement: TaggedSecondaryIndexStatement) -> Result<Self, Self::Error> {
+        match statement {
+            TaggedSecondaryIndexStatement::Create(statement) => {
+                Ok(SecondaryIndexStatement::Create(statement.try_into()?))
+            }
+            TaggedSecondaryIndexStatement::Drop(statement) => Ok(SecondaryIndexStatement::Drop(statement.try_into()?)),
+        }
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(SecondaryIndexStatement)]
+pub enum TaggedSecondaryIndexStatement {
+    Create(TaggedCreateIndexStatement),
+    Drop(TaggedDropIndexStatement),
+}
+
+impl Parse for TaggedSecondaryIndexStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<CreateIndexStatement>>()? {
+        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateIndexStatement>>()? {
             Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropIndexStatement>>()? {
+        } else if let Some(stmt) = s.parse::<Option<TaggedDropIndexStatement>>()? {
             Self::Drop(stmt)
         } else {
             anyhow::bail!("Expected a data manipulation statement, found {}", s.info())
@@ -33,6 +53,7 @@ impl Display for SecondaryIndexStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedCreateIndexStatement)]
 pub struct CreateIndexStatement {
     #[builder(setter(name = "set_custom"), default)]
     pub custom: bool,
@@ -46,6 +67,36 @@ pub struct CreateIndexStatement {
     pub index_id: IndexIdentifier,
     #[builder(default)]
     pub using: Option<IndexClass>,
+}
+
+impl TryFrom<TaggedCreateIndexStatement> for CreateIndexStatement {
+    type Error = anyhow::Error;
+    fn try_from(statement: TaggedCreateIndexStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            custom: statement.custom,
+            if_not_exists: statement.if_not_exists,
+            name: statement.name.map(|v| v.into_value()).transpose()?,
+            table: statement.table.try_into()?,
+            index_id: statement.index_id.into_value()?,
+            using: statement.using.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(CreateIndexStatement)]
+pub struct TaggedCreateIndexStatement {
+    #[builder(setter(name = "set_custom"), default)]
+    pub custom: bool,
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    #[builder(default)]
+    pub name: Option<Tag<Name>>,
+    pub table: TaggedKeyspaceQualifiedName,
+    pub index_id: Tag<IndexIdentifier>,
+    #[builder(default)]
+    pub using: Option<Tag<IndexClass>>,
 }
 
 impl CreateIndexStatementBuilder {
@@ -64,21 +115,21 @@ impl CreateIndexStatementBuilder {
     }
 }
 
-impl Parse for CreateIndexStatement {
+impl Parse for TaggedCreateIndexStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<CREATE>()?;
-        let mut res = CreateIndexStatementBuilder::default();
+        let mut res = TaggedCreateIndexStatementBuilder::default();
         res.set_custom(s.parse::<Option<CUSTOM>>()?.is_some());
         s.parse::<INDEX>()?;
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some());
-        if let Some(n) = s.parse::<Option<Name>>()? {
+        if let Some(n) = s.parse()? {
             res.name(n);
         }
         s.parse::<ON>()?;
-        res.table(s.parse::<KeyspaceQualifiedName>()?)
-            .index_id(s.parse_from::<Parens<IndexIdentifier>>()?);
-        if let Some(u) = s.parse::<Option<IndexClass>>()? {
+        res.table(s.parse()?)
+            .index_id(s.parse_from::<Parens<Tag<IndexIdentifier>>>()?);
+        if let Some(u) = s.parse()? {
             res.using(u);
         }
         s.parse::<Option<Semicolon>>()?;
@@ -238,11 +289,31 @@ impl Display for IndexClass {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropIndexStatement)]
 pub struct DropIndexStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub name: Name,
+}
+
+impl TryFrom<TaggedDropIndexStatement> for DropIndexStatement {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TaggedDropIndexStatement) -> anyhow::Result<Self> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            name: value.name.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropIndexStatement)]
+pub struct TaggedDropIndexStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub name: Tag<Name>,
 }
 
 impl DropIndexStatementBuilder {
@@ -254,13 +325,13 @@ impl DropIndexStatementBuilder {
     }
 }
 
-impl Parse for DropIndexStatement {
+impl Parse for TaggedDropIndexStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, INDEX)>()?;
-        let mut res = DropIndexStatementBuilder::default();
+        let mut res = TaggedDropIndexStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some());
-        if let Some(n) = s.parse::<Option<Name>>()? {
+        if let Some(n) = s.parse()? {
             res.name(n);
         }
         s.parse::<Option<Semicolon>>()?;

@@ -176,6 +176,7 @@ impl Display for FunctionCall {
 }
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedUserDefinedFunctionStatement)]
 pub enum UserDefinedFunctionStatement {
     Create(CreateFunctionStatement),
     Drop(DropFunctionStatement),
@@ -183,20 +184,43 @@ pub enum UserDefinedFunctionStatement {
     DropAggregate(DropAggregateFunctionStatement),
 }
 
-impl Parse for UserDefinedFunctionStatement {
+impl TryFrom<TaggedUserDefinedFunctionStatement> for UserDefinedFunctionStatement {
+    type Error = anyhow::Error;
+    fn try_from(t: TaggedUserDefinedFunctionStatement) -> anyhow::Result<Self> {
+        Ok(match t {
+            TaggedUserDefinedFunctionStatement::Create(s) => Self::Create(s.try_into()?),
+            TaggedUserDefinedFunctionStatement::Drop(s) => Self::Drop(s.try_into()?),
+            TaggedUserDefinedFunctionStatement::CreateAggregate(s) => Self::CreateAggregate(s.try_into()?),
+            TaggedUserDefinedFunctionStatement::DropAggregate(s) => Self::DropAggregate(s.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(UserDefinedFunctionStatement)]
+pub enum TaggedUserDefinedFunctionStatement {
+    Create(TaggedCreateFunctionStatement),
+    Drop(TaggedDropFunctionStatement),
+    CreateAggregate(TaggedCreateAggregateFunctionStatement),
+    DropAggregate(TaggedDropAggregateFunctionStatement),
+}
+
+impl Parse for TaggedUserDefinedFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<CreateFunctionStatement>>()? {
-            Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropFunctionStatement>>()? {
-            Self::Drop(stmt)
-        } else if let Some(stmt) = s.parse::<Option<CreateAggregateFunctionStatement>>()? {
-            Self::CreateAggregate(stmt)
-        } else if let Some(stmt) = s.parse::<Option<DropAggregateFunctionStatement>>()? {
-            Self::DropAggregate(stmt)
-        } else {
-            anyhow::bail!("Expected a data manipulation statement, found {}", s.info())
-        })
+        Ok(
+            if let Some(stmt) = s.parse::<Option<TaggedCreateFunctionStatement>>()? {
+                Self::Create(stmt)
+            } else if let Some(stmt) = s.parse::<Option<TaggedDropFunctionStatement>>()? {
+                Self::Drop(stmt)
+            } else if let Some(stmt) = s.parse::<Option<TaggedCreateAggregateFunctionStatement>>()? {
+                Self::CreateAggregate(stmt)
+            } else if let Some(stmt) = s.parse::<Option<TaggedDropAggregateFunctionStatement>>()? {
+                Self::DropAggregate(stmt)
+            } else {
+                anyhow::bail!("Expected a data manipulation statement, found {}", s.info())
+            },
+        )
     }
 }
 
@@ -212,6 +236,7 @@ impl Display for UserDefinedFunctionStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedCreateFunctionStatement)]
 pub struct CreateFunctionStatement {
     #[builder(setter(name = "set_or_replace"), default)]
     pub or_replace: bool,
@@ -225,6 +250,35 @@ pub struct CreateFunctionStatement {
     pub language: Name,
     #[builder(setter(into))]
     pub body: LitStr,
+}
+
+impl TryFrom<TaggedCreateFunctionStatement> for CreateFunctionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateFunctionStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            or_replace: value.or_replace,
+            if_not_exists: value.if_not_exists,
+            func: value.func.into_value()?,
+            on_null_input: value.on_null_input.into_value()?,
+            return_type: value.return_type.into_value()?,
+            language: value.language.into_value()?,
+            body: value.body.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(CreateFunctionStatement)]
+pub struct TaggedCreateFunctionStatement {
+    #[builder(setter(name = "set_or_replace"), default)]
+    pub or_replace: bool,
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub func: Tag<FunctionDeclaration>,
+    pub on_null_input: Tag<OnNullInput>,
+    pub return_type: Tag<CqlType>,
+    pub language: Tag<Name>,
+    pub body: Tag<LitStr>,
 }
 
 impl CreateFunctionStatementBuilder {
@@ -243,19 +297,19 @@ impl CreateFunctionStatementBuilder {
     }
 }
 
-impl Parse for CreateFunctionStatement {
+impl Parse for TaggedCreateFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<CREATE>()?;
-        let mut res = CreateFunctionStatementBuilder::default();
+        let mut res = TaggedCreateFunctionStatementBuilder::default();
         res.set_or_replace(s.parse::<Option<(OR, REPLACE)>>()?.is_some());
         s.parse::<FUNCTION>()?;
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .func(s.parse()?)
             .on_null_input(s.parse()?)
-            .return_type(s.parse::<(RETURNS, CqlType)>()?.1)
-            .language(s.parse::<(LANGUAGE, Name)>()?.1);
-        res.body(s.parse::<(AS, LitStr)>()?.1);
+            .return_type(s.parse::<(RETURNS, _)>()?.1)
+            .language(s.parse::<(LANGUAGE, _)>()?.1);
+        res.body(s.parse::<(AS, _)>()?.1);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -310,11 +364,30 @@ impl Display for OnNullInput {
 pub type ArgumentDeclaration = FieldDefinition;
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropFunctionStatement)]
 pub struct DropFunctionStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub func: FunctionReference,
+}
+
+impl TryFrom<TaggedDropFunctionStatement> for DropFunctionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropFunctionStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            func: value.func.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropFunctionStatement)]
+pub struct TaggedDropFunctionStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub func: Tag<FunctionReference>,
 }
 
 impl DropFunctionStatementBuilder {
@@ -326,13 +399,13 @@ impl DropFunctionStatementBuilder {
     }
 }
 
-impl Parse for DropFunctionStatement {
+impl Parse for TaggedDropFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, FUNCTION)>()?;
-        let mut res = DropFunctionStatementBuilder::default();
+        let mut res = TaggedDropFunctionStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .func(s.parse::<FunctionReference>()?);
+            .func(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -352,6 +425,7 @@ impl Display for DropFunctionStatement {
 }
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
 #[builder(setter(strip_option))]
+#[parse_via(TaggedCreateAggregateFunctionStatement)]
 pub struct CreateAggregateFunctionStatement {
     #[builder(setter(name = "set_or_replace"), default)]
     pub or_replace: bool,
@@ -365,6 +439,38 @@ pub struct CreateAggregateFunctionStatement {
     pub final_fn: Option<FunctionName>,
     #[builder(setter(into), default)]
     pub init_condition: Option<Term>,
+}
+
+impl TryFrom<TaggedCreateAggregateFunctionStatement> for CreateAggregateFunctionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedCreateAggregateFunctionStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            or_replace: value.or_replace,
+            if_not_exists: value.if_not_exists,
+            func: value.func.into_value()?,
+            state_modifying_fn: value.state_modifying_fn.into_value()?,
+            state_value_type: value.state_value_type.into_value()?,
+            final_fn: value.final_fn.map(|v| v.into_value()).transpose()?,
+            init_condition: value.init_condition.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[builder(setter(strip_option))]
+#[tokenize_as(CreateAggregateFunctionStatement)]
+pub struct TaggedCreateAggregateFunctionStatement {
+    #[builder(setter(name = "set_or_replace"), default)]
+    pub or_replace: bool,
+    #[builder(setter(name = "set_if_not_exists"), default)]
+    pub if_not_exists: bool,
+    pub func: Tag<FunctionSignature>,
+    pub state_modifying_fn: Tag<FunctionName>,
+    pub state_value_type: Tag<CqlType>,
+    #[builder(default)]
+    pub final_fn: Option<Tag<FunctionName>>,
+    #[builder(default)]
+    pub init_condition: Option<Tag<Term>>,
 }
 
 impl CreateAggregateFunctionStatementBuilder {
@@ -383,27 +489,27 @@ impl CreateAggregateFunctionStatementBuilder {
     }
 }
 
-impl Parse for CreateAggregateFunctionStatement {
+impl Parse for TaggedCreateAggregateFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<CREATE>()?;
-        let mut res = CreateAggregateFunctionStatementBuilder::default();
+        let mut res = TaggedCreateAggregateFunctionStatementBuilder::default();
         res.set_or_replace(s.parse::<Option<(OR, REPLACE)>>()?.is_some());
         s.parse::<AGGREGATE>()?;
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .func(s.parse()?)
             .state_modifying_fn(s.parse::<(SFUNC, _)>()?.1)
-            .state_value_type(s.parse::<(STYPE, CqlType)>()?.1);
+            .state_value_type(s.parse::<(STYPE, _)>()?.1);
         loop {
             if s.remaining() == 0 || s.parse::<Option<Semicolon>>()?.is_some() {
                 break;
             }
-            if let Some(f) = s.parse_from::<If<FINALFUNC, FunctionName>>()? {
+            if let Some(f) = s.parse_from::<If<FINALFUNC, Tag<FunctionName>>>()? {
                 if res.final_fn.is_some() {
                     anyhow::bail!("Duplicate FINALFUNC declaration");
                 }
                 res.final_fn(f);
-            } else if let Some(i) = s.parse_from::<If<INITCOND, Term>>()? {
+            } else if let Some(i) = s.parse_from::<If<INITCOND, Tag<Term>>>()? {
                 if res.init_condition.is_some() {
                     anyhow::bail!("Duplicate INITCOND declaration");
                 }
@@ -443,11 +549,30 @@ impl Display for CreateAggregateFunctionStatement {
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedDropAggregateFunctionStatement)]
 pub struct DropAggregateFunctionStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
     pub func: FunctionReference,
+}
+
+impl TryFrom<TaggedDropAggregateFunctionStatement> for DropAggregateFunctionStatement {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedDropAggregateFunctionStatement) -> Result<Self, Self::Error> {
+        Ok(Self {
+            if_exists: value.if_exists,
+            func: value.func.into_value()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DropAggregateFunctionStatement)]
+pub struct TaggedDropAggregateFunctionStatement {
+    #[builder(setter(name = "set_if_exists"), default)]
+    pub if_exists: bool,
+    pub func: Tag<FunctionReference>,
 }
 
 impl DropAggregateFunctionStatementBuilder {
@@ -459,13 +584,13 @@ impl DropAggregateFunctionStatementBuilder {
     }
 }
 
-impl Parse for DropAggregateFunctionStatement {
+impl Parse for TaggedDropAggregateFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         s.parse::<(DROP, AGGREGATE)>()?;
-        let mut res = DropAggregateFunctionStatementBuilder::default();
+        let mut res = TaggedDropAggregateFunctionStatementBuilder::default();
         res.set_if_exists(s.parse::<Option<(IF, EXISTS)>>()?.is_some())
-            .func(s.parse::<FunctionReference>()?);
+            .func(s.parse()?);
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
