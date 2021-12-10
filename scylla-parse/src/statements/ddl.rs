@@ -1024,14 +1024,4 @@ mod test {
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
     }
-
-    #[test]
-    fn test_parse_tag() {
-        let stmt = "CREATE KEYSPACE IF NOT EXISTS #
-            WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
-            AND durable_writes = true";
-        let mut stream = StatementStream::new(&stmt);
-        // stream.push_ordered_tag(quote::quote!("my_keyspace"));
-        stream.parse::<CreateKeyspaceStatement>().unwrap();
-    }
 }

@@ -541,9 +541,15 @@ impl Parse for StatementFormatArg {
         if input.peek(syn::Ident) && input.peek2(syn::Token![=]) {
             let key = input.parse::<syn::Ident>()?;
             input.parse::<syn::Token![=]>()?;
-            Ok(Self { key: Some(key), value: input.parse::<syn::Expr>()? })
+            Ok(Self {
+                key: Some(key),
+                value: input.parse::<syn::Expr>()?,
+            })
         } else {
-            Ok(Self { key: None, value: input.parse::<syn::Expr>()? })
+            Ok(Self {
+                key: None,
+                value: input.parse::<syn::Expr>()?,
+            })
         }
     }
 }
