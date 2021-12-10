@@ -63,24 +63,29 @@ pub enum TaggedDataDefinitionStatement {
 impl Parse for TaggedDataDefinitionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<TaggedUseStatement>>()? {
-            Self::Use(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedCreateKeyspaceStatement>>()? {
-            Self::CreateKeyspace(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedAlterKeyspaceStatement>>()? {
-            Self::AlterKeyspace(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedDropKeyspaceStatement>>()? {
-            Self::DropKeyspace(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedCreateTableStatement>>()? {
-            Self::CreateTable(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedAlterTableStatement>>()? {
-            Self::AlterTable(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedDropTableStatement>>()? {
-            Self::DropTable(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedTruncateStatement>>()? {
-            Self::Truncate(stmt)
+        Ok(if let Some(keyword) = s.find::<ReservedKeyword>() {
+            match keyword {
+                ReservedKeyword::USE => Self::Use(s.parse()?),
+                ReservedKeyword::CREATE | ReservedKeyword::ALTER | ReservedKeyword::DROP => {
+                    if let Some((_, keyword2)) = s.find::<(ReservedKeyword, ReservedKeyword)>() {
+                        match (keyword, keyword2) {
+                            (ReservedKeyword::CREATE, ReservedKeyword::KEYSPACE) => Self::CreateKeyspace(s.parse()?),
+                            (ReservedKeyword::CREATE, ReservedKeyword::TABLE) => Self::CreateTable(s.parse()?),
+                            (ReservedKeyword::ALTER, ReservedKeyword::KEYSPACE) => Self::AlterKeyspace(s.parse()?),
+                            (ReservedKeyword::ALTER, ReservedKeyword::TABLE) => Self::AlterTable(s.parse()?),
+                            (ReservedKeyword::DROP, ReservedKeyword::KEYSPACE) => Self::DropKeyspace(s.parse()?),
+                            (ReservedKeyword::DROP, ReservedKeyword::TABLE) => Self::DropTable(s.parse()?),
+                            _ => anyhow::bail!("Unexpected keyword following {}: {}", keyword, keyword2),
+                        }
+                    } else {
+                        anyhow::bail!("Unexpected token following {}: {}", keyword, s.info())
+                    }
+                }
+                ReservedKeyword::TRUNCATE => Self::Truncate(s.parse()?),
+                _ => anyhow::bail!("Expected a data definition statement, found {}", s.info()),
+            }
         } else {
-            anyhow::bail!("Expected data definition statement, found {}", s.info())
+            anyhow::bail!("Expected a data definition statement, found {}", s.info())
         })
     }
 }
@@ -1018,5 +1023,15 @@ mod test {
         builder.if_exists();
         let statement = builder.build().unwrap().to_string();
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
+    }
+
+    #[test]
+    fn test_parse_tag() {
+        let stmt = "CREATE KEYSPACE IF NOT EXISTS #
+            WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
+            AND durable_writes = true";
+        let mut stream = StatementStream::new(&stmt);
+        // stream.push_ordered_tag(quote::quote!("my_keyspace"));
+        stream.parse::<CreateKeyspaceStatement>().unwrap();
     }
 }

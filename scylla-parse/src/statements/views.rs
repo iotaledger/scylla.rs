@@ -34,17 +34,15 @@ pub enum TaggedMaterializedViewStatement {
 impl Parse for TaggedMaterializedViewStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(
-            if let Some(stmt) = s.parse::<Option<TaggedCreateMaterializedViewStatement>>()? {
-                Self::Create(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedAlterMaterializedViewStatement>>()? {
-                Self::Alter(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedDropMaterializedViewStatement>>()? {
-                Self::Drop(stmt)
-            } else {
-                anyhow::bail!("Invalid MATERIALIZED VIEW statement!")
-            },
-        )
+        Ok(if s.check::<CREATE>() {
+            Self::Create(s.parse()?)
+        } else if s.check::<ALTER>() {
+            Self::Alter(s.parse()?)
+        } else if s.check::<DROP>() {
+            Self::Drop(s.parse()?)
+        } else {
+            anyhow::bail!("Expected a materialized view statement, found {}", s.info())
+        })
     }
 }
 

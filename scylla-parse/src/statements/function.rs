@@ -208,19 +208,30 @@ pub enum TaggedUserDefinedFunctionStatement {
 impl Parse for TaggedUserDefinedFunctionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(
-            if let Some(stmt) = s.parse::<Option<TaggedCreateFunctionStatement>>()? {
-                Self::Create(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedDropFunctionStatement>>()? {
-                Self::Drop(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedCreateAggregateFunctionStatement>>()? {
-                Self::CreateAggregate(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedDropAggregateFunctionStatement>>()? {
-                Self::DropAggregate(stmt)
-            } else {
-                anyhow::bail!("Expected a data manipulation statement, found {}", s.info())
-            },
-        )
+        let mut lookahead = s.clone();
+        let keyword1 = lookahead.parse::<ReservedKeyword>()?;
+        Ok(match keyword1 {
+            ReservedKeyword::CREATE | ReservedKeyword::DROP => {
+                let keyword2 = lookahead.parse_from::<Alpha>()?;
+                match (keyword1, keyword2.to_uppercase().as_str()) {
+                    (ReservedKeyword::CREATE, "OR") => {
+                        if lookahead.check::<(REPLACE, FUNCTION)>() {
+                            Self::Create(s.parse()?)
+                        } else if lookahead.check::<(REPLACE, AGGREGATE)>() {
+                            Self::CreateAggregate(s.parse()?)
+                        } else {
+                            anyhow::bail!("Unexpected token following OR: {}", keyword2);
+                        }
+                    }
+                    (ReservedKeyword::CREATE, "FUNCTION") => Self::Create(s.parse()?),
+                    (ReservedKeyword::CREATE, "AGGREGATE") => Self::CreateAggregate(s.parse()?),
+                    (ReservedKeyword::DROP, "FUNCTION") => Self::Drop(s.parse()?),
+                    (ReservedKeyword::DROP, "AGGREGATE") => Self::DropAggregate(s.parse()?),
+                    _ => anyhow::bail!("Unexpected token following {}: {}", keyword1, keyword2),
+                }
+            }
+            _ => anyhow::bail!("Expected a user defined function statement, found {}", s.info()),
+        })
     }
 }
 

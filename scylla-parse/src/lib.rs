@@ -57,14 +57,16 @@ pub struct StreamInfo {
     pub next_token: String,
     pub pos: usize,
     pub rem: usize,
+    pub ordered_tags: Vec<String>,
+    pub keyed_tags: HashMap<String, String>,
 }
 
 impl Display for StreamInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{{ next token: '{}', current pos: {}, remaining: {} }}",
-            self.next_token, self.pos, self.rem
+            "{{ next token: '{}', pos: {}, remaining: {}, ordered args: {:?}, keyed args: {:?} }}",
+            self.next_token, self.pos, self.rem, self.ordered_tags, self.keyed_tags
         )
     }
 }
@@ -124,10 +126,21 @@ impl<'a> StatementStream<'a> {
     }
 
     pub fn info(&self) -> StreamInfo {
+        self.info_with_token(self.clone().parse_from::<Token>().unwrap_or_default())
+    }
+
+    fn info_with_token(&self, next_token: String) -> StreamInfo {
         StreamInfo {
-            next_token: self.clone().parse_from::<Token>().unwrap_or_default(),
+            next_token,
             pos: self.pos,
             rem: self.rem,
+            ordered_tags: self.ordered_tags.borrow().iter().map(|t| t.to_string()).collect(),
+            keyed_tags: self
+                .keyed_tags
+                .borrow()
+                .iter()
+                .map(|(k, t)| (k.clone(), t.to_string()))
+                .collect(),
         }
     }
 
@@ -541,10 +554,10 @@ where
             let tag = match tag {
                 Some(key) => s
                     .mapped_tag(&key)
-                    .ok_or_else(|| anyhow::anyhow!("No tokens found for key: {}", key))?,
+                    .ok_or_else(|| anyhow::anyhow!("No argument found for key {}: {}", key, s.info()))?,
                 None => s
                     .next_ordered_tag()
-                    .ok_or_else(|| anyhow::anyhow!("No tokens remaining!"))?,
+                    .ok_or_else(|| anyhow::anyhow!("Insufficient unkeyed arguments: {}", s.info()))?,
             };
             Tag::Tag(tag.to_string())
         } else {

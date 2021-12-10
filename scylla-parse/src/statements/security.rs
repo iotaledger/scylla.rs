@@ -44,18 +44,18 @@ pub enum TaggedRoleStatement {
 impl Parse for TaggedRoleStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateRoleStatement>>()? {
-            Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedAlterRoleStatement>>()? {
-            Self::Alter(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedDropRoleStatement>>()? {
-            Self::Drop(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedGrantRoleStatement>>()? {
-            Self::Grant(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedRevokeRoleStatement>>()? {
-            Self::Revoke(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedListRolesStatement>>()? {
-            Self::List(stmt)
+        Ok(if s.check::<CREATE>() {
+            Self::Create(s.parse()?)
+        } else if s.check::<ALTER>() {
+            Self::Alter(s.parse()?)
+        } else if s.check::<DROP>() {
+            Self::Drop(s.parse()?)
+        } else if s.check::<GRANT>() {
+            Self::Grant(s.parse()?)
+        } else if s.check::<REVOKE>() {
+            Self::Revoke(s.parse()?)
+        } else if s.check::<LIST>() {
+            Self::List(s.parse()?)
         } else {
             anyhow::bail!("Expected a role statement, found {}", s.info())
         })
@@ -867,17 +867,15 @@ pub enum TaggedPermissionStatement {
 impl Parse for TaggedPermissionStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(
-            if let Some(stmt) = s.parse::<Option<TaggedGrantPermissionStatement>>()? {
-                Self::Grant(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedRevokePermissionStatement>>()? {
-                Self::Revoke(stmt)
-            } else if let Some(stmt) = s.parse::<Option<TaggedListPermissionsStatement>>()? {
-                Self::List(stmt)
-            } else {
-                anyhow::bail!("Expected a permission statement, found {}", s.info())
-            },
-        )
+        Ok(if s.check::<GRANT>() {
+            Self::Grant(s.parse()?)
+        } else if s.check::<REVOKE>() {
+            Self::Revoke(s.parse()?)
+        } else if s.check::<LIST>() {
+            Self::List(s.parse()?)
+        } else {
+            anyhow::bail!("Expected a permission statement, found {}", s.info())
+        })
     }
 }
 
@@ -1129,14 +1127,14 @@ pub enum TaggedUserStatement {
 impl Parse for TaggedUserStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateUserStatement>>()? {
-            Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedAlterUserStatement>>()? {
-            Self::Alter(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedDropUserStatement>>()? {
-            Self::Drop(stmt)
-        } else if let Some(stmt) = s.parse::<Option<ListUsersStatement>>()? {
-            Self::List(stmt)
+        Ok(if s.check::<CREATE>() {
+            Self::Create(s.parse()?)
+        } else if s.check::<ALTER>() {
+            Self::Alter(s.parse()?)
+        } else if s.check::<DROP>() {
+            Self::Drop(s.parse()?)
+        } else if s.check::<LIST>() {
+            Self::List(s.parse()?)
         } else {
             anyhow::bail!("Expected a user statement, found {}", s.info())
         })

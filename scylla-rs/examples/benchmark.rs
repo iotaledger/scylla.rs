@@ -64,10 +64,10 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     let keyspace = MyKeyspace::new();
 
     parse_statement!(
-        "CREATE KEYSPACE IF NOT EXISTS #
+        "CREATE KEYSPACE IF NOT EXISTS #ks
         WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
         AND durable_writes = true",
-        keyspace.name()
+        ks = keyspace.name()
     )
     .execute()
     .consistency(Consistency::All)

@@ -31,12 +31,12 @@ pub enum TaggedTriggerStatement {
 impl Parse for TaggedTriggerStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateTriggerStatement>>()? {
-            Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedDropTriggerStatement>>()? {
-            Self::Drop(stmt)
+        Ok(if s.check::<CREATE>() {
+            Self::Create(s.parse()?)
+        } else if s.check::<DROP>() {
+            Self::Drop(s.parse()?)
         } else {
-            anyhow::bail!("Invalid TRIGGER statement!")
+            anyhow::bail!("Expected a trigger statement, found {}", s.info())
         })
     }
 }

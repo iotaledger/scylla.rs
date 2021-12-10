@@ -3,6 +3,7 @@
 
 use crate::{
     keywords::*,
+    Alpha,
     Brackets,
     Caching,
     ColumnOrder,
@@ -205,26 +206,55 @@ impl_try_into_tagged_statements!(
 impl Parse for TaggedStatement {
     type Output = Self;
     fn parse(s: &mut crate::StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse()? {
-            Self::DataDefinition(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::DataManipulation(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::SecondaryIndex(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::MaterializedView(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::Role(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::Permission(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::User(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::UserDefinedFunction(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::UserDefinedType(stmt)
-        } else if let Some(stmt) = s.parse()? {
-            Self::Trigger(stmt)
+        Ok(if s.check::<(LIST, USERS)>() {
+            Self::User(s.parse()?)
+        } else if s.check::<(LIST, ROLES)>() {
+            Self::Role(s.parse()?)
+        } else if s.check::<LIST>() {
+            Self::Permission(s.parse()?)
+        } else if let Some(keyword) = s.find::<ReservedKeyword>() {
+            match keyword {
+                ReservedKeyword::USE | ReservedKeyword::TRUNCATE => Self::DataDefinition(s.parse()?),
+                ReservedKeyword::CREATE | ReservedKeyword::ALTER | ReservedKeyword::DROP => {
+                    if let Some((_, keyword2)) = s.find::<(ReservedKeyword, ReservedKeyword)>() {
+                        match keyword2 {
+                            ReservedKeyword::KEYSPACE | ReservedKeyword::TABLE => Self::DataDefinition(s.parse()?),
+                            ReservedKeyword::OR => Self::UserDefinedFunction(s.parse()?),
+                            _ => anyhow::bail!("Unexpected keyword following {}: {}", keyword, keyword2),
+                        }
+                    } else if let Some((_, keyword2)) = s.find_from::<(ReservedKeyword, Alpha)>() {
+                        match keyword2.to_uppercase().as_str() {
+                            "INDEX" | "CUSTOM" => Self::SecondaryIndex(s.parse()?),
+                            "MATERIALIZED" => Self::MaterializedView(s.parse()?),
+                            "ROLE" => Self::Role(s.parse()?),
+                            "USER" => Self::User(s.parse()?),
+                            "FUNCTION" | "AGGREGATE" => Self::UserDefinedFunction(s.parse()?),
+                            "TYPE" => Self::UserDefinedType(s.parse()?),
+                            "TRIGGER" => Self::Trigger(s.parse()?),
+                            _ => anyhow::bail!("Unexpected keyword following {}: {}", keyword, keyword2),
+                        }
+                    } else {
+                        anyhow::bail!("Unexpected token following {}: {}", keyword, s.info())
+                    }
+                }
+                ReservedKeyword::GRANT | ReservedKeyword::REVOKE => {
+                    if let Some((_, keyword2)) = s.find_from::<(ReservedKeyword, Alpha)>() {
+                        match keyword2.to_uppercase().as_str() {
+                            "ROLE" => Self::Role(s.parse()?),
+                            "PERMISSION" => Self::Permission(s.parse()?),
+                            _ => anyhow::bail!("Unexpected keyword following {}: {}", keyword, keyword2),
+                        }
+                    } else {
+                        anyhow::bail!("Unexpected token following {}: {}", keyword, s.info())
+                    }
+                }
+                ReservedKeyword::SELECT
+                | ReservedKeyword::INSERT
+                | ReservedKeyword::UPDATE
+                | ReservedKeyword::DELETE
+                | ReservedKeyword::BEGIN => Self::DataManipulation(s.parse()?),
+                _ => anyhow::bail!("Invalid statement: {}", s.info()),
+            }
         } else {
             anyhow::bail!("Invalid statement: {}", s.info())
         })

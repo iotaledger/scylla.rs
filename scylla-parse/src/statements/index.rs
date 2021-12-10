@@ -32,12 +32,12 @@ pub enum TaggedSecondaryIndexStatement {
 impl Parse for TaggedSecondaryIndexStatement {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        Ok(if let Some(stmt) = s.parse::<Option<TaggedCreateIndexStatement>>()? {
-            Self::Create(stmt)
-        } else if let Some(stmt) = s.parse::<Option<TaggedDropIndexStatement>>()? {
-            Self::Drop(stmt)
+        Ok(if s.check::<CREATE>() {
+            Self::Create(s.parse()?)
+        } else if s.check::<DROP>() {
+            Self::Drop(s.parse()?)
         } else {
-            anyhow::bail!("Expected a data manipulation statement, found {}", s.info())
+            anyhow::bail!("Expected a secondary index statement, found {}", s.info())
         })
     }
 }

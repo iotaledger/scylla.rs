@@ -6,7 +6,6 @@ use super::{
     CustomToTokens,
     Parse,
     StatementStream,
-    StreamInfo,
 };
 use scylla_parse_macros::{
     ParseFromStr,
@@ -86,15 +85,7 @@ macro_rules! keyword {
                 let this = stringify!($t);
                 if let Some(token) = s.nextn(this.len()) {
                     if token.to_uppercase().as_str() != this {
-                        anyhow::bail!(
-                            "Expected keyword '{}', found {}",
-                            this,
-                            StreamInfo {
-                                next_token: token,
-                                pos: s.current_pos(),
-                                rem: s.remaining()
-                            }
-                        )
+                        anyhow::bail!("Expected keyword '{}', found {}", this, s.info_with_token(token))
                     }
                     Ok($t)
                 } else {
@@ -399,15 +390,7 @@ macro_rules! punctuation {
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 let c = s.parse::<char>()?;
                 if c != $c {
-                    anyhow::bail!(
-                        "Expected '{}', found {}",
-                        $c,
-                        StreamInfo {
-                            next_token: c.to_string(),
-                            pos: s.current_pos(),
-                            rem: s.remaining()
-                        }
-                    );
+                    anyhow::bail!("Expected '{}', found {}", $c, s.info_with_token(c.to_string()));
                 }
                 Ok($t)
             }
