@@ -99,7 +99,7 @@ where
             .lookup(parent_id)
             .await
             .ok_or_else(|| ActorError::exit_msg("reporter unables to lookup for payloads"))?;
-        let sender_handle = rt.link(sender_scope_id, false).await.map_err(ActorError::exit)?;
+        let sender_handle = rt.link(sender_scope_id).await.map_err(ActorError::exit)?;
         Ok((payloads, sender_handle))
     }
     async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, sender): Self::Data) -> ActorResult<()> {
