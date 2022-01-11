@@ -39,11 +39,7 @@ pub mod prelude {
         },
     };
     pub use backstage::core::*;
-    pub use scylla_rs_macros::{
-        Column,
-        ColumnDecoder,
-        ColumnEncoder,
-        Row,
-        TokenEncoder,
-    };
+    pub use maplit::*;
+    pub use scylla_parse;
+    pub use scylla_rs_macros::*;
 }
