@@ -1,5 +1,7 @@
 [workspace]
 members = [
     "scylla-rs",
-    "scylla-macros"
+    "scylla-macros",
+    "scylla-parse",
+    "scylla-parse-macros"
 ]

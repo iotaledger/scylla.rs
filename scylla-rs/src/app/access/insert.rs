@@ -1,6 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use scylla_parse::InsertStatement;
+
 use super::*;
 
 /// Insert query trait which creates an `InsertRequest`
@@ -24,6 +26,16 @@ use super::*;
 ///     fn name(&self) -> String {
 ///         self.name.clone()
 ///     }
+///
+///     fn opts(&self) -> KeyspaceOpts {
+///         KeyspaceOptsBuilder::default()
+///             .replication(Replication::network_topology(maplit::btreemap! {
+///                 "datacenter1" => 1,
+///             }))
+///             .durable_writes(true)
+///             .build()
+///             .unwrap()
+///     }
 /// }
 /// # type MyKeyType = i32;
 /// # #[derive(Default)]
@@ -38,8 +50,8 @@ use super::*;
 /// }
 /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> Cow<'static, str> {
-///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+///     fn statement(&self) -> InsertStatement {
+///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
 ///     }
 ///
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -59,12 +71,12 @@ pub trait Insert<K, V>: Keyspace {
     /// Set the query type; `QueryStatement` or `PreparedStatement`
     type QueryOrPrepared: QueryOrPrepared;
     /// Create your insert statement here.
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> InsertStatement;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
     fn id(&self) -> [u8; 16] {
-        md5::compute(self.insert_statement().as_bytes()).into()
+        md5::compute(self.insert_statement().to_string().as_bytes()).into()
     }
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: B, key: &K, values: &V) -> B;
@@ -93,6 +105,16 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -102,8 +124,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -122,13 +144,13 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
+        let statement = self.statement();
         InsertBuilder {
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             values,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -153,6 +175,16 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -162,8 +194,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -186,13 +218,13 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
+        let statement = self.statement();
         InsertBuilder {
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
-            values,
-            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            values: values,
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -217,6 +249,16 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -226,8 +268,8 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
@@ -250,13 +292,13 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     where
         Self: Insert<K, V>,
     {
+        let statement = self.statement();
         InsertBuilder {
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             values,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             _marker: StaticRequest,
         }
     }
@@ -273,7 +315,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_with(
-    ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///         StatementType::Query,
@@ -285,7 +327,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// ```
     fn insert_with<'a>(
         &'a self,
-        statement: &str,
+        statement: InsertStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
@@ -311,7 +353,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_query_with(
-    ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///     )
@@ -322,7 +364,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// ```
     fn insert_query_with<'a>(
         &'a self,
-        statement: &str,
+        statement: InsertStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
@@ -333,13 +375,13 @@ pub trait GetDynamicInsertRequest: Keyspace {
         QueryConsistency,
         DynamicRequest,
     > {
+        let statement = statement.with_keyspace(self.name());
         InsertBuilder {
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: statement.to_owned().into(),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             key,
             values,
-            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
     }
@@ -352,7 +394,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
     ///     .insert_prepared_with(
-    ///         "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
     ///         &[&3],
     ///         &[&4.0, &5.0],
     ///     )
@@ -363,7 +405,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
     /// ```
     fn insert_prepared_with<'a>(
         &'a self,
-        statement: &str,
+        statement: InsertStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
@@ -374,13 +416,13 @@ pub trait GetDynamicInsertRequest: Keyspace {
         QueryConsistency,
         DynamicRequest,
     > {
+        let statement = statement.with_keyspace(self.name());
         InsertBuilder {
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: statement.to_owned().into(),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             key,
             values,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
             _marker: DynamicRequest,
         }
     }
@@ -388,7 +430,7 @@ pub trait GetDynamicInsertRequest: Keyspace {
 
 /// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
 
-pub trait AsDynamicInsertRequest: ToStatement
+pub trait AsDynamicInsertRequest
 where
     Self: Sized,
 {
@@ -398,7 +440,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
     ///     .as_insert(&[&3], &[&4.0, &5.0], StatementType::Prepared)
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -406,7 +448,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_insert<'a>(
-        &self,
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
@@ -429,7 +471,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
     ///     .as_insert_query(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -437,7 +479,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_insert_query<'a>(
-        &self,
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
@@ -447,25 +489,14 @@ where
         [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
         QueryConsistency,
         DynamicRequest,
-    > {
-        let statement = self.to_statement();
-        InsertBuilder {
-            _marker: DynamicRequest,
-            keyspace_name: self.keyspace().clone().into(),
-            keyspace: PhantomData,
-            builder: QueryStatement::encode_statement(Query::new(), &statement),
-            statement,
-            key,
-            values,
-        }
-    }
+    >;
 
     /// Create a dynamic insert prepared request from a statement and variables.
     ///
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
     ///     .as_insert_prepared(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -473,7 +504,24 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_insert_prepared<'a>(
-        &self,
+        self,
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        QueryConsistency,
+        DynamicRequest,
+    >;
+}
+
+impl<S: Keyspace, K, V> GetStaticInsertRequest<K, V> for S {}
+impl<S: Keyspace> GetDynamicInsertRequest for S {}
+impl AsDynamicInsertRequest for InsertStatement {
+    fn as_insert_query<'a>(
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> InsertBuilder<
@@ -484,27 +532,42 @@ where
         QueryConsistency,
         DynamicRequest,
     > {
-        let statement = self.to_statement();
         InsertBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace().clone().into(),
             keyspace: PhantomData,
-            builder: PreparedStatement::encode_statement(Query::new(), &statement),
-            statement,
+            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
+            statement: self,
+            key,
+            values,
+        }
+    }
+
+    fn as_insert_prepared<'a>(
+        self,
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> InsertBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        InsertBuilder {
+            _marker: DynamicRequest,
+            keyspace: PhantomData,
+            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
+            statement: self,
             key,
             values,
         }
     }
 }
 
-impl<S: Keyspace, K, V> GetStaticInsertRequest<K, V> for S {}
-impl<S: Keyspace> GetDynamicInsertRequest for S {}
-impl<S: ToStatement> AsDynamicInsertRequest for S {}
-
 pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
-    pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S) -> S>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: InsertStatement,
     pub(crate) key: &'a K,
     pub(crate) values: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -514,7 +577,6 @@ pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
 impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
     pub fn consistency(self, consistency: Consistency) -> InsertBuilder<'a, S, K, V, QueryValues, StaticRequest> {
         InsertBuilder {
-            keyspace_name: self.keyspace_name,
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
@@ -530,7 +592,6 @@ impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryCo
 
     pub fn timestamp(self, timestamp: i64) -> InsertBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
         InsertBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -554,10 +615,9 @@ impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryCo
         .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -595,7 +655,6 @@ impl<'a, S: Keyspace>
             _marker: ManualBoundRequest {
                 bind_fn: Box::new(bind_fn),
             },
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -623,7 +682,6 @@ impl<'a, S: Keyspace>
             .bind(self.values);
         InsertBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -644,7 +702,6 @@ impl<'a, S: Keyspace>
         DynamicRequest,
     > {
         InsertBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -670,10 +727,9 @@ impl<'a, S: Keyspace>
             .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -702,7 +758,6 @@ impl<'a, S: Keyspace>
     > {
         InsertBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -727,7 +782,6 @@ impl<'a, S: Keyspace>
         DynamicRequest,
     > {
         InsertBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -751,10 +805,9 @@ impl<'a, S: Keyspace>
         .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -763,7 +816,6 @@ impl<'a, S: Keyspace>
 impl<'a, S, K: ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
     pub fn timestamp(self, timestamp: i64) -> InsertBuilder<'a, S, K, V, QueryBuild, T> {
         InsertBuilder {
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -779,10 +831,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, Q
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -793,10 +844,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, Q
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -831,15 +881,15 @@ impl Request for InsertRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
-        Request::statement(&self.0)
+    fn statement(&self) -> Statement {
+        self.0.statement()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> String {
-        self.0.keyspace_name.clone()
+    fn keyspace(&self) -> Option<String> {
+        self.0.keyspace()
     }
 }
 

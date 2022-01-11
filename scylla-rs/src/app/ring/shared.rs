@@ -1,3 +1,6 @@
+// Copyright 2021 IOTA Stiftung
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use arc_swap::ArcSwapOption;
 use rand::{
@@ -102,7 +105,7 @@ impl SharedRing {
     /// Send request to the first local datacenter with the given token and a random replica.
     #[inline]
     pub fn send_local_random_replica(
-        keyspace: &str,
+        keyspace: Option<&str>,
         token: Token,
         request: ReporterEvent,
     ) -> Result<(), RingSendError> {
@@ -115,7 +118,7 @@ impl SharedRing {
     /// Send request to the global datacenter with the given token and a random replica.
     #[inline]
     pub fn send_global_random_replica(
-        keyspace: &str,
+        keyspace: Option<&str>,
         token: Token,
         request: ReporterEvent,
     ) -> Result<(), RingSendError> {
@@ -142,14 +145,21 @@ impl SharedRing {
         SHARED_RING.load().is_none()
     }
     #[inline]
-    fn global_random_replica(&self, keyspace: &str, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
+    fn global_random_replica(
+        &self,
+        keyspace: Option<&str>,
+        token: Token,
+        request: ReporterEvent,
+    ) -> Result<(), RingSendError> {
         let mut rng = thread_rng();
         // send request.
-        let (replica_index, dc) = self
-            .keyspaces
-            .get(keyspace)
-            .and_then(|info| info.get_random_and_dc(&mut rng))
-            .and_then(|(rf, dc)| Some((rf.random(&mut rng), dc)))
+        let (replica_index, dc) = keyspace
+            .and_then(|keyspace| {
+                self.keyspaces
+                    .get(keyspace)
+                    .and_then(|info| info.get_random_and_dc(&mut rng))
+                    .and_then(|(rf, dc)| Some((rf.random(&mut rng), dc)))
+            })
             .unwrap_or((0, &self.local_datacenter)); // default to (0, local_datacenter) for dyn non existing keyspace
         self.root.search(token).send(
             dc,
@@ -162,14 +172,21 @@ impl SharedRing {
         )
     }
     #[inline]
-    fn local_random_replica(&self, keyspace: &str, token: Token, request: ReporterEvent) -> Result<(), RingSendError> {
+    fn local_random_replica(
+        &self,
+        keyspace: Option<&str>,
+        token: Token,
+        request: ReporterEvent,
+    ) -> Result<(), RingSendError> {
         let mut rng = thread_rng();
         // send request.
-        let replica_index = self
-            .keyspaces
-            .get(keyspace)
-            .and_then(|info| info.get(&self.local_datacenter))
-            .and_then(|rf| Some(rf.random(&mut rng)))
+        let replica_index = keyspace
+            .and_then(|keyspace| {
+                self.keyspaces
+                    .get(keyspace)
+                    .and_then(|info| info.get(&self.local_datacenter))
+                    .and_then(|rf| Some(rf.random(&mut rng)))
+            })
             .unwrap_or(0); // default to 0 for dyn non existing keyspace
         self.root.search(token).send(
             &self.local_datacenter,

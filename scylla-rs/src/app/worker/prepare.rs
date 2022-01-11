@@ -14,13 +14,12 @@ pub struct PrepareWorker {
 }
 impl PrepareWorker {
     /// Create a new prepare worker
-    pub fn new(keyspace_name: &str, id: [u8; 16], statement: &str) -> Box<Self> {
+    pub fn new(keyspace_name: Option<String>, id: [u8; 16], statement: DataManipulationStatement) -> Box<Self> {
         Box::new(Self {
             id,
             retries: 0,
             request: PrepareRequest {
-                keyspace_name: keyspace_name.to_string().into(),
-                statement: statement.to_string().into(),
+                statement,
                 token: rand::random(),
             },
         })
@@ -29,7 +28,7 @@ impl PrepareWorker {
 impl From<PrepareRequest> for PrepareWorker {
     fn from(request: PrepareRequest) -> Self {
         Self {
-            id: md5::compute(Request::statement(&request).as_bytes()).into(),
+            id: md5::compute(Request::statement(&request).to_string().as_bytes()).into(),
             retries: 0,
             request,
         }

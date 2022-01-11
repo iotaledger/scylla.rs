@@ -24,14 +24,24 @@ use super::*;
 ///     fn name(&self) -> String {
 ///         self.name.clone()
 ///     }
+///
+///     fn opts(&self) -> KeyspaceOpts {
+///         KeyspaceOptsBuilder::default()
+///             .replication(Replication::network_topology(maplit::btreemap! {
+///                 "datacenter1" => 1,
+///             }))
+///             .durable_writes(true)
+///             .build()
+///             .unwrap()
+///     }
 /// }
 /// # type MyKeyType = i32;
 /// # type MyVarType = String;
 /// # type MyValueType = f32;
 /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
 ///     type QueryOrPrepared = PreparedStatement;
-///     fn statement(&self) -> Cow<'static, str> {
-///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+///     fn statement(&self) -> SelectStatement {
+///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
 ///     }
 ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
 ///         builder.bind(key).bind(variables)
@@ -50,13 +60,13 @@ pub trait Select<K, V, O>: Keyspace {
     type QueryOrPrepared: QueryOrPrepared;
 
     /// Create your select statement here.
-    fn statement(&self) -> Cow<'static, str>;
+    fn statement(&self) -> SelectStatement;
 
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
     fn id(&self) -> [u8; 16] {
-        md5::compute(self.select_statement().as_bytes()).into()
+        md5::compute(self.select_statement().to_string().as_bytes()).into()
     }
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: B, key: &K, variables: &V) -> B;
@@ -86,14 +96,24 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -115,14 +135,14 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
+        let statement = self.statement();
         SelectBuilder {
             _marker: StaticRequest,
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &self.statement()),
+            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement.to_string()),
+            statement,
         }
     }
 
@@ -146,14 +166,24 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -175,14 +205,14 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
+        let statement = self.statement();
         SelectBuilder {
             _marker: StaticRequest,
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.statement()),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
         }
     }
 
@@ -206,14 +236,24 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ? AND var = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -235,14 +275,14 @@ pub trait GetStaticSelectRequest<K, V>: Keyspace {
     where
         Self: Select<K, V, O>,
     {
+        let statement = self.statement();
         SelectBuilder {
             _marker: StaticRequest,
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: self.statement(),
             key,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.statement()),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
         }
     }
 }
@@ -258,7 +298,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///         StatementType::Query,
@@ -270,7 +310,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// ```
     fn select_with<'a, O>(
         &'a self,
-        statement: &str,
+        statement: SelectStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
@@ -297,7 +337,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_query_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///     )
@@ -308,7 +348,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// ```
     fn select_query_with<'a, O>(
         &'a self,
-        statement: &str,
+        statement: SelectStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> SelectBuilder<
@@ -320,14 +360,14 @@ pub trait GetDynamicSelectRequest: Keyspace {
         QueryConsistency,
         DynamicRequest,
     > {
+        let statement = statement.with_keyspace(self.name());
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: statement.to_owned().into(),
+            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             key,
             variables,
-            builder: QueryStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
 
@@ -339,7 +379,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// use scylla_rs::app::access::*;
     /// let res: Option<f32> = "my_keyspace"
     ///     .select_prepared_with::<f32>(
-    ///         "SELECT val FROM {{keyspace}}.table where key = ? AND var = ?",
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?"),
     ///         &[&3],
     ///         &[&"hello"],
     ///     )
@@ -350,7 +390,7 @@ pub trait GetDynamicSelectRequest: Keyspace {
     /// ```
     fn select_prepared_with<'a, O>(
         &'a self,
-        statement: &str,
+        statement: SelectStatement,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> SelectBuilder<
@@ -362,21 +402,21 @@ pub trait GetDynamicSelectRequest: Keyspace {
         QueryConsistency,
         DynamicRequest,
     > {
+        let statement = statement.with_keyspace(self.name());
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.name(),
             keyspace: PhantomData,
-            statement: statement.to_owned().into(),
+            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+            statement,
             key,
             variables,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.replace_keyspace_token(statement)),
         }
     }
 }
 
 /// Specifies helper functions for creating dynamic select requests from anything that can be interpreted as a statement
 
-pub trait AsDynamicSelectRequest: ToStatement
+pub trait AsDynamicSelectRequest
 where
     Self: Sized,
 {
@@ -386,7 +426,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    /// let res: Option<f32> = parse_statement!("SELECT val FROM my_keyspace.my_table where key = ? AND var = ?")
     ///     .as_select::<f32>(&[&3], &[&"hello"], StatementType::Query)
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -394,7 +434,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_select<'a, O>(
-        &self,
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
         statement_type: StatementType,
@@ -418,7 +458,7 @@ where
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    /// let res: Option<f32> = parse_statement!("SELECT val FROM my_keyspace.my_table where key = ? AND var = ?")
     ///     .as_select_query::<f32>(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -426,7 +466,7 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_select_query<'a, O>(
-        &self,
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> SelectBuilder<
@@ -437,25 +477,14 @@ where
         O,
         QueryConsistency,
         DynamicRequest,
-    > {
-        let statement = self.to_statement();
-        SelectBuilder {
-            _marker: DynamicRequest,
-            keyspace_name: self.keyspace().clone().into(),
-            keyspace: PhantomData,
-            builder: QueryStatement::encode_statement(Query::new(), &statement),
-            statement,
-            key,
-            variables,
-        }
-    }
+    >;
 
     /// Create a dynamic select prepared request from a statement and variables.
     ///
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// let res: Option<f32> = "SELECT val FROM my_keyspace.table where key = ? AND var = ?"
+    /// let res: Option<f32> = parse_statement!("SELECT val FROM my_keyspace.my_table where key = ? AND var = ?")
     ///     .as_select_prepared::<f32>(&[&3], &[&"hello"])
     ///     .consistency(Consistency::One)
     ///     .build()?
@@ -463,7 +492,25 @@ where
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn as_select_prepared<'a, O>(
-        &self,
+        self,
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    >;
+}
+
+impl<S: Keyspace, K, V> GetStaticSelectRequest<K, V> for S {}
+impl<S: Keyspace> GetDynamicSelectRequest for S {}
+impl AsDynamicSelectRequest for SelectStatement {
+    fn as_select_query<'a, O>(
+        self,
         key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
         variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
     ) -> SelectBuilder<
@@ -475,27 +522,43 @@ where
         QueryConsistency,
         DynamicRequest,
     > {
-        let statement = self.to_statement();
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace().clone().into(),
             keyspace: PhantomData,
-            builder: PreparedStatement::encode_statement(Query::new(), &statement),
-            statement,
+            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
+            statement: self,
+            key,
+            variables,
+        }
+    }
+
+    fn as_select_prepared<'a, O>(
+        self,
+        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
+        variables: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
+    ) -> SelectBuilder<
+        'a,
+        Self,
+        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
+        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
+        O,
+        QueryConsistency,
+        DynamicRequest,
+    > {
+        SelectBuilder {
+            _marker: DynamicRequest,
+            keyspace: PhantomData,
+            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
+            statement: self,
             key,
             variables,
         }
     }
 }
 
-impl<S: Keyspace, K, V> GetStaticSelectRequest<K, V> for S {}
-impl<S: Keyspace> GetDynamicSelectRequest for S {}
-impl<S: ToStatement> AsDynamicSelectRequest for S {}
-
 pub struct SelectBuilder<'a, S, K: ?Sized, V: ?Sized, O, Stage, T> {
-    pub(crate) keyspace_name: String,
     pub(crate) keyspace: PhantomData<fn(S, O) -> (S, O)>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: SelectStatement,
     pub(crate) key: &'a K,
     pub(crate) variables: &'a V,
     pub(crate) builder: QueryBuilder<Stage>,
@@ -506,7 +569,6 @@ impl<'a, S: Select<K, V, O>, K: TokenEncoder, V, O> SelectBuilder<'a, S, K, V, O
     pub fn consistency(self, consistency: Consistency) -> SelectBuilder<'a, S, K, V, O, QueryValues, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -522,7 +584,6 @@ impl<'a, S: Select<K, V, O>, K: TokenEncoder, V, O> SelectBuilder<'a, S, K, V, O
     pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, O, QueryPagingState, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -542,7 +603,6 @@ impl<'a, S: Select<K, V, O>, K: TokenEncoder, V, O> SelectBuilder<'a, S, K, V, O
     ) -> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -558,7 +618,6 @@ impl<'a, S: Select<K, V, O>, K: TokenEncoder, V, O> SelectBuilder<'a, S, K, V, O
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, StaticRequest> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -581,10 +640,9 @@ impl<'a, S: Select<K, V, O>, K: TokenEncoder, V, O> SelectBuilder<'a, S, K, V, O
         .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -624,7 +682,6 @@ impl<'a, S: Keyspace, O>
             _marker: ManualBoundRequest {
                 bind_fn: Box::new(bind_fn),
             },
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -652,7 +709,6 @@ impl<'a, S: Keyspace, O>
             .bind(self.key)
             .bind(self.variables);
         SelectBuilder {
-            keyspace_name: self.keyspace_name,
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
@@ -676,7 +732,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -705,7 +760,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -733,7 +787,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -758,10 +811,9 @@ impl<'a, S: Keyspace, O>
             .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -792,7 +844,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -819,7 +870,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -847,7 +897,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -874,7 +923,6 @@ impl<'a, S: Keyspace, O>
     > {
         SelectBuilder {
             _marker: DynamicRequest,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -898,10 +946,9 @@ impl<'a, S: Keyspace, O>
             .build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -911,7 +958,6 @@ impl<'a, S, K: ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QueryValue
     pub fn page_size(self, page_size: i32) -> SelectBuilder<'a, S, K, V, O, QueryPagingState, T> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -925,7 +971,6 @@ impl<'a, S, K: ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QueryValue
     ) -> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -936,7 +981,6 @@ impl<'a, S, K: ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QueryValue
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -951,10 +995,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O: RowsDecoder, T> SelectBuilde
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -965,10 +1008,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O: RowsDecoder, T> SelectBuilde
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -981,7 +1023,6 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V
     ) -> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, T> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -993,7 +1034,6 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
         SelectBuilder {
             _marker: self._marker,
-            keyspace_name: self.keyspace_name,
             keyspace: self.keyspace,
             statement: self.statement,
             key: self.key,
@@ -1006,10 +1046,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -1018,7 +1057,6 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V
 impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V, O, QuerySerialConsistency, T> {
     pub fn timestamp(self, timestamp: i64) -> SelectBuilder<'a, S, K, V, O, QueryBuild, T> {
         SelectBuilder {
-            keyspace_name: self.keyspace_name,
             _marker: self._marker,
             keyspace: self.keyspace,
             statement: self.statement,
@@ -1032,10 +1070,9 @@ impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, O, T> SelectBuilder<'a, S, K, V
         let query = self.builder.build()?;
         // create the request
         Ok(CommonRequest {
-            keyspace_name: self.keyspace_name,
             token: self.key.token(),
             payload: query.into(),
-            statement: self.statement,
+            statement: self.statement.into(),
         }
         .into())
     }
@@ -1090,14 +1127,14 @@ impl<O: 'static> Request for SelectRequest<O> {
         self.inner.token()
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
-        Request::statement(&self.inner)
+    fn statement(&self) -> Statement {
+        self.inner.statement()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.inner.payload()
     }
-    fn keyspace(&self) -> String {
+    fn keyspace(&self) -> Option<String> {
         self.inner.keyspace()
     }
 }

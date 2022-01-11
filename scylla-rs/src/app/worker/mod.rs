@@ -101,7 +101,7 @@ pub trait RetryableWorker<R>: Worker {
             *self.retries_mut() -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
             send_global(
-                &self.request().keyspace(),
+                self.request().keyspace().as_ref().map(|s| s.as_str()),
                 self.request().token(),
                 self.request().payload(),
                 self,
@@ -134,7 +134,7 @@ pub trait RetryableWorker<R>: Worker {
         R: SendRequestExt,
     {
         send_local(
-            &self.request().keyspace(),
+            self.request().keyspace().as_ref().map(|s| s.as_str()),
             self.request().token(),
             self.request().payload(),
             self,
@@ -149,7 +149,7 @@ pub trait RetryableWorker<R>: Worker {
         R: SendRequestExt,
     {
         send_global(
-            &self.request().keyspace(),
+            self.request().keyspace().as_ref().map(|s| s.as_str()),
             self.request().token(),
             self.request().payload(),
             self,
@@ -274,7 +274,7 @@ where
     let statement = worker.request().statement();
     let keyspace_name = worker.request().keyspace();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    PrepareWorker::new(&keyspace_name, id, statement)
+    PrepareWorker::new(keyspace_name, id, statement.try_into().unwrap())
         .send_to_reporter(reporter)
         .ok();
     let payload = worker.request().payload();
@@ -288,7 +288,7 @@ pub fn retry_send(keyspace: &str, mut r: RingSendError, mut retries: u8) -> Resu
     loop {
         if let ReporterEvent::Request { worker, payload } = r.into() {
             if retries > 0 {
-                if let Err(still_error) = send_global(keyspace, rand::random(), payload, worker) {
+                if let Err(still_error) = send_global(Some(keyspace), rand::random(), payload, worker) {
                     r = still_error;
                     retries -= 1;
                 } else {

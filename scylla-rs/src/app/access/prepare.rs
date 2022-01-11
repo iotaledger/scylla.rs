@@ -30,14 +30,24 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Select<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("SELECT val FROM {}.table where key = ?", self.name()).into()
+    ///     fn statement(&self) -> SelectStatement {
+    ///         parse_statement!("SELECT val FROM my_table where key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -52,9 +62,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Select<K, V, O>,
     {
-        let statement = self.statement();
-        let keyspace = self.name().into();
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -77,6 +85,16 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # #[derive(Default)]
@@ -86,8 +104,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// }
     /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+    ///     fn statement(&self) -> InsertStatement {
+    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, value: &MyValueType) -> B {
@@ -103,9 +121,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Insert<K, V>,
     {
-        let statement = self.statement();
-        let keyspace = self.name().into();
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -128,6 +144,16 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
@@ -138,12 +164,8 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// }
     /// impl Update<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!(
-    ///             "UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?",
-    ///             self.name()
-    ///         )
-    ///         .into()
+    ///     fn statement(&self) -> UpdateStatement {
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     }
     ///
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
@@ -163,9 +185,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Update<K, V, I>,
     {
-        let statement = self.statement();
-        let keyspace = self.name().into();
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -188,14 +208,24 @@ pub trait GetStaticPrepareRequest: Keyspace {
     ///     fn name(&self) -> String {
     ///         self.name.clone()
     ///     }
+    ///
+    ///     fn opts(&self) -> KeyspaceOpts {
+    ///         KeyspaceOptsBuilder::default()
+    ///             .replication(Replication::network_topology(maplit::btreemap! {
+    ///                 "datacenter1" => 1,
+    ///             }))
+    ///             .durable_writes(true)
+    ///             .build()
+    ///             .unwrap()
+    ///     }
     /// }
     /// # type MyKeyType = i32;
     /// # type MyVarType = String;
     /// # type MyValueType = f32;
     /// impl Delete<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> Cow<'static, str> {
-    ///         format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+    ///     fn statement(&self) -> DeleteStatement {
+    ///         parse_statement!("DELETE FROM my_table WHERE key = ? AND var = ?")
     ///     }
     ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType) -> B {
     ///         builder.bind(key).bind(variables)
@@ -210,9 +240,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
     where
         Self: Delete<K, V, D>,
     {
-        let statement = self.statement();
-        let keyspace = self.name().into();
-        PrepareRequest::new(keyspace, statement)
+        PrepareRequest::new(self.statement().with_keyspace(self.name()))
     }
 }
 
@@ -226,54 +254,50 @@ pub trait GetDynamicPrepareRequest: Keyspace {
     /// ```no_run
     /// use scylla_rs::app::access::*;
     /// "my_keyspace"
-    ///     .prepare_with("DELETE FROM {{keyspace}}.table WHERE key = ?")
+    ///     .prepare_with(parse_statement!("DELETE FROM my_table WHERE key = ?"))
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_with(&self, statement: &str) -> PrepareRequest {
-        PrepareRequest::new(self.name().into(), statement.to_string().into())
+    fn prepare_with(&self, statement: impl Into<DataManipulationStatement>) -> PrepareRequest {
+        PrepareRequest::new(statement)
     }
 }
 
 /// Specifies helper functions for creating dynamic prepare requests from anything that can be interpreted as a
 /// statement
 
-pub trait AsDynamicPrepareRequest: ToStatement {
+pub trait AsDynamicPrepareRequest: Into<DataManipulationStatement> {
     /// Create a dynamic prepare request from a statement.
     /// name.
     ///
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// "DELETE FROM my_keyspace.table WHERE key = ?"
+    /// parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ?")
     ///     .prepare()
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare(&self) -> PrepareRequest {
-        let statement = self.to_statement();
-        let keyspace_name = self.keyspace();
-        PrepareRequest::new(keyspace_name, statement)
+    fn prepare(self) -> PrepareRequest {
+        PrepareRequest::new(self)
     }
 }
 
 impl<S: Keyspace> GetStaticPrepareRequest for S {}
 impl<S: Keyspace> GetDynamicPrepareRequest for S {}
-impl<S: ToStatement> AsDynamicPrepareRequest for S {}
+impl<T: Into<DataManipulationStatement>> AsDynamicPrepareRequest for T {}
 
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
-    pub(crate) keyspace_name: Cow<'static, str>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: DataManipulationStatement,
     pub(crate) token: i64,
 }
 
 impl PrepareRequest {
-    fn new(keyspace: Cow<'static, str>, statement: Cow<'static, str>) -> Self {
+    fn new(statement: impl Into<DataManipulationStatement>) -> Self {
         PrepareRequest {
-            keyspace_name: keyspace,
-            statement,
+            statement: statement.into(),
             token: rand::random(),
         }
     }
@@ -284,15 +308,16 @@ impl Request for PrepareRequest {
         self.token
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
-        &self.statement
+    fn statement(&self) -> Statement {
+        self.statement.clone().into()
     }
 
     fn payload(&self) -> Vec<u8> {
-        Prepare::new().statement(&self.statement).build().unwrap().0
+        Prepare::new().statement(&self.statement.to_string()).build().unwrap().0
     }
-    fn keyspace(&self) -> String {
-        self.keyspace_name.clone().into()
+
+    fn keyspace(&self) -> Option<String> {
+        self.statement.get_keyspace()
     }
 }
 

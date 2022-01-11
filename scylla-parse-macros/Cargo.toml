@@ -1,5 +1,5 @@
 [package]
-name = "scylla-rs-macros"
+name = "scylla-parse-macros"
 version = "0.1.0"
 authors = ["IOTA Stiftung"]
 edition = "2018"
@@ -7,7 +7,7 @@ license-file = "LICENSE"
 homepage = "https://www.iota.org"
 repository = "https://github.com/iotaledger/scylla.rs"
 description = "Procedural macros for the scylla-rs driver"
-keywords = ["iota", "scylla", "cassandra", "database", "driver"]
+keywords = ["iota", "scylla", "cassandra", "database", "proc-macro"]
 exclude = [".github/**/*"]
 
 [lib]
@@ -16,8 +16,6 @@ proc-macro = true
 [dependencies]
 syn = "1.0"
 quote = "1.0"
-maplit = "1.0"
-scylla-parse = { path = "../scylla-parse" }
 
 [dev-dependencies]
 syn = { version = "1.0", features = ["full"]}

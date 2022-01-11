@@ -66,7 +66,11 @@ pub use crate::{
         TokenEncoder,
     },
 };
-pub use batch::*;
+pub use batch::{
+    BatchCollector,
+    BatchRequest,
+    Batchable,
+};
 pub use delete::{
     AsDynamicDeleteRequest,
     Delete,
@@ -74,11 +78,9 @@ pub use delete::{
     GetDynamicDeleteRequest,
     GetStaticDeleteRequest,
 };
-use dyn_clone::DynClone;
 pub use execute::{
     AsDynamicExecuteRequest,
     ExecuteRequest,
-    GetDynamicExecuteRequest,
 };
 pub use insert::{
     AsDynamicInsertRequest,
@@ -94,6 +96,8 @@ pub use prepare::{
     GetStaticPrepareRequest,
     PrepareRequest,
 };
+pub use scylla_parse::*;
+pub use scylla_rs_macros::parse_statement;
 pub use select::{
     AsDynamicSelectRequest,
     GetDynamicSelectRequest,
@@ -101,9 +105,14 @@ pub use select::{
     Select,
     SelectRequest,
 };
-pub use std::borrow::Cow;
+pub use std::{
+    borrow::Cow,
+    convert::{
+        TryFrom,
+        TryInto,
+    },
+};
 use std::{
-    convert::TryInto,
     fmt::Debug,
     marker::PhantomData,
     ops::{
@@ -141,139 +150,6 @@ pub enum RequestType {
     Execute = 5,
 }
 
-/// Represents anything that can be used to generate a statement.
-/// For instance, a select query string or a keyspace with a `Select<K, V>` impl.
-pub trait ToStatement: DynClone + Debug + Send + Sync {
-    /// Get the statement from this type
-    fn to_statement(&self) -> Cow<'static, str>;
-    /// Get the keyspace name from this type
-    fn keyspace(&self) -> Cow<'static, str>;
-}
-dyn_clone::clone_trait_object!(ToStatement);
-
-struct UpdateStatement<S: Update<K, V, U>, K, V, U>(S, PhantomData<fn(K, V, U) -> (K, V, U)>);
-impl<S: Update<K, V, U>, K, V, U> UpdateStatement<S, K, V, U> {
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Update<K, V, U>, K, V, U> Clone for UpdateStatement<S, K, V, U> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Update<K, V, U> + Debug, K, V, U> Debug for UpdateStatement<S, K, V, U> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("UpdateStatement").field(&self.0).finish()
-    }
-}
-struct InsertStatement<S: Insert<K, V>, K, V>(S, PhantomData<fn(K, V) -> (K, V)>);
-impl<S: Insert<K, V>, K, V> InsertStatement<S, K, V> {
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Insert<K, V>, K, V> Clone for InsertStatement<S, K, V> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Insert<K, V> + Debug, K, V> Debug for InsertStatement<S, K, V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("InsertStatement").field(&self.0).finish()
-    }
-}
-struct DeleteStatement<S: Delete<K, V, D>, K, V, D>(S, PhantomData<fn(K, V, D) -> (K, V, D)>);
-impl<S: Delete<K, V, D>, K, V, D> DeleteStatement<S, K, V, D> {
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Delete<K, V, D>, K, V, D> Clone for DeleteStatement<S, K, V, D> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Delete<K, V, D> + Debug, K, V, D> Debug for DeleteStatement<S, K, V, D> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("DeleteStatement").field(&self.0).finish()
-    }
-}
-
-struct SelectStatement<S: Select<K, V, O>, K, V, O>(S, PhantomData<fn(K, V, O) -> (K, V, O)>);
-impl<S: Select<K, V, O>, K, V, O> SelectStatement<S, K, V, O> {
-    #[allow(unused)]
-    fn new(keyspace: &S) -> Self {
-        Self(keyspace.clone(), PhantomData)
-    }
-}
-impl<S: Select<K, V, O>, K, V, O> Clone for SelectStatement<S, K, V, O> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-impl<S: Select<K, V, O> + Debug, K, V, O> Debug for SelectStatement<S, K, V, O> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("SelectStatement").field(&self.0).finish()
-    }
-}
-
-impl<S: Update<K, V, U> + Debug, K, V, U> ToStatement for UpdateStatement<S, K, V, U> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
-    }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
-    }
-}
-
-impl<S: Insert<K, V> + Debug, K, V> ToStatement for InsertStatement<S, K, V> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
-    }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
-    }
-}
-
-impl<S: Delete<K, V, D> + Debug, K, V, D> ToStatement for DeleteStatement<S, K, V, D> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
-    }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
-    }
-}
-
-impl<S: Select<K, V, O> + Debug, K, V, O> ToStatement for SelectStatement<S, K, V, O> {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.0.statement()
-    }
-    fn keyspace(&self) -> Cow<'static, str> {
-        self.0.name().into()
-    }
-}
-
-impl ToStatement for String {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.clone().into()
-    }
-    fn keyspace(&self) -> Cow<'static, str> {
-        // Todo parse the keyspace from the cql statement or default to empty string
-        String::new().into()
-    }
-}
-
-impl ToStatement for &str {
-    fn to_statement(&self) -> Cow<'static, str> {
-        self.to_string().into()
-    }
-    fn keyspace(&self) -> Cow<'static, str> {
-        // Todo parse the keyspace from the cql statement or default to empty string
-        String::new().into()
-    }
-}
-
 /// Marker for dynamic requests
 pub struct DynamicRequest;
 /// Marker for static requests
@@ -301,13 +177,13 @@ pub trait Request {
     fn token(&self) -> i64;
 
     /// Get the statement that was used to create this request
-    fn statement(&self) -> &Cow<'static, str>;
+    fn statement(&self) -> Statement;
 
     /// Get the request payload
     fn payload(&self) -> Vec<u8>;
 
     /// get the keyspace of the request
-    fn keyspace(&self) -> String;
+    fn keyspace(&self) -> Option<String>;
 }
 
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
@@ -341,24 +217,50 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 
     /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(&self.keyspace(), self.token(), self.payload(), self.worker())?;
+        send_local(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            self.worker(),
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
     /// Send this request and worker to the local datacenter, without waiting for a response
-    fn send_local_with_worker(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(&self.keyspace(), self.token(), self.payload(), worker)?;
+    fn send_local_with_worker<W: 'static + Worker>(
+        self,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_local(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            worker,
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
     /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(&self.keyspace(), self.token(), self.payload(), self.worker())?;
+        send_global(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            self.worker(),
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
 
     /// Send this request and worker to a global datacenter, without waiting for a response
-    fn send_global_with_worker(self, worker: Box<dyn Worker>) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(&self.keyspace(), self.token(), self.payload(), worker)?;
+    fn send_global_with_worker<W: 'static + Worker>(
+        self,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        send_global(
+            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.token(),
+            self.payload(),
+            worker,
+        )?;
         Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
     }
     /// Send this request to the local datacenter and await the response asynchronously
@@ -445,20 +347,18 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 /// A common request type which contains only the bare minimum information needed
 #[derive(Debug, Clone)]
 pub struct CommonRequest {
-    pub(crate) keyspace_name: String,
     pub(crate) token: i64,
     pub(crate) payload: Vec<u8>,
-    pub(crate) statement: Cow<'static, str>,
+    pub(crate) statement: DataManipulationStatement,
 }
 
 impl CommonRequest {
     #[allow(missing_docs)]
-    pub fn new<T: Into<String>>(keyspace_name: T, statement: &str, payload: Vec<u8>) -> Self {
+    pub fn new<T: Into<String>>(statement: DataManipulationStatement, payload: Vec<u8>) -> Self {
         Self {
-            keyspace_name: keyspace_name.into(),
             token: 0,
             payload,
-            statement: statement.to_string().into(),
+            statement,
         }
     }
 }
@@ -468,22 +368,23 @@ impl Request for CommonRequest {
         self.token
     }
 
-    fn statement(&self) -> &Cow<'static, str> {
-        &self.statement
+    fn statement(&self) -> Statement {
+        self.statement.clone().into()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
     }
-    fn keyspace(&self) -> String {
-        self.keyspace_name.to_owned().clone().into()
+
+    fn keyspace(&self) -> Option<String> {
+        self.statement.get_keyspace()
     }
 }
 
 /// Defines two helper methods to specify statement / id
 #[allow(missing_docs)]
 pub trait GetStatementIdExt {
-    fn select_statement<K, V, O>(&self) -> Cow<'static, str>
+    fn select_statement<K, V, O>(&self) -> SelectStatement
     where
         Self: Select<K, V, O>,
     {
@@ -497,7 +398,7 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn insert_statement<K, V>(&self) -> Cow<'static, str>
+    fn insert_statement<K, V>(&self) -> InsertStatement
     where
         Self: Insert<K, V>,
     {
@@ -511,7 +412,7 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn update_statement<K, V, U>(&self) -> Cow<'static, str>
+    fn update_statement<K, V, U>(&self) -> UpdateStatement
     where
         Self: Update<K, V, U>,
     {
@@ -525,7 +426,7 @@ pub trait GetStatementIdExt {
         self.id()
     }
 
-    fn delete_statement<K, V, D>(&self) -> Cow<'static, str>
+    fn delete_statement<K, V, D>(&self) -> DeleteStatement
     where
         Self: Delete<K, V, D>,
     {
@@ -643,7 +544,12 @@ impl<V> DecodeResult<DecodeRows<V>> {
 
 /// Send a local request to the Ring
 #[inline]
-pub fn send_local(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
+pub fn send_local(
+    keyspace: Option<&str>,
+    token: i64,
+    payload: Vec<u8>,
+    worker: Box<dyn Worker>,
+) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     SharedRing::send_local_random_replica(keyspace, token, request)
@@ -651,7 +557,12 @@ pub fn send_local(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn 
 
 /// Send a global request to the Ring
 #[inline]
-pub fn send_global(keyspace: &str, token: i64, payload: Vec<u8>, worker: Box<dyn Worker>) -> Result<(), RingSendError> {
+pub fn send_global(
+    keyspace: Option<&str>,
+    token: i64,
+    payload: Vec<u8>,
+    worker: Box<dyn Worker>,
+) -> Result<(), RingSendError> {
     let request = ReporterEvent::Request { worker, payload };
 
     SharedRing::send_global_random_replica(keyspace, token, request)
@@ -665,8 +576,10 @@ impl<T> Deref for DecodeResult<T> {
     }
 }
 
-#[doc(hidden)]
-pub mod tests {
+#[cfg(test)]
+mod tests {
+    use scylla_rs_macros::parse_statement;
+
     use super::*;
     use crate::{
         cql::query::StatementType,
@@ -697,8 +610,8 @@ pub mod tests {
 
     impl Select<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            "SELECT col1 FROM keyspace.table WHERE key = ?".into()
+        fn statement(&self) -> SelectStatement {
+            parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -708,8 +621,8 @@ pub mod tests {
 
     impl Select<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = QueryStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("SELECT col2 FROM {}.table WHERE key = ?", self.name()).into()
+        fn statement(&self) -> SelectStatement {
+            parse_statement!("SELECT col2 FROM my_table WHERE key = ?").with_keyspace(self.name())
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -719,8 +632,8 @@ pub mod tests {
 
     impl Insert<u32, f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("INSERT INTO {}.table (key, val1, val2) VALUES (?,?,?)", self.name()).into()
+        fn statement(&self) -> InsertStatement {
+            parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, values: &f32) -> B {
@@ -730,8 +643,8 @@ pub mod tests {
 
     impl Update<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("UPDATE {}.table SET val1 = ?, val2 = ? WHERE key = ?", self.name()).into()
+        fn statement(&self) -> UpdateStatement {
+            parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &(), values: &f32) -> B {
@@ -741,8 +654,8 @@ pub mod tests {
 
     impl Delete<u32, (), f32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            "DELETE FROM keyspace.table WHERE key = ?".into()
+        fn statement(&self) -> DeleteStatement {
+            parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -752,8 +665,8 @@ pub mod tests {
 
     impl Delete<u32, (), i32> for MyKeyspace {
         type QueryOrPrepared = PreparedStatement;
-        fn statement(&self) -> Cow<'static, str> {
-            format!("DELETE FROM {}.table WHERE key = ?", self.name()).into()
+        fn statement(&self) -> DeleteStatement {
+            parse_statement!("DELETE FROM my_table WHERE key = ?")
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, _variables: &()) -> B {
@@ -763,10 +676,17 @@ pub mod tests {
 
     #[allow(dead_code)]
     fn test_select() {
+        parse_statement!(
+            "CREATE OR REPLACE AGGREGATE test.average(int)
+            SFUNC averageState
+            STYPE tuple<int,bigint>
+            FINALFUNC averageFinal
+            INITCOND (?, ?);"
+        );
         let keyspace = MyKeyspace::new();
         let res = keyspace
             .select_with::<f32>(
-                "SELECT col1 FROM keyspace.table WHERE key = ?",
+                parse_statement!("SELECT col1 FROM my_keyspace.my_table WHERE key = ?"),
                 &[&3, &"str"],
                 &[],
                 StatementType::Query,
@@ -778,7 +698,7 @@ pub mod tests {
             .with_retries(3)
             .send_local();
         assert!(res.is_err());
-        let res = "SELECT col1 FROM keyspace.table WHERE key = ?"
+        let res = parse_statement!(r#"SELECT col1 FROM "keyspace"."table" WHERE key = ?"#)
             .as_select_prepared::<f32>(&[&3], &[])
             .build()
             .unwrap()
@@ -802,7 +722,7 @@ pub mod tests {
 
         "my_keyspace"
             .insert_with(
-                "INSERT INTO {{keyspace}}.table (key, val1, val2) VALUES (?,?,?)",
+                parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
                 &[&3],
                 &[&8.0, &"hello"],
                 StatementType::Query,
@@ -813,7 +733,7 @@ pub mod tests {
             .get_local_blocking()
             .unwrap();
 
-        "INSERT INTO my_keyspace.table (key, val1, val2) VALUES (?,?,?)"
+        parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
             .as_insert_query(&[&3], &[&8.0, &"hello"])
             //.bind_values(|binder, keys, values| binder.bind(keys).bind(values))
             .build()
@@ -857,8 +777,8 @@ pub mod tests {
             .unwrap()
             .compute_token(&3);
         let id = keyspace.insert_id::<u32, f32>();
-        let statement = req.get_statement(&id).unwrap();
-        assert_eq!(statement, keyspace.insert_statement::<u32, f32>());
+        let statement = req.get_statement(&id).unwrap().clone();
+        assert_eq!(statement, keyspace.insert_statement::<u32, f32>().into());
         let _res = req.clone().send_local().unwrap();
     }
 
@@ -888,7 +808,7 @@ pub mod tests {
         backstage::spawn_task("adding node task", async move {
             "scylla_example"
                 .insert_query_with(
-                    "INSERT INTO {{keyspace}}.test (key, data) VALUES (?, ?)",
+                    parse_statement!("INSERT INTO test (key, data) VALUES (?, ?)"),
                     &[&"Test 1"],
                     &[&1],
                 )
