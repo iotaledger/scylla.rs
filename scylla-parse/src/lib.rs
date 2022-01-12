@@ -25,7 +25,6 @@ use std::{
         BTreeMap,
         BTreeSet,
         HashMap,
-        VecDeque,
     },
     convert::{
         TryFrom,
@@ -101,7 +100,8 @@ pub struct StatementStream<'a> {
     pos: usize,
     rem: usize,
     cache: Rc<RefCell<HashMap<usize, AnyMap>>>,
-    ordered_tags: Rc<RefCell<VecDeque<TokenStream>>>,
+    ordered_tags: Rc<RefCell<Vec<TokenStream>>>,
+    curr_ordered_tag: usize,
     keyed_tags: Rc<RefCell<HashMap<String, TokenStream>>>,
 }
 
@@ -113,12 +113,13 @@ impl<'a> StatementStream<'a> {
             rem: statement.chars().count(),
             cache: Default::default(),
             ordered_tags: Default::default(),
+            curr_ordered_tag: Default::default(),
             keyed_tags: Default::default(),
         }
     }
 
     pub fn push_ordered_tag(&mut self, tag: TokenStream) {
-        self.ordered_tags.borrow_mut().push_back(tag);
+        self.ordered_tags.borrow_mut().push(tag);
     }
 
     pub fn insert_keyed_tag(&mut self, key: String, tag: TokenStream) {
@@ -250,8 +251,14 @@ impl<'a> StatementStream<'a> {
             .clone()
     }
 
-    fn next_ordered_tag(&self) -> Option<TokenStream> {
-        self.ordered_tags.borrow_mut().pop_front()
+    fn next_ordered_tag(&mut self) -> Option<TokenStream> {
+        let c = self.curr_ordered_tag;
+        self.curr_ordered_tag += 1;
+        self.ordered_tags.borrow().get(c).cloned()
+    }
+
+    fn ordered_tag(&self, n: usize) -> Option<TokenStream> {
+        self.ordered_tags.borrow().get(n).cloned()
     }
 
     fn mapped_tag(&self, key: &String) -> Option<TokenStream> {
@@ -552,10 +559,13 @@ where
         Ok(if s.check::<HashTag>() {
             let tag = s.parse_from::<HashTag>()?;
             let tag = match tag {
-                Some(key) => s
+                HashTag::Keyed(key) => s
                     .mapped_tag(&key)
                     .ok_or_else(|| anyhow::anyhow!("No argument found for key {}: {}", key, s.info()))?,
-                None => s
+                HashTag::Ordered(n) => s
+                    .ordered_tag(n)
+                    .ok_or_else(|| anyhow::anyhow!("No argument found for index {}: {}", n, s.info()))?,
+                HashTag::Next => s
                     .next_ordered_tag()
                     .ok_or_else(|| anyhow::anyhow!("Insufficient unkeyed arguments: {}", s.info()))?,
             };
@@ -576,6 +586,11 @@ impl<T: Display> Display for Tag<T> {
             Tag::Tag(t) => t.fmt(f),
             Tag::Value(v) => v.fmt(f),
         }
+    }
+}
+impl<T: Default> Default for Tag<T> {
+    fn default() -> Self {
+        Tag::Value(T::default())
     }
 }
 
@@ -605,10 +620,14 @@ where
         CustomToTokens::to_tokens(self, tokens);
     }
 }
-#[derive(Copy, Clone, Debug)]
-pub struct HashTag;
+#[derive(Clone, Debug)]
+pub enum HashTag {
+    Next,
+    Ordered(usize),
+    Keyed(String),
+}
 impl Parse for HashTag {
-    type Output = Option<String>;
+    type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(c) = s.next() {
             let mut res = String::new();
@@ -621,7 +640,13 @@ impl Parse for HashTag {
                         break;
                     }
                 }
-                Ok(if res.is_empty() { None } else { Some(res) })
+                Ok(if res.is_empty() {
+                    Self::Next
+                } else if res.chars().all(|c| c.is_numeric()) {
+                    Self::Ordered(res.parse().unwrap())
+                } else {
+                    Self::Keyed(res)
+                })
             } else {
                 anyhow::bail!("Expected #")
             }
@@ -1157,6 +1182,7 @@ impl From<&str> for KeyspaceQualifiedName {
 }
 
 #[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedStatementOpt)]
 pub struct StatementOpt {
     pub name: Name,
     pub value: StatementOptValue,
@@ -1171,11 +1197,28 @@ impl StatementOpt {
     }
 }
 
-impl Parse for StatementOpt {
+impl TryFrom<TaggedStatementOpt> for StatementOpt {
+    type Error = anyhow::Error;
+    fn try_from(t: TaggedStatementOpt) -> anyhow::Result<Self> {
+        Ok(Self {
+            name: t.name,
+            value: t.value.try_into()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(StatementOpt)]
+pub struct TaggedStatementOpt {
+    pub name: Name,
+    pub value: TaggedStatementOptValue,
+}
+
+impl Parse for TaggedStatementOpt {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        let (name, _, value) = s.parse::<(Name, Equals, StatementOptValue)>()?;
-        Ok(StatementOpt { name, value })
+        let (name, _, value) = s.parse::<(Name, Equals, TaggedStatementOptValue)>()?;
+        Ok(Self { name, value })
     }
 }
 
@@ -1186,21 +1229,41 @@ impl Display for StatementOpt {
 }
 
 #[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq, From)]
+#[parse_via(TaggedStatementOptValue)]
 pub enum StatementOptValue {
     Identifier(Name),
     Constant(Constant),
     Map(MapLiteral),
 }
 
-impl Parse for StatementOptValue {
+impl TryFrom<TaggedStatementOptValue> for StatementOptValue {
+    type Error = anyhow::Error;
+    fn try_from(t: TaggedStatementOptValue) -> anyhow::Result<Self> {
+        Ok(match t {
+            TaggedStatementOptValue::Identifier(i) => Self::Identifier(i.into_value()?),
+            TaggedStatementOptValue::Constant(c) => Self::Constant(c.into_value()?),
+            TaggedStatementOptValue::Map(m) => Self::Map(m.into_value()?.try_into()?),
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq, From)]
+#[tokenize_as(StatementOptValue)]
+pub enum TaggedStatementOptValue {
+    Identifier(Tag<Name>),
+    Constant(Tag<Constant>),
+    Map(Tag<TaggedMapLiteral>),
+}
+
+impl Parse for TaggedStatementOptValue {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self> {
-        if let Some(map) = s.parse::<Option<MapLiteral>>()? {
-            Ok(StatementOptValue::Map(map))
-        } else if let Some(constant) = s.parse::<Option<Constant>>()? {
-            Ok(StatementOptValue::Constant(constant))
-        } else if let Some(identifier) = s.parse::<Option<Name>>()? {
-            Ok(StatementOptValue::Identifier(identifier))
+        if let Some(map) = s.parse::<Option<Tag<TaggedMapLiteral>>>()? {
+            Ok(Self::Map(map))
+        } else if let Some(constant) = s.parse::<Option<Tag<Constant>>>()? {
+            Ok(Self::Constant(constant))
+        } else if let Some(identifier) = s.parse::<Option<Tag<Name>>>()? {
+            Ok(Self::Identifier(identifier))
         } else {
             anyhow::bail!("Invalid statement option value: {}", s.info())
         }
@@ -1208,6 +1271,16 @@ impl Parse for StatementOptValue {
 }
 
 impl Display for StatementOptValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Identifier(identifier) => identifier.fmt(f),
+            Self::Constant(constant) => constant.fmt(f),
+            Self::Map(map) => map.fmt(f),
+        }
+    }
+}
+
+impl Display for TaggedStatementOptValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Identifier(identifier) => identifier.fmt(f),
@@ -1827,54 +1900,109 @@ impl Display for Relation {
     }
 }
 
-#[derive(Clone, Debug, From, ToTokens, PartialEq, Eq)]
-pub enum Replication {
-    SimpleStrategy(i32),
-    NetworkTopologyStrategy(BTreeMap<String, i32>),
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedReplication)]
+pub struct Replication {
+    pub class: LitStr,
+    pub replication_factor: Option<i32>,
+    pub datacenters: BTreeMap<LitStr, i32>,
 }
 
 impl Replication {
     pub fn simple(replication_factor: i32) -> Self {
-        Replication::SimpleStrategy(replication_factor)
+        Self {
+            class: "SimpleStrategy".into(),
+            replication_factor: Some(replication_factor),
+            datacenters: BTreeMap::new(),
+        }
     }
 
     pub fn network_topology<S: Into<String>>(replication_map: BTreeMap<S, i32>) -> Self {
-        Replication::NetworkTopologyStrategy(replication_map.into_iter().map(|(k, v)| (k.into(), v)).collect())
+        let mut map: BTreeMap<String, _> = replication_map.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        Self {
+            class: "NetworkTopologyStrategy".into(),
+            replication_factor: map.remove("replication_factor"),
+            datacenters: map.into_iter().map(|(dc, rf)| (dc.into(), rf)).collect(),
+        }
+    }
+}
+
+impl From<i32> for Replication {
+    fn from(replication_factor: i32) -> Self {
+        Self::simple(replication_factor)
     }
 }
 
 impl Default for Replication {
     fn default() -> Self {
-        Replication::simple(1)
+        Self::simple(1)
     }
 }
 
 impl Display for Replication {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Replication::SimpleStrategy(i) => write!(f, "{{'class': 'SimpleStrategy', 'replication_factor': {}}}", i),
-            Replication::NetworkTopologyStrategy(i) => write!(
-                f,
-                "{{'class': 'NetworkTopologyStrategy', {}}}",
-                i.iter()
-                    .map(|(k, v)| format!("'{}': {}", k, v))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+        let mut opts = vec![("'class'".to_string(), self.class.to_string())];
+        if let Some(replication_factor) = self.replication_factor {
+            opts.push(("'replication_factor'".to_string(), format!("{}", replication_factor)));
+        }
+        for (dc, rf) in self.datacenters.iter() {
+            opts.push((dc.to_string(), format!("{}", rf)));
+        }
+        write!(
+            f,
+            "{{{}}}",
+            opts.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl TryFrom<TaggedReplication> for Replication {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedReplication) -> Result<Self, Self::Error> {
+        let mut datacenters = BTreeMap::new();
+        for (k, v) in value.datacenters {
+            if datacenters.insert(k.into_value()?, v.into_value()?).is_some() {
+                anyhow::bail!("Duplicate key in replication map");
+            }
+        }
+        Ok(Self {
+            class: value.class.into_value()?,
+            replication_factor: value.replication_factor.map(|v| v.into_value()).transpose()?,
+            datacenters,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(Replication)]
+pub struct TaggedReplication {
+    pub class: Tag<LitStr>,
+    pub replication_factor: Option<Tag<i32>>,
+    pub datacenters: BTreeMap<Tag<LitStr>, Tag<i32>>,
+}
+
+impl Default for TaggedReplication {
+    fn default() -> Self {
+        Self {
+            class: Tag::Value("SimpleStrategy".into()),
+            replication_factor: Some(Tag::Value(1)),
+            datacenters: BTreeMap::new(),
         }
     }
 }
 
-impl TryFrom<MapLiteral> for Replication {
+impl TryFrom<TaggedMapLiteral> for TaggedReplication {
     type Error = anyhow::Error;
-
-    fn try_from(value: MapLiteral) -> Result<Self, Self::Error> {
+    fn try_from(value: TaggedMapLiteral) -> Result<Self, Self::Error> {
         let mut class = None;
         let v = value
             .elements
             .into_iter()
             .filter(|(k, v)| {
-                if let Term::Constant(Constant::String(s)) = k {
+                if let Tag::Value(Term::Constant(Constant::String(s))) = k {
                     if s.value.to_lowercase().as_str() == "class" {
                         class = Some(v.clone());
                         return false;
@@ -1883,10 +2011,17 @@ impl TryFrom<MapLiteral> for Replication {
                 true
             })
             .collect::<Vec<_>>();
-        let class = class.ok_or_else(|| anyhow::anyhow!("No class in replication map literal!"))?;
+        let class = match class.ok_or_else(|| anyhow::anyhow!("No class in replication map literal!"))? {
+            Tag::Value(Term::Constant(Constant::String(s))) => Tag::Value(s),
+            Tag::Tag(t) => Tag::Tag(t),
+            c @ _ => anyhow::bail!("Invalid class: {:?}", c),
+        };
+        let mut replication_factor = None;
+        let mut datacenters = BTreeMap::new();
         match class {
-            Term::Constant(Constant::String(s)) => {
-                if s.value.ends_with("SimpleStrategy") {
+            Tag::Tag(_) => (),
+            Tag::Value(ref class) => {
+                if class.value.ends_with("SimpleStrategy") {
                     if v.len() > 1 {
                         anyhow::bail!(
                             "SimpleStrategy map literal should only contain a single 'replication_factor' key!"
@@ -1894,13 +2029,15 @@ impl TryFrom<MapLiteral> for Replication {
                     } else if v.is_empty() {
                         anyhow::bail!("SimpleStrategy map literal should contain a 'replication_factor' key!")
                     }
-                    let (k, v) = &v[0];
-                    if let Term::Constant(Constant::String(s)) = k {
+                    let (k, v) = v.into_iter().next().unwrap();
+                    if let Tag::Value(Term::Constant(Constant::String(s))) = k {
                         if s.value.to_lowercase().as_str() == "replication_factor" {
-                            if let Term::Constant(Constant::Integer(i)) = v {
-                                return Ok(Replication::SimpleStrategy(i.parse()?));
-                            } else {
-                                anyhow::bail!("Invalid replication factor value: {}", v)
+                            match v {
+                                Tag::Value(Term::Constant(Constant::Integer(i))) => {
+                                    replication_factor = Some(Tag::Value(i.parse()?));
+                                }
+                                Tag::Tag(t) => replication_factor = Some(Tag::Tag(t)),
+                                _ => anyhow::bail!("Invalid replication factor value: {}", v),
                             }
                         } else {
                             anyhow::bail!("SimpleStrategy map literal should only contain a 'class' and 'replication_factor' key!")
@@ -1908,26 +2045,48 @@ impl TryFrom<MapLiteral> for Replication {
                     } else {
                         anyhow::bail!("Invalid key: {}", k)
                     }
-                } else if s.value.ends_with("NetworkTopologyStrategy") {
-                    let mut map = BTreeMap::new();
-                    for (k, v) in v {
-                        if let Term::Constant(Constant::String(s)) = k {
-                            if let Term::Constant(Constant::Integer(i)) = v {
-                                map.insert(s.value, i.parse()?);
-                            } else {
-                                anyhow::bail!("Invalid replication factor value: {}", v)
-                            }
-                        } else {
-                            anyhow::bail!("Invalid key in replication map literal!");
-                        }
-                    }
-                    return Ok(Replication::NetworkTopologyStrategy(map));
                 } else {
-                    return Err(anyhow::anyhow!("Unknown replication class: {}", s));
+                    for (k, v) in v {
+                        if let Tag::Value(Term::Constant(Constant::String(ref s))) = k {
+                            if s.value.to_lowercase().as_str() == "replication_factor" {
+                                match v {
+                                    Tag::Value(Term::Constant(Constant::Integer(i))) => {
+                                        replication_factor = Some(Tag::Value(i.parse()?));
+                                    }
+                                    Tag::Tag(t) => replication_factor = Some(Tag::Tag(t)),
+                                    _ => anyhow::bail!("Invalid replication factor value: {}", v),
+                                }
+                                continue;
+                            }
+                        }
+                        datacenters.insert(
+                            match k {
+                                Tag::Tag(t) => Tag::Tag(t),
+                                Tag::Value(Term::Constant(Constant::String(s))) => Tag::Value(s),
+                                _ => anyhow::bail!("Invalid key in replication map literal!"),
+                            },
+                            match v {
+                                Tag::Tag(t) => Tag::Tag(t),
+                                Tag::Value(Term::Constant(Constant::Integer(i))) => Tag::Value(i.parse()?),
+                                _ => anyhow::bail!("Invalid replication factor value: {}", v),
+                            },
+                        );
+                    }
                 }
             }
-            _ => anyhow::bail!("Invalid class: {}", class),
         }
+        Ok(Self {
+            class,
+            replication_factor,
+            datacenters,
+        })
+    }
+}
+
+impl Parse for TaggedReplication {
+    type Output = Self;
+    fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
+        s.parse::<TaggedMapLiteral>()?.try_into()
     }
 }
 

@@ -390,6 +390,7 @@ macro_rules! impl_token_encoder {
     (@tuple ($($t:tt),*)) => {
         impl<$($t: TokenEncoder),*> TokenEncoder for ($($t,)*) {
             fn encode_token(&self) -> TokenEncodeChain {
+                #[allow(non_snake_case)]
                 let ($($t,)*) = self;
                 let mut token_chain = TokenEncodeChain::default();
                 $(

@@ -36,6 +36,7 @@ impl TryFrom<TaggedDataManipulationStatement> for DataManipulationStatement {
 }
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq, Eq)]
+#[tokenize_as(DataManipulationStatement)]
 pub enum TaggedDataManipulationStatement {
     Select(TaggedSelectStatement),
     Insert(TaggedInsertStatement),

@@ -39,7 +39,10 @@ pub mod prelude {
         },
     };
     pub use backstage::core::*;
-    pub use maplit::{self, *};
+    pub use maplit::{
+        self,
+        *,
+    };
     pub use scylla_parse;
     pub use scylla_rs_macros::*;
 }

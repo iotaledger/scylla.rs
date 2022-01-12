@@ -6,7 +6,6 @@ use crate::{
     ColumnDefinition,
     Constant,
     PrimaryKey,
-    StatementOptValue,
     TerminatingList,
 };
 
@@ -148,7 +147,8 @@ impl<T: Into<Name>> From<T> for UseStatement {
     }
 }
 
-#[derive(Builder, Clone, Debug, ToTokens, PartialEq, Eq, Default)]
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq, Default)]
+#[parse_via(TaggedKeyspaceOpts)]
 pub struct KeyspaceOpts {
     #[builder(setter(into))]
     pub replication: Replication,
@@ -156,19 +156,39 @@ pub struct KeyspaceOpts {
     pub durable_writes: Option<bool>,
 }
 
-impl Parse for KeyspaceOpts {
+impl TryFrom<TaggedKeyspaceOpts> for KeyspaceOpts {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedKeyspaceOpts) -> Result<Self, Self::Error> {
+        Ok(Self {
+            replication: value.replication.into_value()?.try_into()?,
+            durable_writes: value.durable_writes.map(|v| v.into_value()).transpose()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq, Eq, Default)]
+#[tokenize_as(KeyspaceOpts)]
+pub struct TaggedKeyspaceOpts {
+    pub replication: Tag<TaggedReplication>,
+    #[builder(setter(strip_option), default)]
+    pub durable_writes: Option<Tag<bool>>,
+}
+
+impl Parse for TaggedKeyspaceOpts {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
-        let mut res = KeyspaceOptsBuilder::default();
-
-        for StatementOpt { name, value } in s.parse_from::<List<StatementOpt, AND>>()? {
+        let mut res = TaggedKeyspaceOptsBuilder::default();
+        for TaggedStatementOpt { name, value } in s.parse_from::<List<TaggedStatementOpt, AND>>()? {
             let (Name::Quoted(n) | Name::Unquoted(n)) = &name;
             match n.as_str() {
                 "replication" => {
                     if res.replication.is_some() {
                         anyhow::bail!("Duplicate replication option");
-                    } else if let StatementOptValue::Map(m) = value {
-                        res.replication(Replication::try_from(m)?);
+                    } else if let TaggedStatementOptValue::Map(m) = value {
+                        res.replication(match m {
+                            Tag::Tag(t) => Tag::Tag(t),
+                            Tag::Value(m) => Tag::Value(TaggedReplication::try_from(m)?),
+                        });
                     } else {
                         anyhow::bail!("Invalid replication value: {}", value);
                     }
@@ -176,8 +196,17 @@ impl Parse for KeyspaceOpts {
                 "durable_writes" => {
                     if res.durable_writes.is_some() {
                         anyhow::bail!("Duplicate durable writes option");
-                    } else if let StatementOptValue::Constant(Constant::Boolean(b)) = value {
-                        res.durable_writes(b);
+                    } else if let TaggedStatementOptValue::Constant(b) = value {
+                        res.durable_writes(match b {
+                            Tag::Tag(t) => Tag::Tag(t),
+                            Tag::Value(b) => {
+                                if let Constant::Boolean(b) = b {
+                                    Tag::Value(b)
+                                } else {
+                                    anyhow::bail!("Invalid durable writes value: {}", b);
+                                }
+                            }
+                        });
                     } else {
                         anyhow::bail!("Invalid durable writes value: {}", value);
                     }
@@ -217,7 +246,7 @@ impl TryFrom<TaggedCreateKeyspaceStatement> for CreateKeyspaceStatement {
         Ok(Self {
             if_not_exists: value.if_not_exists,
             keyspace: value.keyspace.into_value()?,
-            options: value.options,
+            options: value.options.into_value()?.try_into()?,
         })
     }
 }
@@ -228,7 +257,7 @@ pub struct TaggedCreateKeyspaceStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     pub keyspace: Tag<Name>,
-    pub options: KeyspaceOpts,
+    pub options: Tag<TaggedKeyspaceOpts>,
 }
 
 impl CreateKeyspaceStatementBuilder {

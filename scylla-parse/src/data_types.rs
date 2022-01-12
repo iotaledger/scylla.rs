@@ -22,6 +22,7 @@ use super::{
     Parse,
     SignedNumber,
     StatementStream,
+    Tag,
     TokenWrapper,
 };
 use chrono::{
@@ -1003,11 +1004,31 @@ impl Display for CollectionType {
 }
 
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[parse_via(TaggedMapLiteral)]
 pub struct MapLiteral {
     pub elements: BTreeMap<Term, Term>,
 }
 
-impl Parse for MapLiteral {
+impl TryFrom<TaggedMapLiteral> for MapLiteral {
+    type Error = anyhow::Error;
+
+    fn try_from(value: TaggedMapLiteral) -> Result<Self, Self::Error> {
+        let mut elements = BTreeMap::new();
+        for (k, v) in value.elements {
+            if elements.insert(k.into_value()?, v.into_value()?).is_some() {
+                anyhow::bail!("Duplicate key in map literal");
+            }
+        }
+        Ok(Self { elements })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+pub struct TaggedMapLiteral {
+    pub elements: BTreeMap<Tag<Term>, Tag<Term>>,
+}
+
+impl Parse for TaggedMapLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
@@ -1015,7 +1036,7 @@ impl Parse for MapLiteral {
     {
         Ok(Self {
             elements: s
-                .parse_from::<Braces<List<(Term, Colon, Term), Comma>>>()?
+                .parse_from::<Braces<List<(Tag<Term>, Colon, Tag<Term>), Comma>>>()?
                 .into_iter()
                 .map(|(k, _, v)| (k, v))
                 .collect(),
@@ -1024,6 +1045,20 @@ impl Parse for MapLiteral {
 }
 
 impl Display for MapLiteral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{{}}}",
+            self.elements
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl Display for TaggedMapLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

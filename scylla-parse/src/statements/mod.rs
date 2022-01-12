@@ -25,11 +25,13 @@ use crate::{
     Replication,
     SetLiteral,
     SpeculativeRetry,
-    StatementOpt,
     StatementStream,
     TableOpts,
     Tag,
     TaggedKeyspaceQualifiedName,
+    TaggedReplication,
+    TaggedStatementOpt,
+    TaggedStatementOptValue,
     Term,
     TokenWrapper,
 };
@@ -150,6 +152,7 @@ impl_try_into_statements!(
 
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
 #[tokenize_as(Statement)]
+
 pub enum TaggedStatement {
     DataDefinition(TaggedDataDefinitionStatement),
     DataManipulation(TaggedDataManipulationStatement),

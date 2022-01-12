@@ -98,40 +98,30 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let keyspace = MyKeyspace::new();
-    parse_statement!(
-        "CREATE KEYSPACE IF NOT EXISTS #
-        WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': 1}
-        AND durable_writes = true",
-        keyspace.name()
-    )
-    .execute()
-    .consistency(Consistency::All)
-    .build()?
-    .get_local()
-    .await
-    .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
+    let replication = "{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}"
+        .parse::<Replication>()
+        .unwrap();
+    for s in parse_statements!(
+        "CREATE KEYSPACE IF NOT EXISTS #0
+        WITH replication = #1
+        AND durable_writes = true;
 
-    parse_statement!("DROP TABLE IF EXISTS #.test", keyspace.name())
-        .execute()
-        .consistency(Consistency::All)
-        .build()?
-        .get_local()
-        .await
-        .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
+        DROP TABLE IF EXISTS #0.test;
 
-    parse_statement!(
-        "CREATE TABLE IF NOT EXISTS #.test (
+        CREATE TABLE IF NOT EXISTS #0.test (
             key text PRIMARY KEY,
             data blob
         )",
-        keyspace.name()
-    )
-    .execute()
-    .consistency(Consistency::All)
-    .build()?
-    .get_local()
-    .await
-    .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
+        keyspace.name(),
+        replication,
+    ) {
+        s.execute()
+            .consistency(Consistency::All)
+            .build()?
+            .get_local()
+            .await
+            .map_err(|e| anyhow::anyhow!("Could not verify if execution completed: {}", e))?;
+    }
 
     keyspace.prepare_insert::<String, i32>().get_local().await?;
     keyspace.prepare_select::<String, (), i32>().get_local().await?;
