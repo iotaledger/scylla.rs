@@ -1639,7 +1639,7 @@ impl Display for TableOpts {
         }
         if let Some(ref c) = self.clustering_order {
             res.push(format!(
-                "COMPACT STORAGE AND {}",
+                "CLUSTERING ORDER BY ({})",
                 c.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
             ));
         }

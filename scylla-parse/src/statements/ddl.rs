@@ -794,6 +794,7 @@ mod test {
         JavaTimeUnit,
         KeyspaceQualifyExt,
         NativeType,
+        Order,
         SpeculativeRetry,
     };
 
@@ -838,6 +839,14 @@ mod test {
         assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         let mut opts_builder = crate::TableOptsBuilder::default();
         assert!(opts_builder.build().is_err());
+        opts_builder.clustering_order(vec![
+            ("tinyint", Order::Ascending).into(),
+            ("int", Order::Descending).into(),
+            ("bigint", Order::Ascending).into(),
+        ]);
+        builder.options(opts_builder.build().unwrap());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         opts_builder.comment("test");
         builder.options(opts_builder.build().unwrap());
         let statement = builder.build().unwrap().to_string();
