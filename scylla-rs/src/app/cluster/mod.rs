@@ -172,7 +172,13 @@ impl Actor<ScyllaHandle> for Cluster {
         rt.add_route::<(JsonMessage, Responder)>().await.ok();
         let node_iter = scylla.nodes.iter();
         for address in node_iter {
-            self.start_node(rt, address.clone(), &scylla).await?;
+            log::info!("Starting node: {}", address);
+            if let Err(e) = self.start_node(rt, address.clone(), &scylla).await {
+                log::error!("Unable to start node: {}, error: {}", address, e);
+                Err(e)?;
+            } else {
+                log::info!("Successfully started node: {}", address);
+            };
         }
         let keyspaces = scylla.keyspaces.iter();
         for super::KeyspaceConfig { name, data_centers } in keyspaces {
