@@ -9,7 +9,9 @@ use chrono::{
     Datelike,
     NaiveDate,
     NaiveDateTime,
+    NaiveTime,
     TimeZone,
+    Timelike,
 };
 use std::{
     collections::HashMap,
@@ -327,7 +329,12 @@ impl<Tz: TimeZone> ColumnEncoder for DateTime<Tz> {
 
 impl ColumnEncoder for NaiveTime {
     fn encode(&self, buffer: &mut Vec<u8>) {
-        todo!("encode nanos since midnight")
+        let hr_as_secs = self.hour() * 3600;
+        let min_as_sec = self.minute() * 60;
+        let total_sec = self.second() + hr_as_secs + min_as_sec;
+        let total_nanos = self.nanosecond() + (total_sec * 1000_000_000);
+        buffer.extend(&BE_8_BYTES_LEN);
+        buffer.extend(&u64::to_be_bytes(total_nanos as u64))
     }
 }
 

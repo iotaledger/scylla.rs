@@ -689,10 +689,18 @@ impl ColumnDecoder for NaiveDate {
 
 impl ColumnDecoder for DateTime<Utc> {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(DateTime::<Utc>::from_utc(NaiveDateTime::try_decode_column(slice)?, Utc))
+    }
+}
+
+impl ColumnDecoder for NaiveDateTime {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let num_of_milliseconds = u64::from_be_bytes(slice.try_into()?);
         let millis_reminder = (num_of_milliseconds % 1000) as u32;
-        let dt = NaiveDateTime::from_timestamp((num_of_milliseconds/1000) as i64, millis_reminder * 1000_000);
-        Ok(DateTime::<Utc>::from_utc(dt, Utc))
+        Ok(NaiveDateTime::from_timestamp(
+            (num_of_milliseconds / 1000) as i64,
+            millis_reminder * 1000_000,
+        ))
     }
 }
 
