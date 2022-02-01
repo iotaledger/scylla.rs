@@ -15,6 +15,14 @@ use super::{
         PagingState,
     },
 };
+use chrono::{
+    Date,
+    DateTime,
+    NaiveDate,
+    NaiveDateTime,
+    Utc,
+};
+
 use crate::{
     cql::compression::{
         Compression,
@@ -656,13 +664,6 @@ where
         Ok(map)
     }
 }
-use chrono::{
-    Date,
-    DateTime,
-    NaiveDate,
-    NaiveDateTime,
-    Utc,
-};
 
 impl ColumnDecoder for Date<Utc> {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
@@ -699,7 +700,8 @@ impl ColumnDecoder for NaiveDateTime {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let num_of_nanos = u64::from_be_bytes(slice.try_into()?);
         let num_of_secs = num_of_nanos / 1000_000_000;
-        Ok(NaiveDateTime::from_timestamp(num_of_secs as i64, num_of_nanos as u32))
+        let nano_reminder = (num_of_nanos % num_of_secs) as u32;
+        Ok(NaiveDateTime::from_timestamp(num_of_secs as i64, nano_reminder))
     }
 }
 
