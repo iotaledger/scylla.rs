@@ -664,7 +664,7 @@ where
 
 impl ColumnDecoder for NaiveDate {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
-        let num_days = u32::from_be_bytes(slice.try_into()?);
+        let num_days = u32::from_be_bytes(slice.try_into()?) - (1u32 << 31);
         let epoch = NaiveDate::from_ymd(1970, 1, 1);
         Ok(epoch
             .checked_add_signed(chrono::Duration::days(num_days as i64))

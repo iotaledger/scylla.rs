@@ -1236,7 +1236,7 @@ impl Parse for DateLiteral {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(d) = s.parse::<Option<LitStr>>()? {
             let dur = d.value.parse::<NaiveDate>().map_err(|e| anyhow::anyhow!(e))? - NaiveDate::from_ymd(1970, 1, 1);
-            Ok(Self(dur.num_days() as u32 + (1 << 31)))
+            Ok(Self(dur.num_days() as u32 + (1u32 << 31)))
         } else {
             Ok(Self(s.parse::<u32>()?))
         }

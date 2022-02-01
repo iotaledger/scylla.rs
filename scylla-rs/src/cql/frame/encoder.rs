@@ -4,13 +4,10 @@
 //! This module implements the frame encoder.
 
 use chrono::{
-    Date,
-    DateTime,
     Datelike,
     NaiveDate,
     NaiveDateTime,
     NaiveTime,
-    TimeZone,
     Timelike,
 };
 use std::{
@@ -305,9 +302,9 @@ impl ColumnEncoder for Null {
 
 impl ColumnEncoder for NaiveDate {
     fn encode(&self, buffer: &mut Vec<u8>) {
-        let days = self.num_days_from_ce() - 719_163 + (1 << 31);
+        let days = self.num_days_from_ce() as u32 - 719_163 + (1u32 << 31);
         buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&u32::to_be_bytes(days as u32))
+        buffer.extend(&u32::to_be_bytes(days))
     }
 }
 
