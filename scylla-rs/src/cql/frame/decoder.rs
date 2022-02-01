@@ -656,6 +656,52 @@ where
         Ok(map)
     }
 }
+use chrono::{
+    Date,
+    DateTime,
+    NaiveDate,
+    NaiveDateTime,
+    Utc,
+};
+
+impl ColumnDecoder for Date<Utc> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
+        let num_days = u32::from_be_bytes(slice.try_into()?);
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        let dt = Date::<Utc>::from_utc(epoch, Utc);
+        Ok(dt
+            .checked_add_signed(chrono::Duration::days(num_days as i64))
+            .ok_or(anyhow!("Overflowed epoch + duration::days"))?)
+    }
+}
+
+impl ColumnDecoder for NaiveDate {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
+        let num_days = u32::from_be_bytes(slice.try_into()?);
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        Ok(epoch
+            .checked_add_signed(chrono::Duration::days(num_days as i64))
+            .ok_or(anyhow!("Overflowed epoch + duration::days"))?)
+    }
+}
+
+impl ColumnDecoder for DateTime<Utc> {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
+        let num_of_milliseconds = u64::from_be_bytes(slice.try_into()?);
+        let num_of_secs = num_of_milliseconds / 1000;
+        let milli_reminder = (num_of_milliseconds % num_of_secs) as u32;
+        let dt = NaiveDateTime::from_timestamp(num_of_secs as i64, milli_reminder * 1000_000);
+        Ok(DateTime::<Utc>::from_utc(dt, Utc))
+    }
+}
+
+impl ColumnDecoder for NaiveDateTime {
+    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
+        let num_of_nanos = u64::from_be_bytes(slice.try_into()?);
+        let num_of_secs = num_of_nanos / 1000_000_000;
+        Ok(NaiveDateTime::from_timestamp(num_of_secs as i64, num_of_nanos as u32))
+    }
+}
 
 // helper types decoder functions
 /// Get the string list from a u8 slice.
@@ -748,4 +794,5 @@ pub fn string_list_with_returned_bytes_length(slice: &[u8]) -> anyhow::Result<(V
     }
     Ok((list, s))
 }
+// todo inet fn (with port).
 // todo inet fn (with port).

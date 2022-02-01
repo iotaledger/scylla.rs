@@ -26,7 +26,7 @@ scylla-rs-macros = { path = "../scylla-macros" }
 scylla-parse = { path = "../scylla-parse" }
 arc-swap = "1.5"
 maplit = "1.0"
-
+chrono = "0.4"
 # App
 #backstage = { version = "0.1", optional = true }
 backstage = { git = "https://github.com/iotaledger/backstage", default-features = false, branch = "stable", optional = true, features = ["backserver"] }

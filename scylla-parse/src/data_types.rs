@@ -1223,7 +1223,7 @@ impl Parse for TimestampLiteral {
                 ts.value
                     .parse::<DateTime<Utc>>()
                     .map_err(|e| anyhow::anyhow!(e))?
-                    .timestamp(),
+                    .timestamp_millis(),
             ))
         } else {
             Ok(Self(s.parse::<u64>()? as i64))

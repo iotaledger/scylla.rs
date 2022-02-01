@@ -3,6 +3,14 @@
 
 //! This module implements the frame encoder.
 
+use chrono::{
+    Date,
+    DateTime,
+    Datelike,
+    NaiveDate,
+    NaiveDateTime,
+    TimeZone,
+};
 use std::{
     collections::HashMap,
     io::Cursor,
@@ -290,6 +298,38 @@ impl ColumnEncoder for Unset {
 impl ColumnEncoder for Null {
     fn encode(&self, buffer: &mut Vec<u8>) {
         buffer.extend(&BE_NULL_BYTES_LEN);
+    }
+}
+
+impl<Tz: TimeZone> ColumnEncoder for Date<Tz> {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        let num_days = self.num_days_from_ce() - 719_163;
+        buffer.extend(&BE_4_BYTES_LEN);
+        buffer.extend(&u32::to_be_bytes(num_days as u32))
+    }
+}
+
+impl ColumnEncoder for NaiveDate {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        let num_days = self.num_days_from_ce() - 719_163;
+        buffer.extend(&BE_4_BYTES_LEN);
+        buffer.extend(&u32::to_be_bytes(num_days as u32))
+    }
+}
+
+impl<Tz: TimeZone> ColumnEncoder for DateTime<Tz> {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        let cql_timestamp = self.timestamp_millis();
+        buffer.extend(&BE_8_BYTES_LEN);
+        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64))
+    }
+}
+
+impl ColumnEncoder for NaiveDateTime {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        let cql_timestamp = self.timestamp_nanos();
+        buffer.extend(&BE_8_BYTES_LEN);
+        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64))
     }
 }
 
