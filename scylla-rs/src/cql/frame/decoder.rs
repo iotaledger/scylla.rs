@@ -15,15 +15,6 @@ use super::{
         PagingState,
     },
 };
-use chrono::{
-    Date,
-    DateTime,
-    NaiveDate,
-    NaiveDateTime,
-    NaiveTime,
-    Utc,
-};
-
 use crate::{
     cql::compression::{
         Compression,
@@ -34,6 +25,11 @@ use crate::{
 use anyhow::{
     anyhow,
     ensure,
+};
+use chrono::{
+    NaiveDate,
+    NaiveDateTime,
+    NaiveTime,
 };
 use std::{
     collections::HashMap,
