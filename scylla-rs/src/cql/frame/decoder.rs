@@ -666,17 +666,6 @@ where
     }
 }
 
-impl ColumnDecoder for Date<Utc> {
-    fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
-        let num_days = u32::from_be_bytes(slice.try_into()?);
-        let epoch = NaiveDate::from_ymd(1970, 1, 1);
-        let dt = Date::<Utc>::from_utc(epoch, Utc);
-        Ok(dt
-            .checked_add_signed(chrono::Duration::days(num_days as i64))
-            .ok_or(anyhow!("Overflowed epoch + duration::days"))?)
-    }
-}
-
 impl ColumnDecoder for NaiveDate {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let num_days = u32::from_be_bytes(slice.try_into()?);
@@ -687,23 +676,19 @@ impl ColumnDecoder for NaiveDate {
     }
 }
 
-impl ColumnDecoder for DateTime<Utc> {
+impl ColumnDecoder for NaiveTime {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
-        let num_of_milliseconds = u64::from_be_bytes(slice.try_into()?);
-        let millis_reminder = (num_of_milliseconds % 1000) as u32;
-        let dt = NaiveDateTime::from_timestamp((num_of_milliseconds/1000) as i64, millis_reminder * 1000_000);
-        Ok(DateTime::<Utc>::from_utc(dt, Utc))
+        let nanos = u64::from_be_bytes(slice.try_into()?);
+        let (secs, nanos) = (nanos / 1_000_000_000, nanos % 1_000_000_000);
+        Ok(NaiveTime::from_num_seconds_from_midnight(secs as u32, nanos as u32))
     }
 }
 
-impl ColumnDecoder for NaiveTime {
+impl ColumnDecoder for NaiveDateTime {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
-        let num_of_nanos = u64::from_be_bytes(slice.try_into()?);
-        let nanos_reminder = num_of_nanos % 1000_000_000;
-        Ok(NaiveTime::from_num_seconds_from_midnight(
-            (num_of_nanos / 1000_000_000) as u32,
-            nanos_reminder as u32,
-        ))
+        let millis = u64::from_be_bytes(slice.try_into()?);
+        let (secs, nanos) = (millis / 1_000, millis % 1_000 * 1_000_000);
+        Ok(NaiveDateTime::from_timestamp(secs as i64, nanos as u32))
     }
 }
 

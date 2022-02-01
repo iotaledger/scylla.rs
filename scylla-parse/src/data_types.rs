@@ -26,13 +26,11 @@ use super::{
     TokenWrapper,
 };
 use chrono::{
-    DateTime,
     Datelike,
     NaiveDate,
     NaiveDateTime,
     NaiveTime,
     Timelike,
-    Utc,
 };
 use derive_builder::Builder;
 use derive_more::{
@@ -1221,7 +1219,7 @@ impl Parse for TimestampLiteral {
         if let Some(ts) = s.parse::<Option<LitStr>>()? {
             Ok(Self(
                 ts.value
-                    .parse::<DateTime<Utc>>()
+                    .parse::<NaiveDateTime>()
                     .map_err(|e| anyhow::anyhow!(e))?
                     .timestamp_millis(),
             ))
@@ -1238,7 +1236,7 @@ impl Parse for DateLiteral {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(d) = s.parse::<Option<LitStr>>()? {
             let dur = d.value.parse::<NaiveDate>().map_err(|e| anyhow::anyhow!(e))? - NaiveDate::from_ymd(1970, 1, 1);
-            Ok(Self(dur.num_days() as u32))
+            Ok(Self(dur.num_days() as u32 + (1 << 31)))
         } else {
             Ok(Self(s.parse::<u32>()?))
         }

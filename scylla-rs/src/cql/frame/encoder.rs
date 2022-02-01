@@ -9,7 +9,9 @@ use chrono::{
     Datelike,
     NaiveDate,
     NaiveDateTime,
+    NaiveTime,
     TimeZone,
+    Timelike,
 };
 use std::{
     collections::HashMap,
@@ -301,33 +303,30 @@ impl ColumnEncoder for Null {
     }
 }
 
-impl<Tz: TimeZone> ColumnEncoder for Date<Tz> {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        let num_days = self.num_days_from_ce() - 719_163;
-        buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&u32::to_be_bytes(num_days as u32))
-    }
-}
-
 impl ColumnEncoder for NaiveDate {
     fn encode(&self, buffer: &mut Vec<u8>) {
-        let num_days = self.num_days_from_ce() - 719_163;
+        let days = self.num_days_from_ce() - 719_163 + (1 << 31);
         buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&u32::to_be_bytes(num_days as u32))
-    }
-}
-
-impl<Tz: TimeZone> ColumnEncoder for DateTime<Tz> {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        let cql_timestamp = self.timestamp_millis();
-        buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64))
+        buffer.extend(&u32::to_be_bytes(days as u32))
     }
 }
 
 impl ColumnEncoder for NaiveTime {
     fn encode(&self, buffer: &mut Vec<u8>) {
-        todo!("encode nanos since midnight")
+        let nanos = self.hour() as u64 * 3_600_000_000_000
+            + self.minute() as u64 * 60_000_000_000
+            + self.second() as u64 * 1_000_000_000
+            + self.nanosecond() as u64;
+        buffer.extend(&BE_8_BYTES_LEN);
+        buffer.extend(&u64::to_be_bytes(nanos as u64))
+    }
+}
+
+impl ColumnEncoder for NaiveDateTime {
+    fn encode(&self, buffer: &mut Vec<u8>) {
+        let cql_timestamp = self.timestamp_millis();
+        buffer.extend(&BE_8_BYTES_LEN);
+        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64))
     }
 }
 
