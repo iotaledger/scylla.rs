@@ -20,6 +20,7 @@ use chrono::{
     DateTime,
     NaiveDate,
     NaiveDateTime,
+    NaiveTime,
     Utc,
 };
 
@@ -689,19 +690,20 @@ impl ColumnDecoder for NaiveDate {
 impl ColumnDecoder for DateTime<Utc> {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let num_of_milliseconds = u64::from_be_bytes(slice.try_into()?);
-        let num_of_secs = num_of_milliseconds / 1000;
-        let milli_reminder = (num_of_milliseconds % num_of_secs) as u32;
-        let dt = NaiveDateTime::from_timestamp(num_of_secs as i64, milli_reminder * 1000_000);
+        let millis_reminder = (num_of_milliseconds % 1000) as u32;
+        let dt = NaiveDateTime::from_timestamp((num_of_milliseconds/1000) as i64, millis_reminder * 1000_000);
         Ok(DateTime::<Utc>::from_utc(dt, Utc))
     }
 }
 
-impl ColumnDecoder for NaiveDateTime {
+impl ColumnDecoder for NaiveTime {
     fn try_decode_column(slice: &[u8]) -> anyhow::Result<Self> {
         let num_of_nanos = u64::from_be_bytes(slice.try_into()?);
-        let num_of_secs = num_of_nanos / 1000_000_000;
-        let nano_reminder = (num_of_nanos % num_of_secs) as u32;
-        Ok(NaiveDateTime::from_timestamp(num_of_secs as i64, nano_reminder))
+        let nanos_reminder = num_of_nanos % 1000_000_000;
+        Ok(NaiveTime::from_num_seconds_from_midnight(
+            (num_of_nanos / 1000_000_000) as u32,
+            nanos_reminder as u32,
+        ))
     }
 }
 

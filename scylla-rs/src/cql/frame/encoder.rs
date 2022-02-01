@@ -325,11 +325,9 @@ impl<Tz: TimeZone> ColumnEncoder for DateTime<Tz> {
     }
 }
 
-impl ColumnEncoder for NaiveDateTime {
+impl ColumnEncoder for NaiveTime {
     fn encode(&self, buffer: &mut Vec<u8>) {
-        let cql_timestamp = self.timestamp_nanos();
-        buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64))
+        todo!("encode nanos since midnight")
     }
 }
 
