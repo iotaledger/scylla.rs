@@ -180,7 +180,7 @@ impl Parse for Operator {
                 ),
             })
         } else {
-            anyhow::bail!("Invalid token for operator: {}", s.info())
+            anyhow::bail!("Expected operator, found {}", s.info())
         }
     }
 }
@@ -277,7 +277,7 @@ impl Parse for TimeUnit {
                 ),
             })
         } else {
-            anyhow::bail!("Invalid token for time unit: {}", s.info())
+            anyhow::bail!("Expected time unit, found {}", s.info())
         }
     }
 }
@@ -402,7 +402,7 @@ impl Parse for Term {
                 rhs: Box::new(rhs),
             }
         } else {
-            anyhow::bail!("Invalid term: {}", s.info())
+            anyhow::bail!("Expected term, found {}", s.info())
         })
     }
 }
@@ -588,7 +588,7 @@ impl Parse for Constant {
         } else if let Some(h) = s.parse_from::<Option<Hex>>()? {
             Constant::Hex(h)
         } else {
-            anyhow::bail!("Invalid constant: {}", s.info())
+            anyhow::bail!("Expected constant, found {}", s.info())
         })
     }
 }
@@ -751,7 +751,7 @@ impl Parse for Literal {
         } else if let Some(t) = s.parse()? {
             Self::Tuple(t)
         } else {
-            anyhow::bail!("Invalid CQL literal type: {}", s.info())
+            anyhow::bail!("Expected CQL literal, found {}", s.info())
         })
     }
 }
@@ -793,7 +793,7 @@ impl Parse for CqlType {
         } else if let Some(c) = s.parse()? {
             Self::Custom(c)
         } else {
-            anyhow::bail!("Invalid CQL Type: {}", s.info())
+            anyhow::bail!("Expected CQL Type, found {}", s.info())
         })
     }
 }
@@ -936,7 +936,7 @@ impl Parse for CollectionTypeLiteral {
         } else if let Some(m) = s.parse()? {
             Self::Map(m)
         } else {
-            anyhow::bail!("Invalid collection literal type: {}", s.info())
+            anyhow::bail!("Expected collection literal, found {}", s.info())
         })
     }
 }
@@ -986,7 +986,7 @@ impl Parse for CollectionType {
         } else if s.parse::<Option<LIST>>()?.is_some() {
             Self::List(s.parse_from::<Angles<CqlType>>()?)
         } else {
-            anyhow::bail!("Invalid collection type: {}", s.info())
+            anyhow::bail!("Expected collection type, found {}", s.info())
         })
     }
 }

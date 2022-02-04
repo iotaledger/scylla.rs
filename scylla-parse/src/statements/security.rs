@@ -669,7 +669,7 @@ impl Parse for Permission {
             ReservedKeyword::AUTHORIZE => Permission::Authorize,
             ReservedKeyword::DESCRIBE => Permission::Describe,
             ReservedKeyword::EXECUTE => Permission::Execute,
-            p @ _ => anyhow::bail!("Invalid permission: {}", p),
+            p @ _ => anyhow::bail!("Expected permission, found {}", p),
         })
     }
 }
@@ -810,7 +810,7 @@ impl Parse for Resource {
         } else if let Some(name) = s.parse::<Option<KeyspaceQualifiedName>>()? {
             Self::Table(name)
         } else {
-            anyhow::bail!("Invalid resource: {}", s.info())
+            anyhow::bail!("Expected resource, found {}", s.info())
         })
     }
 }
@@ -1456,7 +1456,7 @@ impl Parse for TaggedUserDefinedTypeStatement {
             } else if let Some(stmt) = s.parse::<Option<TaggedDropUserDefinedTypeStatement>>()? {
                 Self::Drop(stmt)
             } else {
-                anyhow::bail!("Invalid user defined type statement!")
+                anyhow::bail!("Expected user defined type statement, found {}", s.info())
             },
         )
     }

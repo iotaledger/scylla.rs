@@ -358,7 +358,7 @@ impl Parse for OnNullInput {
         } else if s.parse::<(RETURNS, NULL, ON, NULL, INPUT)>().is_ok() {
             Self::ReturnsNull
         } else {
-            anyhow::bail!("Invalid ON NULL INPUT declaration: {}", s.info())
+            anyhow::bail!("Expected ON NULL INPUT declaration, found {}", s.info())
         })
     }
 }

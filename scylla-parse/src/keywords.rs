@@ -366,7 +366,7 @@ impl FromStr for ReservedKeyword {
             "VIEW" => ReservedKeyword::VIEW,
             "WHERE" => ReservedKeyword::WHERE,
             "WITH" => ReservedKeyword::WITH,
-            _ => anyhow::bail!("Invalid keyword: {}", s),
+            _ => anyhow::bail!("Expected reserved keyword, found {}", s),
         })
     }
 }

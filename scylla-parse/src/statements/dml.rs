@@ -535,7 +535,7 @@ impl Parse for SelectorKind {
         } else if let Some(term) = s.parse()? {
             Self::Term(term)
         } else {
-            anyhow::bail!("Invalid selector: {}", s.info())
+            anyhow::bail!("Expected selector, found {}", s.info())
         })
     }
 }
@@ -681,7 +681,11 @@ impl InsertKind {
             anyhow::bail!("No values specified!");
         }
         if names.len() != values.len() {
-            anyhow::bail!("Number of column names and values do not match!");
+            anyhow::bail!(
+                "Number of column names and values do not match! ({} names vs {} values)",
+                names.len(),
+                values.len()
+            );
         }
         Ok(Self::NameValue {
             names,
@@ -708,6 +712,13 @@ impl Parse for InsertKind {
             })
         } else {
             let (names, _, values) = s.parse_from::<(Parens<List<Name, Comma>>, VALUES, TupleLiteral)>()?;
+            if names.len() != values.elements.len() {
+                anyhow::bail!(
+                    "Number of column names and values do not match! ({} names vs {} values)",
+                    names.len(),
+                    values.elements.len()
+                );
+            }
             Ok(Self::NameValue { names, values })
         }
     }
@@ -764,7 +775,7 @@ impl Parse for UpdateParameter {
         } else if s.parse::<Option<TIMEOUT>>()?.is_some() {
             Ok(UpdateParameter::Timeout(s.parse()?))
         } else {
-            anyhow::bail!("Invalid update parameter: {}", s.info())
+            anyhow::bail!("Expected update parameter, found {}", s.info())
         }
     }
 }
@@ -1678,8 +1689,10 @@ impl Parse for Limit {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if let Some(bind) = s.parse::<Option<BindMarker>>()? {
             Ok(Limit::BindMarker(bind))
+        } else if let Some(n) = s.parse::<Option<i32>>()? {
+            Ok(Limit::Literal(n))
         } else {
-            Ok(Limit::Literal(s.parse::<i32>()?))
+            anyhow::bail!("Expected an integer or bind marker (?), found {}", s.info())
         }
     }
 }
@@ -1713,7 +1726,7 @@ impl Parse for ColumnDefault {
         } else if s.parse::<Option<UNSET>>()?.is_some() {
             Ok(ColumnDefault::Unset)
         } else {
-            anyhow::bail!("Invalid column default: {}", s.info())
+            anyhow::bail!("Expected column default (NULL/UNSET), found {}", s.info())
         }
     }
 }

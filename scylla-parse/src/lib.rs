@@ -49,9 +49,6 @@ pub use keywords::*;
 mod data_types;
 pub use data_types::*;
 
-mod regex;
-pub use self::regex::*;
-
 pub struct StreamInfo {
     pub next_token: String,
     pub pos: usize,
@@ -389,7 +386,7 @@ macro_rules! parse_number {
             fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
                 s.parse_from::<$t>()?
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("Invalid {}!", std::any::type_name::<$n>()))
+                    .map_err(|_| anyhow::anyhow!("Invalid {}! {}", std::any::type_name::<$n>(), s.info()))
             }
         }
     };
@@ -667,6 +664,9 @@ impl Parse for Alpha {
                 res.push(c);
                 s.next();
             } else {
+                if res.is_empty() {
+                    anyhow::bail!("Expected text, found: {}", s.info())
+                }
                 break;
             }
         }
@@ -688,6 +688,9 @@ impl Parse for Hex {
                 res.push(c);
                 s.next();
             } else {
+                if res.is_empty() {
+                    anyhow::bail!("Expected hex, found: {}", s.info())
+                }
                 break;
             }
         }
@@ -730,6 +733,9 @@ impl Parse for Number {
                 res.push(c);
                 s.next();
             } else {
+                if res.is_empty() {
+                    anyhow::bail!("Expected number, found: {}", s.info())
+                }
                 break;
             }
         }
@@ -762,6 +768,9 @@ impl Parse for SignedNumber {
                     s.next();
                 }
             } else {
+                if res.is_empty() {
+                    anyhow::bail!("Expected signed number, found: {}", s.info())
+                }
                 break;
             }
         }
@@ -827,6 +836,9 @@ impl Parse for Float {
                     }
                 }
             } else {
+                if res.is_empty() {
+                    anyhow::bail!("Expected float, found: {}", s.info())
+                }
                 break;
             }
         }
@@ -884,9 +896,10 @@ impl Parse for BindMarker {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         Ok(if s.parse::<Option<Question>>()?.is_some() {
             BindMarker::Anonymous
-        } else {
-            let (_, id) = s.parse::<(Colon, Name)>()?;
+        } else if let Some((_, id)) = s.parse::<Option<(Colon, Name)>>()? {
             BindMarker::Named(id)
+        } else {
+            anyhow::bail!("Expected bind marker, found: {}", s.info())
         })
     }
 }
@@ -912,7 +925,7 @@ impl Parse for Uuid {
         if let Some(u) = s.nextn(36) {
             Ok(uuid::Uuid::parse_str(&u)?)
         } else {
-            anyhow::bail!("Invalid UUID: {}", s.info())
+            anyhow::bail!("Expected UUID, found {}", s.info())
         }
     }
 }
@@ -1265,7 +1278,7 @@ impl Parse for TaggedStatementOptValue {
         } else if let Some(identifier) = s.parse::<Option<Tag<Name>>>()? {
             Ok(Self::Identifier(identifier))
         } else {
-            anyhow::bail!("Invalid statement option value: {}", s.info())
+            anyhow::bail!("Expected statement option value, found {}", s.info())
         }
     }
 }
@@ -1768,7 +1781,7 @@ impl Parse for Order {
         } else if s.parse::<Option<DESC>>()?.is_some() {
             Ok(Order::Descending)
         } else {
-            anyhow::bail!("Invalid sort order: {}", s.info())
+            anyhow::bail!("Expected sort order (ASC/DESC), found {}", s.info())
         }
     }
 }
@@ -1861,9 +1874,10 @@ impl Parse for Relation {
                     operator,
                     tuple_literal,
                 }
-            } else {
-                let (column, operator, term) = s.parse()?;
+            } else if let Some((column, operator, term)) = s.parse::<Option<(Name, Operator, Term)>>()? {
                 Relation::Normal { column, operator, term }
+            } else {
+                anyhow::bail!("Expected relation, found {}", s.info())
             },
         )
     }
@@ -2863,8 +2877,10 @@ impl Parse for RowsPerPartition {
                 "NONE" => RowsPerPartition::None,
                 _ => anyhow::bail!("Invalid rows_per_partition: {}", ss),
             }
+        } else if let Some(c) = s.parse::<Option<i32>>()? {
+            Self::Count(c)
         } else {
-            Self::Count(s.parse()?)
+            anyhow::bail!("Expected ROWS PER PARTITION value, found {}", s.info())
         })
     }
 }

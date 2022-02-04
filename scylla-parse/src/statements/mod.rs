@@ -256,10 +256,10 @@ impl Parse for TaggedStatement {
                 | ReservedKeyword::UPDATE
                 | ReservedKeyword::DELETE
                 | ReservedKeyword::BEGIN => Self::DataManipulation(s.parse()?),
-                _ => anyhow::bail!("Invalid statement: {}", s.info()),
+                _ => anyhow::bail!("Expected statement, found {}", s.info()),
             }
         } else {
-            anyhow::bail!("Invalid statement: {}", s.info())
+            anyhow::bail!("Expected statement, found {}", s.info())
         })
     }
 }

@@ -643,7 +643,7 @@ impl Parse for AlterTableInstruction {
             } else if s.parse::<Option<WITH>>()?.is_some() {
                 Self::With(s.parse_from::<TableOpts>()?)
             } else {
-                anyhow::bail!("Invalid ALTER TABLE instruction: {}", s.info());
+                anyhow::bail!("Expected ALTER TABLE instruction, found {}", s.info());
             },
         )
     }
