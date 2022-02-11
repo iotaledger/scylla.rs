@@ -446,7 +446,7 @@ impl TryFrom<TaggedCreateTableStatement> for CreateTableStatement {
             table: value.table.try_into()?,
             columns: value.columns,
             primary_key: value.primary_key,
-            options: value.options,
+            options: value.options.map(|v| v.into_value()).transpose()?,
         })
     }
 }
@@ -462,7 +462,7 @@ pub struct TaggedCreateTableStatement {
     #[builder(default)]
     pub primary_key: Option<PrimaryKey>,
     #[builder(default)]
-    pub options: Option<TableOpts>,
+    pub options: Option<Tag<TableOpts>>,
 }
 
 impl CreateTableStatementBuilder {
@@ -503,7 +503,7 @@ impl Parse for TaggedCreateTableStatement {
             res.primary_key(p);
         }
         s.parse::<RightParen>()?;
-        if let Some(p) = s.parse_from::<If<WITH, TableOpts>>()? {
+        if let Some(p) = s.parse_from::<If<WITH, Tag<TableOpts>>>()? {
             res.options(p);
         }
         s.parse::<Option<Semicolon>>()?;

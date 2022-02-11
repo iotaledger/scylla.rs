@@ -58,15 +58,17 @@ impl Display for MaterializedViewStatement {
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 #[parse_via(TaggedCreateMaterializedViewStatement)]
+#[builder(setter(strip_option))]
 pub struct CreateMaterializedViewStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(setter(into))]
-    pub name: Name,
+    pub name: KeyspaceQualifiedName,
     pub select_statement: SelectStatement,
     #[builder(setter(into))]
     pub primary_key: PrimaryKey,
-    pub table_opts: TableOpts,
+    #[builder(default)]
+    pub table_opts: Option<TableOpts>,
 }
 
 impl TryFrom<TaggedCreateMaterializedViewStatement> for CreateMaterializedViewStatement {
@@ -74,23 +76,25 @@ impl TryFrom<TaggedCreateMaterializedViewStatement> for CreateMaterializedViewSt
     fn try_from(value: TaggedCreateMaterializedViewStatement) -> Result<Self, Self::Error> {
         Ok(Self {
             if_not_exists: value.if_not_exists,
-            name: value.name.into_value()?,
+            name: value.name.try_into()?,
             select_statement: value.select_statement.into_value()?,
             primary_key: value.primary_key.into_value()?,
-            table_opts: value.table_opts.into_value()?,
+            table_opts: value.table_opts.map(|v| v.into_value()).transpose()?,
         })
     }
 }
 
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 #[tokenize_as(CreateMaterializedViewStatement)]
+#[builder(setter(strip_option))]
 pub struct TaggedCreateMaterializedViewStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
-    pub name: Tag<Name>,
+    pub name: TaggedKeyspaceQualifiedName,
     pub select_statement: Tag<SelectStatement>,
     pub primary_key: Tag<PrimaryKey>,
-    pub table_opts: Tag<TableOpts>,
+    #[builder(default)]
+    pub table_opts: Option<Tag<TableOpts>>,
 }
 
 impl CreateMaterializedViewStatementBuilder {
@@ -110,8 +114,10 @@ impl Parse for TaggedCreateMaterializedViewStatement {
         res.set_if_not_exists(s.parse::<Option<(IF, NOT, EXISTS)>>()?.is_some())
             .name(s.parse()?)
             .select_statement(s.parse::<(AS, _)>()?.1)
-            .primary_key(s.parse_from::<((PRIMARY, KEY), Parens<Tag<PrimaryKey>>)>()?.1)
-            .table_opts(s.parse::<(WITH, _)>()?.1);
+            .primary_key(s.parse_from::<((PRIMARY, KEY), Parens<Tag<PrimaryKey>>)>()?.1);
+        if let Some(p) = s.parse_from::<If<WITH, Tag<TableOpts>>>()? {
+            res.table_opts(p);
+        }
         s.parse::<Option<Semicolon>>()?;
         Ok(res
             .build()
@@ -123,12 +129,15 @@ impl Display for CreateMaterializedViewStatement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "CREATE MATERIALIZED VIEW{} {} AS {} PRIMARY KEY ({}) WITH {}",
+            "CREATE MATERIALIZED VIEW{} {} AS {} PRIMARY KEY ({}){}",
             if self.if_not_exists { " IF NOT EXISTS" } else { "" },
             self.name,
             self.select_statement,
             self.primary_key,
-            self.table_opts
+            match self.table_opts.as_ref() {
+                Some(opts) => format!(" WITH {}", opts),
+                None => "".to_string(),
+            }
         )
     }
 }
@@ -137,7 +146,7 @@ impl Display for CreateMaterializedViewStatement {
 #[parse_via(TaggedAlterMaterializedViewStatement)]
 pub struct AlterMaterializedViewStatement {
     #[builder(setter(into))]
-    pub name: Name,
+    pub name: KeyspaceQualifiedName,
     pub table_opts: TableOpts,
 }
 
@@ -145,7 +154,7 @@ impl TryFrom<TaggedAlterMaterializedViewStatement> for AlterMaterializedViewStat
     type Error = anyhow::Error;
     fn try_from(value: TaggedAlterMaterializedViewStatement) -> Result<Self, Self::Error> {
         Ok(Self {
-            name: value.name.into_value()?,
+            name: value.name.try_into()?,
             table_opts: value.table_opts.into_value()?,
         })
     }
@@ -154,7 +163,7 @@ impl TryFrom<TaggedAlterMaterializedViewStatement> for AlterMaterializedViewStat
 #[derive(ParseFromStr, Builder, Clone, Debug, ToTokens, PartialEq)]
 #[tokenize_as(AlterMaterializedViewStatement)]
 pub struct TaggedAlterMaterializedViewStatement {
-    pub name: Tag<Name>,
+    pub name: TaggedKeyspaceQualifiedName,
     pub table_opts: Tag<TableOpts>,
 }
 
@@ -183,7 +192,7 @@ pub struct DropMaterializedViewStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
     #[builder(setter(into))]
-    pub name: Name,
+    pub name: KeyspaceQualifiedName,
 }
 
 impl TryFrom<TaggedDropMaterializedViewStatement> for DropMaterializedViewStatement {
@@ -191,7 +200,7 @@ impl TryFrom<TaggedDropMaterializedViewStatement> for DropMaterializedViewStatem
     fn try_from(value: TaggedDropMaterializedViewStatement) -> Result<Self, Self::Error> {
         Ok(Self {
             if_exists: value.if_exists,
-            name: value.name.into_value()?,
+            name: value.name.try_into()?,
         })
     }
 }
@@ -201,7 +210,7 @@ impl TryFrom<TaggedDropMaterializedViewStatement> for DropMaterializedViewStatem
 pub struct TaggedDropMaterializedViewStatement {
     #[builder(setter(name = "set_if_exists"), default)]
     pub if_exists: bool,
-    pub name: Tag<Name>,
+    pub name: TaggedKeyspaceQualifiedName,
 }
 
 impl DropMaterializedViewStatementBuilder {
@@ -241,11 +250,12 @@ impl Display for DropMaterializedViewStatement {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::KeyspaceQualifyExt;
 
     #[test]
     fn test_parse_create_mv() {
         let mut builder = CreateMaterializedViewStatementBuilder::default();
-        builder.name("test_mv");
+        builder.name("my_keyspace".dot("test_mv"));
         assert!(builder.build().is_err());
         builder.select_statement(
             SelectStatementBuilder::default()
