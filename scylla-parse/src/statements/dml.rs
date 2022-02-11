@@ -1321,7 +1321,7 @@ impl TryFrom<TaggedBatchStatement> for BatchStatement {
             statements: value
                 .statements
                 .into_iter()
-                .map(|v| v.into_value())
+                .map(|v| v.into_value().and_then(|v| v.try_into()))
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -1335,7 +1335,7 @@ pub struct TaggedBatchStatement {
     pub kind: BatchKind,
     #[builder(setter(strip_option), default)]
     pub using: Option<Tag<Vec<UpdateParameter>>>,
-    pub statements: Vec<Tag<ModificationStatement>>,
+    pub statements: Vec<Tag<TaggedModificationStatement>>,
 }
 
 impl BatchStatement {

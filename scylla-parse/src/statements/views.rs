@@ -77,7 +77,7 @@ impl TryFrom<TaggedCreateMaterializedViewStatement> for CreateMaterializedViewSt
         Ok(Self {
             if_not_exists: value.if_not_exists,
             name: value.name.try_into()?,
-            select_statement: value.select_statement.into_value()?,
+            select_statement: value.select_statement.into_value()?.try_into()?,
             primary_key: value.primary_key.into_value()?,
             table_opts: value.table_opts.map(|v| v.into_value()).transpose()?,
         })
@@ -91,7 +91,7 @@ pub struct TaggedCreateMaterializedViewStatement {
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     pub name: TaggedKeyspaceQualifiedName,
-    pub select_statement: Tag<SelectStatement>,
+    pub select_statement: Tag<TaggedSelectStatement>,
     pub primary_key: Tag<PrimaryKey>,
     #[builder(default)]
     pub table_opts: Option<Tag<TableOpts>>,
@@ -270,7 +270,8 @@ mod test {
         );
         assert!(builder.build().is_err());
         builder.primary_key(vec!["column_1", "column 2"]);
-        assert!(builder.build().is_err());
+        let statement = builder.build().unwrap().to_string();
+        assert_eq!(builder.build().unwrap(), statement.parse().unwrap());
         builder.table_opts(
             crate::TableOptsBuilder::default()
                 .comment(r#"test comment " "#)
