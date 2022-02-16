@@ -19,8 +19,7 @@ impl BasicWorker {
 }
 
 impl Worker for BasicWorker {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        Decoder::try_from(giveload)?;
+    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -99,8 +98,7 @@ impl<R> Worker for BasicRetryWorker<R>
 where
     R: 'static + Debug + Send + Request + Sync,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        Decoder::try_from(giveload)?;
+    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
         Ok(())
     }
 

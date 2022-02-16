@@ -1,6 +1,8 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::cql::compression::Compression;
+
 use super::stage::Stage;
 use async_trait::async_trait;
 use backstage::core::{
@@ -18,7 +20,10 @@ use backstage::core::{
     SupHandle,
     UnboundedChannel,
 };
-use std::net::SocketAddr;
+use std::{
+    marker::PhantomData,
+    net::SocketAddr,
+};
 
 /// Node event enum.
 #[backstage::core::supervise]
@@ -33,21 +38,26 @@ pub enum NodeEvent {
 }
 
 /// Node state
-pub struct Node {
+pub struct Node<C: Compression> {
     address: SocketAddr,
     shard_count: usize,
+    _compression: PhantomData<fn(C) -> C>,
 }
 
-impl Node {
+impl<C: Compression> Node<C> {
     /// Create new Node with the provided socket address
     pub fn new(address: SocketAddr, shard_count: usize) -> Self {
-        Self { address, shard_count }
+        Self {
+            address,
+            shard_count,
+            _compression: PhantomData,
+        }
     }
 }
 
 /// The Node actor lifecycle implementation
 #[async_trait]
-impl<S> Actor<S> for Node
+impl<S, C: 'static + Compression> Actor<S> for Node<C>
 where
     S: SupHandle<Self>,
 {
@@ -56,7 +66,7 @@ where
     async fn init(&mut self, rt: &mut Rt<Self, S>) -> ActorResult<Self::Data> {
         // start stages in sync
         for shard_id in 0..self.shard_count {
-            let stage = Stage::new(self.address, shard_id, self.shard_count);
+            let stage = Stage::<C>::new(self.address, shard_id, self.shard_count);
             rt.start(format!("stage_{}", shard_id), stage).await?;
         }
         Ok(())

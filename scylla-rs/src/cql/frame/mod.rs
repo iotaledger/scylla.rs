@@ -153,3 +153,15 @@ impl<T: Bindable> Bindable for [T] {
         Ok(())
     }
 }
+
+pub struct FrameBuilder;
+
+impl FrameBuilder {
+    pub fn build(header: [u8; 5], body: &[u8]) -> Vec<u8> {
+        let mut body_buf = i32::to_be_bytes(body.len() as i32).to_vec();
+        body_buf.extend(body);
+        let mut buf = header.to_vec();
+        buf.extend(body_buf);
+        buf
+    }
+}

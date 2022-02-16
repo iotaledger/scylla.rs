@@ -102,12 +102,9 @@ where
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        match Decoder::try_from(giveload) {
-            Ok(decoder) => match V::try_decode_rows(decoder) {
-                Ok(res) => self.handle.handle_response(res),
-                Err(e) => self.handle.handle_error(WorkerError::Other(e)),
-            },
+    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
+        match V::try_decode_rows(decoder) {
+            Ok(res) => self.handle.handle_response(res),
             Err(e) => self.handle.handle_error(WorkerError::Other(e)),
         }
     }

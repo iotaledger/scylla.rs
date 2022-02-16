@@ -1,8 +1,6 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use async_trait::async_trait;
-
 use super::{
     sender::SenderEvent,
     Payloads,
@@ -13,12 +11,13 @@ use crate::{
         WorkerError,
     },
     cql::{
+        compression::Compression,
         CqlError,
         Decoder,
     },
+    prelude::Frame,
 };
-use std::convert::TryFrom;
-
+use async_trait::async_trait;
 use backstage::core::{
     AbortableUnboundedHandle,
     Actor,
@@ -31,7 +30,11 @@ use backstage::core::{
     UnboundedChannel,
     UnboundedHandle,
 };
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+};
+
 /// Workers Map holds all the workers_ids
 type Workers = HashMap<i16, Box<dyn Worker>>;
 /// Reporter's handle, used to push cql request
@@ -63,24 +66,15 @@ impl ShutdownEvent for ReporterEvent {
     }
 }
 /// Reporter state
-pub struct Reporter {
+pub struct Reporter<C: Compression> {
     streams: Vec<i16>,
     workers: Workers,
-}
-
-impl Reporter {
-    /// Create new reporter
-    pub(super) fn new(streams: Vec<i16>) -> Self {
-        Self {
-            streams,
-            workers: HashMap::new(),
-        }
-    }
+    _compression: PhantomData<fn(C) -> C>,
 }
 
 /// The Reporter actor lifecycle implementation
 #[async_trait]
-impl<S> Actor<S> for Reporter
+impl<S, C: 'static + Compression> Actor<S> for Reporter<C>
 where
     S: SupHandle<Self>,
 {
@@ -105,19 +99,28 @@ where
     async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, sender): Self::Data) -> ActorResult<()> {
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
-                ReporterEvent::Request { worker, mut payload } => {
-                    if let Some(stream) = self.streams.pop() {
-                        // Assign stream_id to the payload
-                        assign_stream_to_payload(stream, &mut payload);
-                        // store payload as reusable at payloads[stream]
-                        payloads[stream as usize].as_mut().replace(payload);
-                        self.workers.insert(stream, worker);
-                        sender.send(stream).unwrap_or_else(|e| log::error!("{}", e));
-                    } else {
-                        // Send overload to the worker in-case we don't have anymore streams
-                        worker
-                            .handle_error(WorkerError::Overload, Some(rt.handle()))
-                            .unwrap_or_else(|e| log::error!("{}", e));
+                ReporterEvent::Request { worker, payload } => {
+                    match C::compress(&payload) {
+                        Ok(mut payload) => {
+                            if let Some(stream) = self.streams.pop() {
+                                // Assign stream_id to the payload
+                                assign_stream_to_payload(stream, &mut payload);
+                                // store payload as reusable at payloads[stream]
+                                payloads[stream as usize].as_mut().replace(payload);
+                                self.workers.insert(stream, worker);
+                                sender.send(stream).unwrap_or_else(|e| log::error!("{}", e));
+                            } else {
+                                // Send overload to the worker in-case we don't have anymore streams
+                                worker
+                                    .handle_error(WorkerError::Overload, Some(rt.handle()))
+                                    .unwrap_or_else(|e| log::error!("{}", e));
+                            }
+                        }
+                        Err(e) => {
+                            worker
+                                .handle_error(WorkerError::Other(anyhow::anyhow!(e)), Some(rt.handle()))
+                                .unwrap_or_else(|e| log::error!("{}", e));
+                        }
                     }
                 }
                 ReporterEvent::Response { stream_id } => {
@@ -140,20 +143,38 @@ where
         Ok(())
     }
 }
-impl Reporter {
+impl<C: 'static + Compression> Reporter<C> {
+    /// Create new reporter
+    pub(super) fn new(streams: Vec<i16>) -> Self {
+        Self {
+            streams,
+            workers: HashMap::new(),
+            _compression: PhantomData,
+        }
+    }
+
     fn handle_response(&mut self, handle: &ReporterHandle, stream: i16, payloads: &mut Payloads) -> anyhow::Result<()> {
         // push the stream_id back to streams vector.
         self.streams.push(stream);
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = payloads[stream as usize].as_mut().take() {
-                if is_cql_error(&payload) {
-                    let error = Decoder::try_from(payload)
-                        .and_then(|decoder| CqlError::new(&decoder).map(|e| WorkerError::Cql(e)))
-                        .unwrap_or_else(|e| WorkerError::Other(e));
-                    worker.handle_error(error, Some(handle))?;
-                } else {
-                    worker.handle_response(payload)?;
+                match Decoder::new::<C>(&payload) {
+                    Ok(decoder) => {
+                        if decoder.is_error().unwrap_or(true) {
+                            worker.handle_error(
+                                CqlError::new(&decoder)
+                                    .map(|e| WorkerError::Cql(e))
+                                    .unwrap_or_else(|e| WorkerError::Other(e)),
+                                Some(handle),
+                            )?;
+                        } else {
+                            worker.handle_response(decoder)?;
+                        }
+                    }
+                    Err(e) => {
+                        worker.handle_error(WorkerError::Other(e), Some(handle))?;
+                    }
                 }
             } else {
                 log::error!("No payload found while handling response for stream {}!", stream);
@@ -202,8 +223,4 @@ impl Reporter {
 fn assign_stream_to_payload(stream: i16, payload: &mut Vec<u8>) {
     payload[2] = (stream >> 8) as u8; // payload[2] is where the first byte of the stream_id should be,
     payload[3] = stream as u8; // payload[3] is the second byte of the stream_id. please refer to cql specs
-}
-
-fn is_cql_error(buffer: &[u8]) -> bool {
-    buffer[4] == 0
 }

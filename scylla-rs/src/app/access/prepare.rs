@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::prelude::{
-    Prepare,
-    PrepareWorker,
+use crate::{
+    cql::prepare::PrepareBuilder,
+    prelude::PrepareWorker,
 };
 
 /// Specifies helper functions for creating static prepare requests from a keyspace with any access trait definition
@@ -126,6 +126,7 @@ pub trait GetStaticPrepareRequest: Table {
         K: Bindable + TokenEncoder,
         S: Keyspace,
     {
+        dbg!(Self::statement(keyspace).to_string());
         PrepareRequest::new(Self::statement(keyspace))
     }
 
@@ -302,7 +303,11 @@ impl Request for PrepareRequest {
     }
 
     fn payload(&self) -> Vec<u8> {
-        Prepare::new().statement(&self.statement.to_string()).build().unwrap().0
+        PrepareBuilder::default()
+            .statement(&self.statement.to_string())
+            .build()
+            .unwrap()
+            .0
     }
 
     fn keyspace(&self) -> Option<String> {

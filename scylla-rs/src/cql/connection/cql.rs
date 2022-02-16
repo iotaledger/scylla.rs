@@ -7,15 +7,18 @@ use super::tokens::{
 };
 use crate::{
     cql::{
+        auth_response::{
+            AuthResponse,
+            AuthResponseBuilder,
+        },
         compression::{
-            MyCompression,
-            UNCOMPRESSED,
+            Compression,
+            Uncompressed,
         },
         frame::{
             auth_challenge::AuthChallenge,
             auth_response::{
                 AllowAllAuth,
-                AuthResponse,
                 Authenticator,
                 PasswordAuth,
             },
@@ -31,6 +34,7 @@ use crate::{
             startup::Startup,
             supported::Supported,
         },
+        startup::StartupBuilder,
     },
     prelude::QueryBuilder,
 };
@@ -46,6 +50,7 @@ use port_scanner::{
 use std::{
     collections::HashMap,
     convert::TryInto,
+    marker::PhantomData,
     net::{
         IpAddr,
         Ipv4Addr,
@@ -63,9 +68,8 @@ use tokio::{
     },
 };
 
-#[derive(Default)]
 /// CqlBuilder struct to establish cql connection with the provided configurations
-pub struct CqlBuilder<Auth: Authenticator> {
+pub struct CqlBuilder<Auth: Authenticator, C: Compression> {
     address: Option<SocketAddr>,
     local_addr: Option<SocketAddr>,
     tokens: bool,
@@ -73,10 +77,40 @@ pub struct CqlBuilder<Auth: Authenticator> {
     send_buffer_size: Option<u32>,
     shard_id: Option<u16>,
     authenticator: Option<Auth>,
-    cql: Option<Cql>,
+    cql: Option<Cql<C>>,
 }
+
+impl<Auth: Authenticator, C: Compression> core::fmt::Debug for CqlBuilder<Auth, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CqlBuilder")
+            .field("address", &self.address)
+            .field("local_addr", &self.local_addr)
+            .field("tokens", &self.tokens)
+            .field("recv_buffer_size", &self.recv_buffer_size)
+            .field("send_buffer_size", &self.send_buffer_size)
+            .field("shard_id", &self.shard_id)
+            .field("cql", &self.cql)
+            .finish()
+    }
+}
+
+impl<Auth: Authenticator, C: Compression> Default for CqlBuilder<Auth, C> {
+    fn default() -> Self {
+        Self {
+            address: Default::default(),
+            local_addr: Default::default(),
+            tokens: Default::default(),
+            recv_buffer_size: Default::default(),
+            send_buffer_size: Default::default(),
+            shard_id: Default::default(),
+            authenticator: Default::default(),
+            cql: Default::default(),
+        }
+    }
+}
+
 /// CQL connection structure.
-pub struct Cql {
+pub struct Cql<C: Compression> {
     stream: TcpStream,
     address: SocketAddr,
     tokens: Option<Vec<i64>>,
@@ -85,12 +119,29 @@ pub struct Cql {
     shard_aware_port: u16,
     shard_count: u16,
     msb: u8,
+    compression: PhantomData<fn(C) -> C>,
 }
 
-impl<Auth: Authenticator> CqlBuilder<Auth> {
+impl<C: Compression> core::fmt::Debug for Cql<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cql")
+            .field("stream", &self.stream)
+            .field("address", &self.address)
+            .field("tokens", &self.tokens)
+            .field("dc", &self.dc)
+            .field("shard_id", &self.shard_id)
+            .field("shard_aware_port", &self.shard_aware_port)
+            .field("shard_count", &self.shard_count)
+            .field("msb", &self.msb)
+            .field("compression", &std::any::type_name::<C>())
+            .finish()
+    }
+}
+
+impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
     /// Create CqlBuilder associated with Auth type;
     pub fn new() -> Self {
-        CqlBuilder::<Auth>::default()
+        CqlBuilder::default()
     }
     /// Add scylla broadcast_address
     pub fn address(mut self, address: SocketAddr) -> Self {
@@ -149,7 +200,7 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer. OPTIONS cannot be compressed as
         // the client and protocol didn't yet settle on compression algo (if any)
-        let decoder = Decoder::new(buffer, UNCOMPRESSED)?;
+        let decoder = Decoder::new::<Uncompressed>(&buffer)?;
         // make sure the frame response is not error
         if decoder.is_error()? {
             // check if response is_error.
@@ -170,34 +221,35 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
         // insert the supported_cql_version option into the options;
         options.insert("CQL_VERSION".to_owned(), cql_version.to_owned());
         // insert the supported_compression option into the options if it was set.;
-        if let Some(compression) = MyCompression::option() {
+        if let Some(compression) = C::KIND {
             options.insert("COMPRESSION".to_owned(), compression.to_owned());
         }
         // create startup frame using the selected options;
-        let Startup(startup_buf) = Startup::new().options(&options).build();
+        let Startup(startup_buf) = StartupBuilder::default().options(&options).build()?;
         // write_all startup frame to stream;
         stream.write_all(&startup_buf).await?;
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer.
-        let decoder = Decoder::new(buffer, MyCompression::get())?;
+        let decoder = Decoder::new::<Uncompressed>(&buffer)?;
         if decoder.is_authenticate()? {
             if self.authenticator.is_none() {
                 Authenticate::new(&decoder)?;
                 bail!("CQL connection not ready due to authenticator is not provided");
             }
-            let auth_response = AuthResponse::new()
+            let AuthResponse(auth_response) = AuthResponseBuilder::default()
                 .token(
                     self.authenticator
                         .as_ref()
                         .ok_or_else(|| anyhow!("Failed to read Auth Response!"))?,
                 )
-                .build(MyCompression::get())?;
+                .build()?;
+            let auth_response = C::compress(&auth_response)?;
             // write_all auth_response frame to stream;
-            stream.write_all(&auth_response.0).await?;
+            stream.write_all(&auth_response).await?;
             // collect_frame_response
             let buffer = collect_frame_response(&mut stream).await?;
             // Create Decoder from buffer.
-            let decoder = Decoder::new(buffer, MyCompression::get())?;
+            let decoder = Decoder::new::<C>(&buffer)?;
             if decoder.is_error()? {
                 bail!("CQL connection not ready due to CqlError: {}", decoder.get_error()?);
             }
@@ -254,12 +306,13 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
             shard_count: nr_shard,
             msb: ignore_msb,
             dc: None,
+            compression: PhantomData,
         };
         self.cql.replace(cqlconn);
         Ok(())
     }
     /// Build the CqlBuilder and then try to connect
-    pub async fn build(mut self) -> anyhow::Result<Cql> {
+    pub async fn build(mut self) -> anyhow::Result<Cql<C>> {
         // connect
         self.connect().await?;
         // take the cql_connection
@@ -364,33 +417,33 @@ impl<Auth: Authenticator> CqlBuilder<Auth> {
     }
 }
 
-impl Into<TcpStream> for Cql {
+impl<C: Compression> Into<TcpStream> for Cql<C> {
     fn into(self) -> TcpStream {
         self.stream
     }
 }
 
-impl Cql {
+impl<C: Compression> Cql<C> {
     /// Create new cql connection builder struct
-    pub fn new() -> CqlBuilder<AllowAllAuth> {
-        CqlBuilder::<AllowAllAuth>::default()
+    pub fn new() -> CqlBuilder<AllowAllAuth, C> {
+        Default::default()
     }
     /// Create new cql connection builder struct with attached authenticator
-    pub fn with_auth(user: String, pass: String) -> CqlBuilder<PasswordAuth> {
-        let mut cql_builder = CqlBuilder::<PasswordAuth>::default();
+    pub fn with_auth(user: String, pass: String) -> CqlBuilder<PasswordAuth, C> {
+        let mut cql_builder = CqlBuilder::<PasswordAuth, C>::default();
         let auth = PasswordAuth::new(user, pass);
         cql_builder.authenticator.replace(auth);
         cql_builder
     }
     async fn fetch_tokens(&mut self) -> anyhow::Result<()> {
         // create query to fetch tokens and info from system.local;
-        let query = fetch_tokens_query()?;
+        let query = fetch_tokens_query::<C>()?;
         // write_all query to the stream
         self.stream.write_all(query.as_slice()).await?;
         // collect_frame_response
         let buffer = collect_frame_response(&mut self.stream).await?;
         // Create Decoder from buffer.
-        let decoder = Decoder::new(buffer, MyCompression::get())?;
+        let decoder = Decoder::new::<C>(&buffer)?;
 
         if decoder.is_rows()? {
             let Row { data_center, tokens } = Info::new(decoder)?.next().ok_or(anyhow!("No info found!"))?;
@@ -456,11 +509,11 @@ async fn collect_frame_response(stream: &mut TcpStream) -> anyhow::Result<Vec<u8
 }
 
 /// Query the data center, and tokens from the ScyllaDB.
-fn fetch_tokens_query() -> anyhow::Result<Vec<u8>> {
+fn fetch_tokens_query<C: Compression>() -> anyhow::Result<Vec<u8>> {
     let Query(payload) = QueryBuilder::default()
         .statement("SELECT data_center, tokens FROM system.local")
         .consistency(Consistency::One)
         .build()?;
-    dbg!(&payload);
+    let payload = C::compress(&payload)?;
     Ok(payload)
 }

@@ -1,8 +1,15 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use super::cluster::Cluster;
-use crate::app::cluster::ClusterEvent;
 pub(crate) use crate::cql::PasswordAuth;
+use crate::{
+    app::cluster::ClusterEvent,
+    cql::compression::{
+        Lz4,
+        Snappy,
+        Uncompressed,
+    },
+};
 use async_trait::async_trait;
 use backstage::core::{
     Actor,
@@ -93,6 +100,7 @@ pub struct Scylla {
     pub send_buffer_size: Option<u32>,
     /// Default cql authentication
     pub authenticator: PasswordAuth,
+    pub compression: Option<String>,
 }
 
 impl Default for Scylla {
@@ -106,13 +114,19 @@ impl Default for Scylla {
             recv_buffer_size: None,
             send_buffer_size: None,
             authenticator: PasswordAuth::default(),
+            compression: None,
         }
     }
 }
 
 impl Scylla {
     /// Create new Scylla instance with empty nodes and keyspaces
-    pub fn new<T: Into<String>>(local_datacenter: T, reporter_count: u8, password_auth: PasswordAuth) -> Self {
+    pub fn new<T: Into<String>>(
+        local_datacenter: T,
+        reporter_count: u8,
+        password_auth: PasswordAuth,
+        compression: Option<T>,
+    ) -> Self {
         Self {
             local_dc: local_datacenter.into(),
             nodes: HashSet::new(),
@@ -122,6 +136,7 @@ impl Scylla {
             recv_buffer_size: None,
             send_buffer_size: None,
             authenticator: password_auth,
+            compression: compression.map(Into::into),
         }
     }
     pub fn insert_node(&mut self, node: SocketAddr) -> &mut Self {
@@ -171,8 +186,26 @@ where
         // todo add scylla banner
         // publish scylla as config
         rt.add_resource(self.clone()).await;
-        let cluster = Cluster::new();
-        let cluster_handle = rt.start("cluster".to_string(), cluster).await?;
+        let cluster_handle = match &self.compression {
+            Some(kind) => match kind.as_str() {
+                "lz4" => {
+                    let cluster = Cluster::<Lz4>::new();
+                    rt.start("cluster".to_string(), cluster).await?
+                }
+                "snappy" => {
+                    let cluster = Cluster::<Snappy>::new();
+                    rt.start("cluster".to_string(), cluster).await?
+                }
+                _ => {
+                    return Err(anyhow::anyhow!("Unsupported compression type").into());
+                }
+            },
+            None => {
+                let cluster = Cluster::<Uncompressed>::new();
+                rt.start("cluster".to_string(), cluster).await?
+            }
+        };
+
         if rt.microservices_all(|ms| ms.is_idle()) {
             rt.update_status(ServiceStatus::Idle).await;
         }

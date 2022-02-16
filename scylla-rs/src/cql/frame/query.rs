@@ -16,10 +16,7 @@ use super::{
     },
     queryflags::*,
     Binder,
-};
-use crate::cql::compression::{
-    Compression,
-    MyCompression,
+    FrameBuilder,
 };
 use std::ops::{
     Deref,
@@ -28,8 +25,8 @@ use std::ops::{
 use thiserror::Error;
 
 /// Blanket cql frame header for query frame.
-const QUERY_HEADER: &'static [u8] = &[4, 0, 0, 0, QUERY, 0, 0, 0, 0];
-const EXECUTE_HEADER: &'static [u8] = &[4, 0, 0, 0, EXECUTE, 0, 0, 0, 0];
+const QUERY_HEADER: [u8; 5] = [4, 0, 0, 0, QUERY];
+const EXECUTE_HEADER: [u8; 5] = [4, 0, 0, 0, EXECUTE];
 
 /// Query request builder. Maintains a type-gated stage so that operations
 /// are applied in a valid order.
@@ -56,7 +53,7 @@ const EXECUTE_HEADER: &'static [u8] = &[4, 0, 0, 0, EXECUTE, 0, 0, 0, 0];
 /// ```
 #[derive(Clone, Debug)]
 pub struct QueryBuilder {
-    header: Option<Vec<u8>>,
+    header: Option<[u8; 5]>,
     statement: Option<Vec<u8>>,
     consistency: Consistency,
     value_count: u16,
@@ -100,8 +97,6 @@ pub enum StatementType {
 pub enum QueryBuildError {
     #[error("No query statement provided")]
     NoStatement,
-    #[error("Failed to compress the frame: {0}")]
-    BadCompression(#[from] anyhow::Error),
     #[error("Failed to encode the frame: {0}")]
     BadEncode(anyhow::Error),
 }
@@ -109,7 +104,7 @@ pub enum QueryBuildError {
 impl QueryBuilder {
     /// Set the statement in the query frame.
     pub fn statement(&mut self, statement: &str) -> &mut Self {
-        self.header.replace(QUERY_HEADER.to_vec());
+        self.header.replace(QUERY_HEADER);
         let mut buffer = Vec::new();
         buffer.extend(&i32::to_be_bytes(statement.len() as i32));
         buffer.extend(statement.as_bytes());
@@ -119,7 +114,7 @@ impl QueryBuilder {
     /// Set the id in the query frame.
     /// Note: this will make the Query frame identical to Execute frame.
     pub fn id(&mut self, id: &[u8; 16]) -> &mut Self {
-        self.header.replace(EXECUTE_HEADER.to_vec());
+        self.header.replace(EXECUTE_HEADER);
         let mut buffer = Vec::new();
         buffer.extend(&super::MD5_BE_LENGTH);
         buffer.extend(id);
@@ -154,13 +149,11 @@ impl QueryBuilder {
     }
     /// Build a query frame with an assigned compression type, without any value.
     pub fn build(&self) -> Result<Query, QueryBuildError> {
-        let mut buf = self
+        let header = self
             .header
             .as_ref()
             .ok_or_else(|| QueryBuildError::NoStatement)?
             .clone();
-        // apply compression flag(if any to the header)
-        buf[1] |= MyCompression::flag();
         let mut body_buf = self
             .statement
             .as_ref()
@@ -196,12 +189,7 @@ impl QueryBuilder {
             body_buf[flags_idx] |= TIMESTAMP;
             body_buf.extend(&i64::to_be_bytes(timestamp));
         }
-        // apply compression to query frame
-        body_buf = MyCompression::get().compress(body_buf)?;
-        buf.extend(&u32::to_be_bytes(body_buf.len() as u32));
-        buf.extend(body_buf);
-        // create query
-        Ok(Query(buf))
+        Ok(Query(FrameBuilder::build(header, &body_buf)))
     }
 }
 
@@ -295,7 +283,6 @@ impl Into<Vec<u8>> for Query {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::time::{
         SystemTime,
         UNIX_EPOCH,

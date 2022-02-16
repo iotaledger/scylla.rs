@@ -5,7 +5,10 @@ use super::{
     ring::Registry,
     Scylla,
 };
-use crate::cql::CqlBuilder;
+use crate::cql::{
+    compression::Compression,
+    CqlBuilder,
+};
 use async_trait::async_trait;
 use backstage::core::{
     Actor,
@@ -27,6 +30,7 @@ use backstage::core::{
 use std::{
     cell::UnsafeCell,
     collections::HashMap,
+    marker::PhantomData,
     net::SocketAddr,
     sync::Arc,
 };
@@ -55,25 +59,27 @@ pub enum StageEvent {
 }
 
 /// Stage state
-pub struct Stage {
+pub struct Stage<C: Compression> {
     address: SocketAddr,
     shard_id: usize,
     shard_count: usize,
+    _compression: PhantomData<fn(C) -> C>,
 }
 
-impl Stage {
+impl<C: Compression> Stage<C> {
     pub(super) fn new(address: SocketAddr, shard_id: usize, shard_count: usize) -> Self {
         Self {
             shard_count,
             address,
             shard_id,
+            _compression: PhantomData,
         }
     }
 }
 
 /// The Stage actor lifecycle implementation
 #[async_trait]
-impl<S> Actor<S> for Stage
+impl<S, C: 'static + Compression> Actor<S> for Stage<C>
 where
     S: SupHandle<Self>,
 {
@@ -103,7 +109,7 @@ where
         let all_stage_streams: Vec<i16> = (0..last_range).collect();
         let streams_iter = all_stage_streams.chunks_exact(appends_num as usize);
         // start sender first to let it awaits reporters_handles resources
-        let cql = CqlBuilder::new()
+        let cql = CqlBuilder::<_, C>::new()
             .address(self.address)
             .tokens()
             .recv_buffer_size(scylla.recv_buffer_size)
@@ -130,7 +136,7 @@ where
         let mut reporters_handles = HashMap::new();
         let mut reporter_id: u8 = 0;
         for reporter_streams_ids in streams_iter {
-            let reporter = reporter::Reporter::new(reporter_streams_ids.into());
+            let reporter = reporter::Reporter::<C>::new(reporter_streams_ids.into());
             let reporter_handle = rt.start(format!("reporter_{}", reporter_id), reporter).await?;
             reporters_handles.insert(reporter_id, reporter_handle);
             reporter_id += 1;

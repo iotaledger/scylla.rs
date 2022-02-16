@@ -3,22 +3,22 @@
 
 //! This module implements the response part of the challenge–response authentication.
 
-use super::opcode::AUTH_RESPONSE;
-use crate::cql::compression::{
-    Compression,
-    MyCompression,
+use super::{
+    opcode::AUTH_RESPONSE,
+    FrameBuilder,
 };
 use std::convert::TryInto;
+use thiserror::Error;
 
 /// Blanket cql frame header for AUTH_RESPONSE frame.
-const AUTH_RESPONSE_HEADER: &'static [u8] = &[4, 0, 0, 0, AUTH_RESPONSE, 0, 0, 0, 0];
+const AUTH_RESPONSE_HEADER: [u8; 5] = [4, 0, 0, 0, AUTH_RESPONSE];
 
 /// The Authenticator structure with the token field.
 pub trait Authenticator: Clone + Default {
     /// Get the token in the Authenticator.
     fn token(&self) -> Vec<u8>;
 }
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 /// The unit structure used for letting all users be autenticated.
 pub struct AllowAllAuth;
 
@@ -64,25 +64,32 @@ impl Authenticator for PasswordAuth {
 }
 
 /// The autentication response frame.
-pub(crate) struct AuthResponse(pub Vec<u8>);
+pub struct AuthResponse(pub Vec<u8>);
 
-impl AuthResponse {
-    pub(crate) fn new() -> Self {
-        let mut buffer = Vec::new();
-        buffer.extend_from_slice(&AUTH_RESPONSE_HEADER);
-        AuthResponse(buffer)
-    }
+#[derive(Debug, Clone, Default)]
+pub struct AuthResponseBuilder {
+    token: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Error)]
+pub enum AuthResponseBuildError {
+    #[error("No token provided")]
+    NoToken,
+}
+
+impl AuthResponseBuilder {
     /// Update the response token to be the token from autenticator.
-    pub(crate) fn token(mut self, authenticator: &impl Authenticator) -> Self {
+    pub fn token(&mut self, authenticator: &impl Authenticator) -> &mut Self {
         let token = authenticator.token();
-        self.0.extend(token);
+        self.token.replace(token);
         self
     }
-    /// Build a response frame with a assigned compression type.
-    pub(crate) fn build(mut self, compression: impl Compression) -> anyhow::Result<Self> {
-        // apply compression flag(if any to the header)
-        self.0[1] |= MyCompression::flag();
-        self.0 = compression.compress(self.0)?;
-        Ok(self)
+
+    /// Build the prepare frame with an assigned compression type.
+    pub fn build(&self) -> Result<AuthResponse, AuthResponseBuildError> {
+        Ok(AuthResponse(FrameBuilder::build(
+            AUTH_RESPONSE_HEADER,
+            self.token.as_ref().ok_or_else(|| AuthResponseBuildError::NoToken)?,
+        )))
     }
 }

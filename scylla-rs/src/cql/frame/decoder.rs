@@ -16,10 +16,7 @@ use super::{
     },
 };
 use crate::{
-    cql::compression::{
-        Compression,
-        MyCompression,
-    },
+    cql::compression::Compression,
     prelude::Row,
 };
 use anyhow::{
@@ -33,10 +30,7 @@ use chrono::{
 };
 use std::{
     collections::HashMap,
-    convert::{
-        TryFrom,
-        TryInto,
-    },
+    convert::TryInto,
     hash::Hash,
     io::Cursor,
     net::{
@@ -113,14 +107,6 @@ impl VoidDecoder {
     /// Decode the provided Decoder with an deterministic Void result
     pub fn decode_void(decoder: Decoder) {
         Self::try_decode_void(decoder).unwrap()
-    }
-}
-
-impl TryFrom<Vec<u8>> for Decoder {
-    type Error = anyhow::Error;
-
-    fn try_from(buffer: Vec<u8>) -> Result<Self, Self::Error> {
-        Decoder::new(buffer, MyCompression::get())
     }
 }
 
@@ -215,8 +201,8 @@ pub struct Decoder {
 }
 impl Decoder {
     /// Create a new decoder with an assigned compression type.
-    pub fn new(mut buffer: Vec<u8>, decompressor: impl Compression) -> anyhow::Result<Self> {
-        buffer = decompressor.decompress(buffer)?;
+    pub fn new<C: Compression>(mut buffer: &[u8]) -> anyhow::Result<Self> {
+        let buffer = C::decompress(buffer)?;
         let header_flags = HeaderFlags::new(&buffer)?;
         Ok(Decoder { buffer, header_flags })
     }

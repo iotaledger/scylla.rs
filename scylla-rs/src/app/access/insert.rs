@@ -1,8 +1,6 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use scylla_parse::InsertStatement;
-
 use super::*;
 
 /// Insert query trait which creates an `InsertRequest`

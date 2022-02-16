@@ -33,7 +33,6 @@ use self::{
     select::SelectTable,
     update::UpdateTable,
 };
-
 use super::{
     worker::BasicRetryWorker,
     Worker,
@@ -48,6 +47,10 @@ pub use crate::{
         stage::reporter::ReporterEvent,
     },
     cql::{
+        compression::{
+            Compression,
+            Uncompressed,
+        },
         query::StatementType,
         Bindable,
         Binder,
@@ -467,8 +470,8 @@ impl<V> DecodeRows<V> {
 
 impl<V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
-    pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
-        V::try_decode_rows(bytes.try_into()?)
+    pub fn decode<C: Compression>(&self, bytes: &[u8]) -> anyhow::Result<Option<V>> {
+        V::try_decode_rows(Decoder::new::<C>(bytes)?)
     }
 }
 
@@ -481,8 +484,8 @@ pub struct DecodeVoid;
 impl DecodeVoid {
     /// Decode a result payload using the `VoidDecoder` impl
     #[inline]
-    pub fn decode(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        VoidDecoder::try_decode_void(bytes.try_into()?)
+    pub fn decode<C: Compression>(&self, bytes: &[u8]) -> anyhow::Result<()> {
+        VoidDecoder::try_decode_void(Decoder::new::<C>(bytes)?)
     }
 }
 

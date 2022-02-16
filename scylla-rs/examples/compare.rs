@@ -33,7 +33,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default());
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some("snappy"));
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
@@ -110,6 +110,8 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
+    info!("Created keyspace");
+
     for s in parse_statements!(
         "DROP TABLE IF EXISTS #0.test;
 
@@ -128,10 +130,16 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
     }
 
+    info!("Created table");
+
     TestTable::prepare_insert::<_, TestTable>(&keyspace).get_local().await?;
+
+    info!("Prepared insert");
     TestTable::prepare_select::<_, String, i32>(&keyspace)
         .get_local()
         .await?;
+
+    info!("Prepared select");
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
@@ -367,19 +375,19 @@ impl Keyspace for MyKeyspace {
 
 #[derive(Debug)]
 pub struct TestTable {
-    pub name: String,
+    pub key: String,
     pub data: i32,
 }
 
 impl TestTable {
-    pub fn new(name: String, data: i32) -> Self {
-        Self { name, data }
+    pub fn new(key: String, data: i32) -> Self {
+        Self { key, data }
     }
 }
 
 impl Table for TestTable {
     const NAME: &'static str = "test";
-    const COLS: &'static [&'static str] = &["name", "data"];
+    const COLS: &'static [&'static str] = &["key", "data"];
 
     type PartitionKey = String;
     type PrimaryKey = String;
@@ -389,7 +397,7 @@ impl TokenEncoder for TestTable {
     type Error = <<Self as Table>::PartitionKey as TokenEncoder>::Error;
 
     fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
-        self.name.encode_token()
+        self.key.encode_token()
     }
 }
 
@@ -399,7 +407,7 @@ impl Row for TestTable {
         Self: Sized,
     {
         Ok(Self {
-            name: rows.column_value()?,
+            key: rows.column_value()?,
             data: rows.column_value()?,
         })
     }
@@ -407,7 +415,7 @@ impl Row for TestTable {
 
 impl Bindable for TestTable {
     fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
-        binder.bind(&self.name)?.bind(&self.data)?;
+        binder.bind(&self.key)?.bind(&self.data)?;
         Ok(())
     }
 }

@@ -14,16 +14,13 @@ use super::{
     },
     opcode::BATCH,
     Binder,
+    FrameBuilder,
     MD5_BE_LENGTH,
-};
-use crate::cql::compression::{
-    Compression,
-    MyCompression,
 };
 use thiserror::Error;
 
 /// Blanket cql frame header for BATCH frame.
-const BATCH_HEADER: &'static [u8] = &[4, 0, 0, 0, BATCH, 0, 0, 0, 0];
+const BATCH_HEADER: [u8; 5] = [4, 0, 0, 0, BATCH];
 
 /// The batch frame.
 pub struct Batch(pub Vec<u8>);
@@ -113,8 +110,6 @@ impl Default for BatchType {
 pub enum BatchBuildError {
     #[error("No batch statements provided")]
     NoStatements,
-    #[error("Failed to compress the frame: {0}")]
-    BadCompression(#[from] anyhow::Error),
 }
 
 impl BatchBuilder {
@@ -189,11 +184,6 @@ impl BatchBuilder {
         if self.stmt_builders.is_empty() {
             return Err(BatchBuildError::NoStatements);
         }
-        let mut buf = Vec::new();
-        // add batch header
-        buf.extend_from_slice(&BATCH_HEADER);
-        // apply compression flag(if any to the header)
-        buf[1] |= MyCompression::flag();
         let mut body_buf = Vec::new();
         // add batch type
         body_buf.push(self.batch_type as u8);
@@ -221,10 +211,7 @@ impl BatchBuilder {
             body_buf.extend(&BE_8_BYTES_LEN);
             body_buf.extend(&i64::to_be_bytes(timestamp));
         }
-        body_buf = MyCompression::get().compress(body_buf)?;
-        buf.extend_from_slice(&u32::to_be_bytes(body_buf.len() as u32));
-        buf.extend(body_buf);
-        Ok(Batch(buf))
+        Ok(Batch(FrameBuilder::build(BATCH_HEADER, &body_buf)))
     }
 }
 

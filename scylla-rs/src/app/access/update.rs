@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use scylla_parse::UpdateStatement;
 
 /// Update query trait which creates an `UpdateRequest`
 /// that can be sent to the `Ring`.

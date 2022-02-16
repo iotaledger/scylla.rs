@@ -13,7 +13,7 @@ use crate::{
     cql::{
         CqlError,
         Decoder,
-        RowsDecoder,
+        RowsDecoder, compression::CompressionError,
     },
 };
 use anyhow::anyhow;
@@ -25,7 +25,6 @@ pub use basic::{
 use log::*;
 pub use prepare::PrepareWorker;
 pub use select::SelectWorker;
-use std::convert::TryFrom;
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
 pub use value::ValueWorker;
@@ -38,7 +37,7 @@ mod value;
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
     /// Reporter will invoke this method to Send the cql response to worker
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()>;
+    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
     fn handle_error(self: Box<Self>, error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()>;
 }
@@ -47,20 +46,22 @@ pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
 /// The CQL worker error.
 pub enum WorkerError {
     /// The CQL Error reported from ScyllaDB.
-    #[error("Worker CqlError: {0}")]
+    #[error("CqlError: {0}")]
     Cql(CqlError),
-    /// The IO Error.
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
     /// The overload when we do not have any more streams.
-    #[error("Worker Overload")]
+    #[error("Overloaded Worker")]
     Overload,
     /// We lost the worker due to the abortion of ScyllaDB connection.
-    #[error("Worker Lost")]
+    #[error("Lost Worker")]
     Lost,
     /// There is no ring initialized.
-    #[error("Worker NoRing")]
+    #[error("No Ring Available")]
     NoRing,
+    #[error("Compression Error: {0}")]
+    CompressionError(#[from] CompressionError),
+    /// Misc errors
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 /// should be implemented on the handle of the worker

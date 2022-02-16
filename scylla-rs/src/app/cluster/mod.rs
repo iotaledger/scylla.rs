@@ -14,9 +14,15 @@ use crate::{
         ReplicationInfo,
         SharedRing,
     },
-    cql::CqlBuilder,
+    cql::{
+        compression::Compression,
+        CqlBuilder,
+    },
 };
-use std::sync::Arc;
+use std::{
+    marker::PhantomData,
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -55,9 +61,10 @@ use std::{
 pub(crate) type Nodes = HashMap<SocketAddr, NodeInfo>;
 
 /// Cluster state
-pub struct Cluster {
+pub struct Cluster<C: Compression> {
     nodes: Nodes,
     keyspaces: HashMap<String, ReplicationInfo>,
+    _compression: PhantomData<fn(C) -> C>,
 }
 
 /// Cluster Event type
@@ -73,8 +80,8 @@ pub enum ClusterEvent {
     Shutdown,
 }
 
-impl EolEvent<Node> for ClusterEvent {
-    fn eol_event(scope_id: ScopeId, service: Service, _: Node, r: ActorResult<()>) -> Self {
+impl<C: Compression> EolEvent<Node<C>> for ClusterEvent {
+    fn eol_event(scope_id: ScopeId, service: Service, _: Node<C>, r: ActorResult<()>) -> Self {
         Self::Microservice(scope_id, service, Some(r))
     }
 }
@@ -125,12 +132,16 @@ impl TopologyErr {
     }
 }
 
-impl Cluster {
+impl<C: Compression> Cluster<C> {
     /// Create new cluster with empty state
     pub fn new() -> Self {
         let nodes = HashMap::new();
         let keyspaces = HashMap::new();
-        Self { nodes, keyspaces }
+        Self {
+            nodes,
+            keyspaces,
+            _compression: PhantomData,
+        }
     }
 }
 
@@ -153,7 +164,7 @@ pub struct NodeInfo {
 
 /// The Cluster actor lifecycle implementation
 #[async_trait]
-impl Actor<ScyllaHandle> for Cluster {
+impl<C: 'static + Compression> Actor<ScyllaHandle> for Cluster<C> {
     type Data = (Scylla, Arc<RwLock<Registry>>);
     type Channel = UnboundedChannel<ClusterEvent>;
     async fn init(&mut self, rt: &mut Rt<Self, ScyllaHandle>) -> ActorResult<Self::Data> {
@@ -250,7 +261,7 @@ impl Actor<ScyllaHandle> for Cluster {
                             }
                             log::info!("Adding {} node!", address);
                             // to spawn node we first make sure it's online
-                            let cql = CqlBuilder::new()
+                            let cql = CqlBuilder::<_, C>::new()
                                 .address(address)
                                 .tokens()
                                 .recv_buffer_size(scylla.recv_buffer_size)
@@ -263,7 +274,7 @@ impl Actor<ScyllaHandle> for Cluster {
                                     let shard_count = cqlconn.shard_count();
                                     if let (Some(dc), Some(tokens)) = (cqlconn.take_dc(), cqlconn.take_tokens()) {
                                         // create node
-                                        let node = Node::new(address.clone(), shard_count as usize);
+                                        let node = Node::<C>::new(address.clone(), shard_count as usize);
                                         // start the node and ensure it got initialized
                                         match rt.start(address.to_string(), node).await {
                                             Ok(h) => {
@@ -478,7 +489,7 @@ impl TryFrom<(JsonMessage, Responder)> for ClusterEvent {
     }
 }
 
-impl Cluster {
+impl<C: 'static + Compression> Cluster<C> {
     async fn start_node(
         &mut self,
         rt: &mut Rt<Self, ScyllaHandle>,
@@ -486,7 +497,7 @@ impl Cluster {
         scylla: &Scylla,
     ) -> ActorResult<()> {
         // to spawn node we first make sure it's online
-        let mut cqlconn = CqlBuilder::new()
+        let mut cqlconn = CqlBuilder::<_, C>::new()
             .address(address)
             .tokens()
             .recv_buffer_size(scylla.recv_buffer_size)
@@ -499,7 +510,7 @@ impl Cluster {
         let shard_count = cqlconn.shard_count();
         if let (Some(dc), Some(tokens)) = (cqlconn.take_dc(), cqlconn.take_tokens()) {
             // create node
-            let node = Node::new(address.clone(), shard_count as usize);
+            let node = Node::<C>::new(address.clone(), shard_count as usize);
             let h = rt.start(address.to_string(), node).await?;
             // create nodeinfo
             let node_info = NodeInfo {

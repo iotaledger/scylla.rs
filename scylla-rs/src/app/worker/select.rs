@@ -55,11 +55,8 @@ where
     H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        match Decoder::try_from(giveload) {
-            Ok(decoder) => self.handle.handle_response(decoder),
-            Err(e) => self.handle.handle_error(WorkerError::Other(e)),
-        }
+    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
+        self.handle.handle_response(decoder)
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {

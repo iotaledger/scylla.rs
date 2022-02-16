@@ -25,6 +25,7 @@ impl PrepareWorker {
         })
     }
 }
+
 impl From<PrepareRequest> for PrepareWorker {
     fn from(request: PrepareRequest) -> Self {
         Self {
@@ -35,7 +36,7 @@ impl From<PrepareRequest> for PrepareWorker {
     }
 }
 impl Worker for PrepareWorker {
-    fn handle_response(self: Box<Self>, _giveload: Vec<u8>) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, _decoder: Decoder) -> anyhow::Result<()> {
         info!(
             "Successfully prepared statement: '{}'",
             Request::statement(&self.request)
@@ -97,11 +98,8 @@ impl<H> Worker for RespondingPrepareWorker<H>
 where
     H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
 {
-    fn handle_response(self: Box<Self>, giveload: Vec<u8>) -> anyhow::Result<()> {
-        match Decoder::try_from(giveload) {
-            Ok(decoder) => self.handle.handle_response(decoder),
-            Err(e) => self.handle.handle_error(WorkerError::Other(e)),
-        }
+    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
+        self.handle.handle_response(decoder)
     }
     fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
