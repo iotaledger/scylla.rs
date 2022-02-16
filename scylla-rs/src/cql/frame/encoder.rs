@@ -3,6 +3,7 @@
 
 //! This module implements the frame encoder.
 
+use super::Blob;
 use chrono::{
     Datelike,
     NaiveDate,
@@ -10,15 +11,20 @@ use chrono::{
     NaiveTime,
     Timelike,
 };
+use core::fmt::{
+    Debug,
+    Formatter,
+};
 use std::{
     collections::HashMap,
-    io::Cursor,
+    convert::Infallible,
     net::{
         IpAddr,
         Ipv4Addr,
         Ipv6Addr,
     },
 };
+use thiserror::Error;
 
 /// The 16-byte body length.
 pub const BE_16_BYTES_LEN: [u8; 4] = [0, 0, 0, 16];
@@ -46,175 +52,243 @@ pub struct Null;
 /// The Unset unit stucture.
 pub struct Unset;
 
-/// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
-pub struct ColumnEncodeChain {
-    buffer: Vec<u8>,
-}
-
-impl ColumnEncodeChain {
-    /// Chain a new column
-    pub fn chain<T: ColumnEncoder>(mut self, other: &T) -> Self {
-        other.encode(&mut self.buffer);
-        self
-    }
-
-    /// Complete the chain and return the buffer
-    pub fn finish(self) -> Vec<u8> {
-        self.buffer
-    }
-}
-
 /// The frame column encoder.
 pub trait ColumnEncoder {
+    type Error: Debug;
+
     /// Encoder the column buffer.
-    fn encode(&self, buffer: &mut Vec<u8>);
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error>;
 
     /// Encode this value to a new buffer
-    fn encode_new(&self) -> Vec<u8> {
+    fn encode_new(&self) -> Result<Vec<u8>, Self::Error> {
         let mut buf = Vec::new();
-        self.encode(&mut buf);
-        buf
+        self.encode(&mut buf)?;
+        Ok(buf)
     }
 
     /// Encode this value to a new buffer with a given capacity
-    fn encode_with_capacity(&self, capacity: usize) -> Vec<u8> {
+    fn encode_with_capacity(&self, capacity: usize) -> Result<Vec<u8>, Self::Error> {
         let mut buf = Vec::with_capacity(capacity);
-        self.encode(&mut buf);
-        buf
-    }
-
-    /// Start an encoding chain
-    fn chain_encode<T: ColumnEncoder>(&self, other: &T) -> ColumnEncodeChain
-    where
-        Self: Sized,
-    {
-        let buffer = self.encode_new();
-        ColumnEncodeChain { buffer }.chain(other)
+        self.encode(&mut buf)?;
+        Ok(buf)
     }
 }
 
-impl<T: ColumnEncoder + ?Sized> ColumnEncoder for &T {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        T::encode(*self, buffer)
+impl<E: ColumnEncoder + ?Sized> ColumnEncoder for &E {
+    type Error = E::Error;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+        E::encode(*self, buffer)
     }
 }
 
-impl<T: ColumnEncoder + ?Sized> ColumnEncoder for Box<T> {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        T::encode(&*self, buffer)
+impl<E: ColumnEncoder + ?Sized> ColumnEncoder for Box<E> {
+    type Error = E::Error;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+        E::encode(&*self, buffer)
     }
 }
 
-impl<T> ColumnEncoder for Option<T>
-where
-    T: ColumnEncoder,
-{
-    fn encode(&self, buffer: &mut Vec<u8>) {
+impl<E: ColumnEncoder> ColumnEncoder for Option<E> {
+    type Error = E::Error;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         match self {
-            Some(value) => value.encode(buffer),
-            None => ColumnEncoder::encode(&UNSET_VALUE, buffer),
+            Some(value) => {
+                value.encode(buffer)?;
+            }
+            None => {
+                ColumnEncoder::encode(&UNSET_VALUE, buffer).ok();
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Error)]
+pub enum ListEncodeError<E: ColumnEncoder> {
+    #[error("List Value encode error: {0:?}")]
+    ValueEncodeError(E::Error),
+    #[error("List is too large! Max byte length is {}", i32::MAX)]
+    TooLarge,
+}
+
+impl<E: ColumnEncoder> Debug for ListEncodeError<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ValueEncodeError(arg0) => f.debug_tuple("ValueEncodeError").field(arg0).finish(),
+            Self::TooLarge => write!(f, "TooLarge"),
         }
     }
 }
 
-impl ColumnEncoder for i64 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&i64::to_be_bytes(*self));
+impl<E: ColumnEncoder> ColumnEncoder for Vec<E> {
+    type Error = ListEncodeError<E>;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+        let mut buf = Vec::new();
+        for e in self {
+            e.encode(&mut buf).map_err(ListEncodeError::ValueEncodeError)?;
+        }
+        buffer.extend(&i32::to_be_bytes(buf.len() as i32));
+        buffer.extend(buf);
+        Ok(())
     }
 }
 
-impl ColumnEncoder for u64 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&u64::to_be_bytes(*self));
+#[derive(Error)]
+pub enum MapEncodeError<K: ColumnEncoder, V: ColumnEncoder> {
+    #[error("Map Key encode error: {0:?}")]
+    KeyEncodeError(K::Error),
+    #[error("Map Value encode error: {0:?}")]
+    ValueEncodeError(V::Error),
+    #[error("Map is too large! Max byte length is {}", i32::MAX)]
+    TooLarge,
+}
+
+impl<K: ColumnEncoder, V: ColumnEncoder> Debug for MapEncodeError<K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::KeyEncodeError(arg0) => f.debug_tuple("KeyEncodeError").field(arg0).finish(),
+            Self::ValueEncodeError(arg0) => f.debug_tuple("ValueEncodeError").field(arg0).finish(),
+            Self::TooLarge => write!(f, "TooLarge"),
+        }
     }
 }
 
-impl ColumnEncoder for f64 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&f64::to_be_bytes(*self));
+impl<K: ColumnEncoder, V: ColumnEncoder, S: ::std::hash::BuildHasher> ColumnEncoder for HashMap<K, V, S> {
+    type Error = MapEncodeError<K, V>;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+        let mut buf = Vec::new();
+        for (k, v) in self {
+            k.encode(&mut buf).map_err(MapEncodeError::KeyEncodeError)?;
+            v.encode(&mut buf).map_err(MapEncodeError::ValueEncodeError)?;
+        }
+        if buf.len() > i32::MAX as usize {
+            return Err(MapEncodeError::TooLarge);
+        };
+        buffer.extend(&i32::to_be_bytes(buf.len() as i32));
+        buffer.extend(buf);
+        Ok(())
     }
 }
 
-impl ColumnEncoder for i32 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&i32::to_be_bytes(*self));
-    }
+macro_rules! impl_tuple_encoder {
+    ($(($v:ident, $e:tt)),*) => {
+        impl<$($e: ColumnEncoder),*> ColumnEncoder for ($($e,)*) {
+            type Error = anyhow::Error;
+            fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+                let ($($v,)*) = self;
+                $(
+                    $v.encode(buffer).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+                )*
+                Ok(())
+            }
+        }
+    };
 }
 
-impl ColumnEncoder for u32 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&u32::to_be_bytes(*self));
-    }
+impl_tuple_encoder!((e1, E1));
+impl_tuple_encoder!((e1, E1), (e2, E2));
+impl_tuple_encoder!((e1, E1), (e2, E2), (e3, E3));
+impl_tuple_encoder!((e1, E1), (e2, E2), (e3, E3), (e4, E4));
+impl_tuple_encoder!((e1, E1), (e2, E2), (e3, E3), (e4, E4), (e5, E5));
+impl_tuple_encoder!((e1, E1), (e2, E2), (e3, E3), (e4, E4), (e5, E5), (e6, E6));
+impl_tuple_encoder!((e1, E1), (e2, E2), (e3, E3), (e4, E4), (e5, E5), (e6, E6), (e7, E7));
+impl_tuple_encoder!(
+    (e1, E1),
+    (e2, E2),
+    (e3, E3),
+    (e4, E4),
+    (e5, E5),
+    (e6, E6),
+    (e7, E7),
+    (e8, E8)
+);
+impl_tuple_encoder!(
+    (e1, E1),
+    (e2, E2),
+    (e3, E3),
+    (e4, E4),
+    (e5, E5),
+    (e6, E6),
+    (e7, E7),
+    (e8, E8),
+    (e9, E9)
+);
+
+macro_rules! impl_simple_encoder {
+    ($t:ty, $len:ident) => {
+        impl ColumnEncoder for $t {
+            type Error = Infallible;
+            fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+                buffer.extend(&$len);
+                buffer.extend(&<$t>::to_be_bytes(*self));
+                Ok(())
+            }
+        }
+    };
 }
 
-impl ColumnEncoder for f32 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&f32::to_be_bytes(*self));
-    }
-}
-
-impl ColumnEncoder for i16 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_2_BYTES_LEN);
-        buffer.extend(&i16::to_be_bytes(*self));
-    }
-}
-
-impl ColumnEncoder for u16 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_2_BYTES_LEN);
-        buffer.extend(&u16::to_be_bytes(*self));
-    }
-}
-
-impl ColumnEncoder for i8 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_1_BYTES_LEN);
-        buffer.extend(&i8::to_be_bytes(*self));
-    }
-}
-
-impl ColumnEncoder for u8 {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_1_BYTES_LEN);
-        buffer.push(*self);
-    }
-}
+impl_simple_encoder!(i128, BE_16_BYTES_LEN);
+impl_simple_encoder!(i64, BE_8_BYTES_LEN);
+impl_simple_encoder!(i32, BE_4_BYTES_LEN);
+impl_simple_encoder!(i16, BE_2_BYTES_LEN);
+impl_simple_encoder!(i8, BE_1_BYTES_LEN);
+impl_simple_encoder!(u128, BE_16_BYTES_LEN);
+impl_simple_encoder!(u64, BE_8_BYTES_LEN);
+impl_simple_encoder!(u32, BE_4_BYTES_LEN);
+impl_simple_encoder!(u16, BE_2_BYTES_LEN);
+impl_simple_encoder!(u8, BE_1_BYTES_LEN);
+impl_simple_encoder!(f64, BE_8_BYTES_LEN);
+impl_simple_encoder!(f32, BE_4_BYTES_LEN);
 
 impl ColumnEncoder for bool {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         buffer.extend(&BE_1_BYTES_LEN);
         buffer.push(*self as u8);
+        Ok(())
     }
 }
 
-impl ColumnEncoder for String {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&i32::to_be_bytes(self.len() as i32));
-        buffer.extend(self.bytes());
-    }
+macro_rules! impl_str_encoder {
+    ($t:ty) => {
+        impl ColumnEncoder for $t {
+            type Error = ColumnEncodeError;
+            fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+                if self.len() > i32::MAX as usize {
+                    return Err(ColumnEncodeError::ValueTooLarge);
+                };
+                buffer.extend(&i32::to_be_bytes(self.len() as i32));
+                buffer.extend(self.bytes());
+                Ok(())
+            }
+        }
+    };
 }
-impl ColumnEncoder for str {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&i32::to_be_bytes(self.len() as i32));
-        buffer.extend(self.bytes());
-    }
+
+impl_str_encoder!(String);
+impl_str_encoder!(str);
+
+#[derive(Debug, Error)]
+pub enum ColumnEncodeError {
+    #[error("Value is too large! Max value length is {}", i32::MAX)]
+    ValueTooLarge,
 }
-impl ColumnEncoder for &[u8] {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+
+impl ColumnEncoder for Blob {
+    type Error = ColumnEncodeError;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
+        if self.len() > i32::MAX as usize {
+            return Err(ColumnEncodeError::ValueTooLarge);
+        };
         buffer.extend(&i32::to_be_bytes(self.len() as i32));
-        buffer.extend(*self);
+        buffer.extend(self.as_slice());
+        Ok(())
     }
 }
 
 impl ColumnEncoder for IpAddr {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         match *self {
             IpAddr::V4(ip) => {
                 buffer.extend(&BE_4_BYTES_LEN);
@@ -225,105 +299,74 @@ impl ColumnEncoder for IpAddr {
                 buffer.extend(&ip.octets());
             }
         }
+        Ok(())
     }
 }
 
 impl ColumnEncoder for Ipv4Addr {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         buffer.extend(&BE_4_BYTES_LEN);
         buffer.extend(&self.octets());
+        Ok(())
     }
 }
 
 impl ColumnEncoder for Ipv6Addr {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         buffer.extend(&BE_16_BYTES_LEN);
         buffer.extend(&self.octets());
-    }
-}
-
-impl ColumnEncoder for Cursor<Vec<u8>> {
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        let inner = self.get_ref();
-        buffer.extend(&i32::to_be_bytes(inner.len() as i32));
-        buffer.extend(inner);
-    }
-}
-
-impl<E> ColumnEncoder for Vec<E>
-where
-    E: ColumnEncoder,
-{
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        // total byte_size of the list is unknown,
-        // therefore we pad zero length for now.
-        buffer.extend(&BE_0_BYTES_LEN);
-        // in order to compute the byte_size we snapshot
-        // the current buffer length in advance
-        let current_length = buffer.len();
-        buffer.extend(&i32::to_be_bytes(self.len() as i32));
-        for e in self {
-            e.encode(buffer);
-        }
-        let list_byte_size = buffer.len() - current_length;
-        buffer[(current_length - 4)..current_length].copy_from_slice(&i32::to_be_bytes(list_byte_size as i32));
-    }
-}
-
-impl<K, V, S: ::std::hash::BuildHasher> ColumnEncoder for HashMap<K, V, S>
-where
-    K: ColumnEncoder,
-    V: ColumnEncoder,
-{
-    fn encode(&self, buffer: &mut Vec<u8>) {
-        buffer.extend(&BE_0_BYTES_LEN);
-        let current_length = buffer.len();
-        buffer.extend(&i32::to_be_bytes(self.len() as i32));
-        for (k, v) in self {
-            k.encode(buffer);
-            v.encode(buffer);
-        }
-        let map_byte_size = buffer.len() - current_length;
-        buffer[(current_length - 4)..current_length].copy_from_slice(&i32::to_be_bytes(map_byte_size as i32));
+        Ok(())
     }
 }
 
 impl ColumnEncoder for Unset {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         buffer.extend(&BE_UNSET_BYTES_LEN);
+        Ok(())
     }
 }
 
 impl ColumnEncoder for Null {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         buffer.extend(&BE_NULL_BYTES_LEN);
+        Ok(())
     }
 }
 
 impl ColumnEncoder for NaiveDate {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         let days = self.num_days_from_ce() as u32 - 719_163 + (1u32 << 31);
         buffer.extend(&BE_4_BYTES_LEN);
-        buffer.extend(&u32::to_be_bytes(days))
+        buffer.extend(&u32::to_be_bytes(days));
+        Ok(())
     }
 }
 
 impl ColumnEncoder for NaiveTime {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         let nanos = self.hour() as u64 * 3_600_000_000_000
             + self.minute() as u64 * 60_000_000_000
             + self.second() as u64 * 1_000_000_000
             + self.nanosecond() as u64;
         buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&u64::to_be_bytes(nanos as u64))
+        buffer.extend(&u64::to_be_bytes(nanos as u64));
+        Ok(())
     }
 }
 
 impl ColumnEncoder for NaiveDateTime {
-    fn encode(&self, buffer: &mut Vec<u8>) {
+    type Error = Infallible;
+    fn encode(&self, buffer: &mut Vec<u8>) -> Result<(), Self::Error> {
         let cql_timestamp = self.timestamp_millis();
         buffer.extend(&BE_8_BYTES_LEN);
-        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64))
+        buffer.extend(&u64::to_be_bytes(cql_timestamp as u64));
+        Ok(())
     }
 }
 
@@ -334,28 +377,25 @@ pub struct TokenEncodeChain {
     buffer: Option<Vec<u8>>,
 }
 
-impl<T: ColumnEncoder + ?Sized> From<&T> for TokenEncodeChain {
-    fn from(t: &T) -> Self {
-        TokenEncodeChain {
-            len: 1,
-            buffer: Some(t.encode_new()[2..].into()),
-        }
-    }
-}
-
 impl TokenEncodeChain {
+    fn try_from<E: ColumnEncoder + ?Sized>(e: &E) -> Result<Self, E::Error> {
+        Ok(TokenEncodeChain {
+            len: 1,
+            buffer: Some(e.encode_new()?[2..].into()),
+        })
+    }
     /// Chain a new value
-    pub fn chain<T: TokenEncoder + ?Sized>(mut self, other: &T) -> Self
+    pub fn chain<E: TokenEncoder + ?Sized>(mut self, other: &E) -> Result<Self, E::Error>
     where
         Self: Sized,
     {
-        self.append(other);
-        self
+        self.append(other)?;
+        Ok(self)
     }
 
     /// Chain a new value
-    pub fn append<T: TokenEncoder + ?Sized>(&mut self, other: &T) {
-        let other = other.encode_token();
+    pub fn append<E: TokenEncoder + ?Sized>(&mut self, other: &E) -> Result<(), E::Error> {
+        let other = other.encode_token()?;
         if other.len > 0 {
             if let Some(other_buffer) = other.buffer {
                 match self.buffer.as_mut() {
@@ -371,12 +411,11 @@ impl TokenEncodeChain {
                 }
             }
         }
+        Ok(())
     }
 
     /// Complete the chain and return the token
     pub fn finish(self) -> i64 {
-        // TODO: Do we need a trailing byte?
-        // self.buffer.push(0);
         match self.len {
             0 => rand::random(),
             1 => crate::cql::murmur3_cassandra_x64_128(&self.buffer.unwrap()[2..], 0).0,
@@ -385,111 +424,59 @@ impl TokenEncodeChain {
     }
 }
 
+#[derive(Error)]
+pub enum TokenEncodeChainError<E1: TokenEncoder, E2: TokenEncoder> {
+    #[error("Encode error: {0:?}")]
+    EncodeError(E1::Error),
+    #[error("Chained encode error: {0:?}")]
+    EncodeChainError(E2::Error),
+}
+
+impl<E1: TokenEncoder, E2: TokenEncoder> Debug for TokenEncodeChainError<E1, E2> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EncodeError(arg0) => f.debug_tuple("EncodeError").field(arg0).finish(),
+            Self::EncodeChainError(arg0) => f.debug_tuple("EncodeChainError").field(arg0).finish(),
+        }
+    }
+}
+
 /// Encoding functionality for tokens
 pub trait TokenEncoder {
+    type Error: Debug;
     /// Start an encode chain
-    fn chain<E: TokenEncoder>(&self, other: &E) -> TokenEncodeChain
+    fn chain<E: TokenEncoder>(&self, other: &E) -> Result<TokenEncodeChain, TokenEncodeChainError<Self, E>>
     where
         Self: Sized,
     {
-        self.encode_token().chain(other)
+        self.encode_token()
+            .map_err(TokenEncodeChainError::EncodeError)?
+            .chain(other)
+            .map_err(TokenEncodeChainError::EncodeChainError)
     }
 
-    /// Start an encode chain
-    fn dyn_chain(&self, other: &dyn TokenEncoder) -> TokenEncodeChain {
-        let mut chain = self.encode_token();
-        chain.append(other);
-        chain
-    }
     /// Create a token encoding chain for this value
-    fn encode_token(&self) -> TokenEncodeChain {
-        TokenEncodeChain::default()
-    }
+    fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error>;
     /// Encode a single token
-    fn token(&self) -> i64 {
-        self.encode_token().finish()
+    fn token(&self) -> Result<i64, Self::Error> {
+        Ok(self.encode_token()?.finish())
     }
 }
 
-macro_rules! impl_token_encoder {
-    ($($t:ty),*) => {
-        $(
-            impl TokenEncoder for $t {
-                fn encode_token(&self) -> TokenEncodeChain {
-                    self.into()
-                }
-            }
-        )*
-    };
-    (@tuple ($($t:tt),*)) => {
-        impl<$($t: TokenEncoder),*> TokenEncoder for ($($t,)*) {
-            fn encode_token(&self) -> TokenEncodeChain {
-                #[allow(non_snake_case)]
-                let ($($t,)*) = self;
-                let mut token_chain = TokenEncodeChain::default();
-                $(
-                    token_chain.append($t);
-                )*
-                token_chain
-            }
-        }
-    };
-}
-
-impl_token_encoder!(
-    i8,
-    i16,
-    i32,
-    i64,
-    u8,
-    u16,
-    u32,
-    u64,
-    f32,
-    f64,
-    bool,
-    String,
-    str,
-    Cursor<Vec<u8>>,
-    Unset,
-    Null
-);
-
-impl_token_encoder!(@tuple (T));
-impl_token_encoder!(@tuple (T,TT));
-impl_token_encoder!(@tuple (T, TT, TTT));
-impl_token_encoder!(@tuple (T, TT, TTT, TTTT));
-
-impl<T: TokenEncoder + ?Sized> TokenEncoder for &T {
-    fn encode_token(&self) -> TokenEncodeChain {
-        T::encode_token(*self)
+impl<E: ColumnEncoder> TokenEncoder for E {
+    type Error = E::Error;
+    fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
+        TokenEncodeChain::try_from(self)
     }
 }
 
-impl<T: ColumnEncoder> TokenEncoder for Option<T> {
-    fn encode_token(&self) -> TokenEncodeChain {
-        self.into()
-    }
-}
-
-impl<T: ColumnEncoder> TokenEncoder for Vec<T> {
-    fn encode_token(&self) -> TokenEncodeChain {
-        self.into()
-    }
-}
-
-impl<K: ColumnEncoder, V: ColumnEncoder> TokenEncoder for HashMap<K, V> {
-    fn encode_token(&self) -> TokenEncodeChain {
-        self.into()
-    }
-}
-
-impl<T: TokenEncoder> TokenEncoder for [T] {
-    fn encode_token(&self) -> TokenEncodeChain {
+impl<E: TokenEncoder> TokenEncoder for [E] {
+    type Error = E::Error;
+    fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
         let mut token_chain = TokenEncodeChain::default();
         for v in self.iter() {
-            token_chain.append(v);
+            token_chain.append(v)?;
         }
-        token_chain
+        Ok(token_chain)
     }
 }

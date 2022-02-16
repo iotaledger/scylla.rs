@@ -5,7 +5,10 @@ use scylla::{
     query::Query,
     *,
 };
-use scylla_rs::prelude::*;
+use scylla_rs::{
+    cql::TokenEncodeChain,
+    prelude::*,
+};
 use std::{
     convert::TryInto,
     net::SocketAddr,
@@ -98,15 +101,17 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
 
     let keyspace = MyKeyspace::new();
-    let replication = "{'class': 'NetworkTopologyStrategy', 'datacenter1': 1}"
-        .parse::<Replication>()
-        .unwrap();
-    for s in parse_statements!(
-        "CREATE KEYSPACE IF NOT EXISTS #0
-        WITH replication = #1
-        AND durable_writes = true;
+    keyspace
+        .create()
+        .execute()
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-        DROP TABLE IF EXISTS #0.test;
+    for s in parse_statements!(
+        "DROP TABLE IF EXISTS #0.test;
 
         CREATE TABLE IF NOT EXISTS #0.test (
             key text PRIMARY KEY,
@@ -120,11 +125,13 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             .build()?
             .get_local()
             .await
-            .map_err(|e| anyhow::anyhow!("Could not verify if execution completed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
     }
 
-    keyspace.prepare_insert::<String, i32>().get_local().await?;
-    keyspace.prepare_select::<String, (), i32>().get_local().await?;
+    TestTable::prepare_insert::<_, TestTable>(&keyspace).get_local().await?;
+    TestTable::prepare_select::<_, String, i32>(&keyspace)
+        .get_local()
+        .await?;
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
@@ -133,8 +140,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         let keyspace = keyspace.clone();
         tokio::task::spawn(async move {
             handle.send(
-                keyspace
-                    .insert_prepared(&format!("Key {}", i), &i)
+                TestTable::insert_prepared(&keyspace, &TestTable::new(format!("Key {}", i), i))?
                     .build()?
                     .get_local()
                     .await,
@@ -161,8 +167,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         tokio::task::spawn(async move {
             handle.send((
                 i,
-                keyspace
-                    .select::<i32>(&format!("Key {}", i), &())
+                TestTable::select::<i32>(&keyspace, &format!("Key {}", i))?
                     .build()?
                     .get_local()
                     .await,
@@ -344,31 +349,71 @@ impl MyKeyspace {
     }
 }
 
-impl ToString for MyKeyspace {
-    fn to_string(&self) -> String {
-        self.name.to_string()
+impl Keyspace for MyKeyspace {
+    fn opts(&self) -> KeyspaceOpts {
+        KeyspaceOptsBuilder::default()
+            .replication(Replication::network_topology(
+                btreemap! {"datacenter1".to_string() => 1},
+            ))
+            .durable_writes(true)
+            .build()
+            .unwrap()
+    }
+
+    fn name(&self) -> &str {
+        self.name.as_str()
     }
 }
 
-impl Insert<String, i32> for MyKeyspace {
-    type QueryOrPrepared = PreparedStatement;
-    fn statement(&self) -> InsertStatement {
-        parse_statement!("INSERT INTO #.test (key, data) VALUES (?, ?)", self.name())
-    }
+#[derive(Debug)]
+pub struct TestTable {
+    pub name: String,
+    pub data: i32,
+}
 
-    fn bind_values<T: Binder>(builder: T, key: &String, value: &i32) -> T {
-        builder.value(key).value(value)
+impl TestTable {
+    pub fn new(name: String, data: i32) -> Self {
+        Self { name, data }
     }
 }
 
-impl Select<String, (), i32> for MyKeyspace {
-    type QueryOrPrepared = PreparedStatement;
+impl Table for TestTable {
+    const NAME: &'static str = "test";
+    const COLS: &'static [&'static str] = &["name", "data"];
 
-    fn statement(&self) -> SelectStatement {
-        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
+    type PartitionKey = String;
+    type PrimaryKey = String;
+}
+
+impl TokenEncoder for TestTable {
+    type Error = <<Self as Table>::PartitionKey as TokenEncoder>::Error;
+
+    fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
+        self.name.encode_token()
     }
+}
 
-    fn bind_values<T: Binder>(builder: T, key: &String, _variables: &()) -> T {
-        builder.value(key)
+impl Row for TestTable {
+    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Self {
+            name: rows.column_value()?,
+            data: rows.column_value()?,
+        })
+    }
+}
+
+impl Bindable for TestTable {
+    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
+        binder.bind(&self.name)?.bind(&self.data)?;
+        Ok(())
+    }
+}
+
+impl<S: Keyspace> Select<S, String, i32> for TestTable {
+    fn statement(keyspace: &S) -> SelectStatement {
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", keyspace.name())
     }
 }

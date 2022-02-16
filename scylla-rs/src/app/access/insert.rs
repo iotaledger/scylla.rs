@@ -67,23 +67,44 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Insert<K, V>: Keyspace {
-    /// Set the query type; `QueryStatement` or `PreparedStatement`
-    type QueryOrPrepared: QueryOrPrepared;
+pub trait Insert<S: Keyspace, K: Bindable + TokenEncoder>: Table {
     /// Create your insert statement here.
-    fn statement(&self) -> InsertStatement;
+    fn statement(keyspace: &S) -> InsertStatement;
     /// Get the MD5 hash of this implementation's statement
     /// for use when generating queries that should use
     /// the prepared statement.
-    fn id(&self) -> [u8; 16] {
-        md5::compute(self.insert_statement().to_string().as_bytes()).into()
+    fn id(keyspace: &S) -> [u8; 16] {
+        md5::compute(Self::statement(keyspace).to_string().as_bytes()).into()
     }
     /// Bind the cql values to the builder
-    fn bind_values<B: Binder>(binder: B, key: &K, values: &V) -> B;
+    fn bind_values<B: Binder>(binder: &mut B, key: &K) -> Result<(), B::Error> {
+        binder.bind(key)?;
+        Ok(())
+    }
 }
 
+impl<T: Table + Bindable + TokenEncoder, S: Keyspace> Insert<S, T> for T {
+    fn statement(keyspace: &S) -> InsertStatement {
+        let names = Self::COLS.iter().map(|&c| Name::from(c)).collect::<Vec<_>>();
+        let values = Self::COLS
+            .iter()
+            .map(|_| Term::from(BindMarker::Anonymous))
+            .collect::<Vec<_>>();
+        parse_statement!(
+            "INSERT INTO #.# (#) VALUES (#)",
+            keyspace.name(),
+            Self::NAME,
+            names,
+            values
+        )
+    }
+}
+
+pub trait InsertTable<T: Insert<Self, K>, K: Bindable + TokenEncoder>: Keyspace {}
+impl<S: Keyspace, T: Insert<Self, K>, K: Bindable + TokenEncoder> InsertTable<T, K> for S {}
+
 /// Specifies helper functions for creating static insert requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticInsertRequest<K, V>: Keyspace {
+pub trait GetStaticInsertRequest<S: Keyspace, K>: Table {
     /// Create a static insert request from a keyspace with a `Insert<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -117,116 +138,50 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # #[derive(Default)]
     /// struct MyValueType {
     ///     value1: f32,
     ///     value2: f32,
     /// }
-    /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Insert<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> InsertStatement {
-    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     }
     ///
-    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
-    ///         builder.value(key).value(&values.value1).value(&values.value2)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+    ///         builder
+    ///             .value(&value.value1)
+    ///             .value(&value.value2)
+    ///             .value(key)
+    ///             .value(variables)
     ///     }
     /// }
-    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// # let (my_key, my_var, my_val) = (1, MyVarType::default(), MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .insert(&my_key, &my_val)
+    ///     .insert(&my_key, &my_var, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert<'a>(&'a self, key: &'a K, values: &'a V) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn insert(keyspace: &S, key: &K) -> Result<InsertBuilder, StaticQueryError<K>>
     where
-        Self: Insert<K, V>,
+        Self: Insert<S, K>,
+        K: Bindable + TokenEncoder,
     {
-        let statement = self.statement();
-        InsertBuilder {
-            keyspace: PhantomData,
-            key,
-            values,
-            builder: Self::QueryOrPrepared::encode_statement(Query::new(), &statement.to_string()),
+        let statement = Self::statement(keyspace);
+        let mut builder = QueryBuilder::default();
+        builder
+            .consistency(Consistency::Quorum)
+            .statement(&statement.to_string());
+        Self::bind_values(&mut builder, key)?;
+        Ok(InsertBuilder {
+            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            builder,
             statement,
-            _marker: StaticRequest,
-        }
-    }
-
-    /// Create a static insert query request from a keyspace with a `Insert<K, V>` definition.
-    ///
-    /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
-    /// #[derive(Clone, Debug)]
-    /// struct MyKeyspace {
-    ///     pub name: String,
-    /// }
-    /// # impl MyKeyspace {
-    /// #     pub fn new(name: &str) -> Self {
-    /// #         Self {
-    /// #             name: name.to_string().into(),
-    /// #         }
-    /// #     }
-    /// # }
-    /// impl Keyspace for MyKeyspace {
-    ///     fn name(&self) -> String {
-    ///         self.name.clone()
-    ///     }
-    ///
-    ///     fn opts(&self) -> KeyspaceOpts {
-    ///         KeyspaceOptsBuilder::default()
-    ///             .replication(Replication::network_topology(maplit::btreemap! {
-    ///                 "datacenter1" => 1,
-    ///             }))
-    ///             .durable_writes(true)
-    ///             .build()
-    ///             .unwrap()
-    ///     }
-    /// }
-    /// # type MyKeyType = i32;
-    /// # #[derive(Default)]
-    /// struct MyValueType {
-    ///     value1: f32,
-    ///     value2: f32,
-    /// }
-    /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
-    ///     type QueryOrPrepared = PreparedStatement;
-    ///     fn statement(&self) -> InsertStatement {
-    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
-    ///     }
-    ///
-    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
-    ///         builder.value(key).value(&values.value1).value(&values.value2)
-    ///     }
-    /// }
-    /// # let (my_key, my_val) = (1, MyValueType::default());
-    /// MyKeyspace::new("my_keyspace")
-    ///     .insert_query(&my_key, &my_val)
-    ///     .consistency(Consistency::One)
-    ///     .build()?
-    ///     .get_local_blocking()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn insert_query<'a>(
-        &'a self,
-        key: &'a K,
-        values: &'a V,
-    ) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
-    where
-        Self: Insert<K, V>,
-    {
-        let statement = self.statement();
-        InsertBuilder {
-            keyspace: PhantomData,
-            key,
-            values: values,
-            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
-            statement,
-            _marker: StaticRequest,
-        }
+        })
     }
 
     /// Create a static insert prepared request from a keyspace with a `Insert<K, V>` definition.
@@ -261,592 +216,142 @@ pub trait GetStaticInsertRequest<K, V>: Keyspace {
     ///     }
     /// }
     /// # type MyKeyType = i32;
+    /// # type MyVarType = String;
     /// # #[derive(Default)]
     /// struct MyValueType {
     ///     value1: f32,
     ///     value2: f32,
     /// }
-    /// impl Insert<MyKeyType, MyValueType> for MyKeyspace {
+    /// impl Insert<MyKeyType, MyVarType, MyValueType> for MyKeyspace {
     ///     type QueryOrPrepared = PreparedStatement;
     ///     fn statement(&self) -> InsertStatement {
-    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)")
+    ///         parse_statement!("UPDATE my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     }
     ///
-    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, values: &MyValueType) -> B {
-    ///         builder.value(key).value(&values.value1).value(&values.value2)
+    ///     fn bind_values<B: Binder>(builder: B, key: &MyKeyType, variables: &MyVarType, value: &MyValueType) -> B {
+    ///         builder
+    ///             .value(&value.value1)
+    ///             .value(&value.value2)
+    ///             .value(key)
+    ///             .value(variables)
     ///     }
     /// }
-    /// # let (my_key, my_val) = (1, MyValueType::default());
+    /// # let (my_key, my_var, my_val) = (1, MyVarType::default(), MyValueType::default());
     /// MyKeyspace::new("my_keyspace")
-    ///     .insert_prepared(&my_key, &my_val)
+    ///     .insert_prepared(&my_key, &my_var, &my_val)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert_prepared<'a>(
-        &'a self,
-        key: &'a K,
-        values: &'a V,
-    ) -> InsertBuilder<'a, Self, K, V, QueryConsistency, StaticRequest>
+    fn insert_prepared(keyspace: &S, key: &K) -> Result<InsertBuilder, StaticQueryError<K>>
     where
-        Self: Insert<K, V>,
+        Self: Insert<S, K>,
+        K: Bindable + TokenEncoder,
     {
-        let statement = self.statement();
-        InsertBuilder {
-            keyspace: PhantomData,
-            key,
-            values,
-            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
+        let statement = Self::statement(keyspace);
+        let mut builder = QueryBuilder::default();
+        builder.consistency(Consistency::Quorum).id(&Self::id(keyspace));
+        Self::bind_values(&mut builder, key)?;
+        Ok(InsertBuilder {
+            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            builder,
             statement,
-            _marker: StaticRequest,
-        }
-    }
-}
-
-/// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a keyspace
-
-pub trait GetDynamicInsertRequest: Keyspace {
-    /// Create a dynamic insert request from a statement and variables. Can be specified as either
-    /// a query or prepared statement. The token `{{keyspace}}` will be replaced with the keyspace name.
-    ///
-    /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
-    /// "my_keyspace"
-    ///     .insert_with(
-    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
-    ///         &[&3],
-    ///         &[&4.0, &5.0],
-    ///         StatementType::Query,
-    ///     )
-    ///     .consistency(Consistency::One)
-    ///     .build()?
-    ///     .get_local_blocking()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn insert_with<'a>(
-        &'a self,
-        statement: InsertStatement,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-        statement_type: StatementType,
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    > {
-        match statement_type {
-            StatementType::Query => self.insert_query_with(statement, key, values),
-            StatementType::Prepared => self.insert_prepared_with(statement, key, values),
-        }
-    }
-
-    /// Create a dynamic insert query request from a statement and variables. The token `{{keyspace}}` will be replaced
-    /// with the keyspace name.
-    ///
-    /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
-    /// "my_keyspace"
-    ///     .insert_query_with(
-    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
-    ///         &[&3],
-    ///         &[&4.0, &5.0],
-    ///     )
-    ///     .consistency(Consistency::One)
-    ///     .build()?
-    ///     .get_local_blocking()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn insert_query_with<'a>(
-        &'a self,
-        statement: InsertStatement,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    > {
-        let statement = statement.with_keyspace(self.name());
-        InsertBuilder {
-            keyspace: PhantomData,
-            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
-            statement,
-            key,
-            values,
-            _marker: DynamicRequest,
-        }
-    }
-
-    /// Create a dynamic insert prepared request from a statement and variables. The token `{{keyspace}}` will be
-    /// replaced with the keyspace name.
-    ///
-    /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
-    /// "my_keyspace"
-    ///     .insert_prepared_with(
-    ///         parse_statement!("INSERT INTO my_table (key, val1, val2) VALUES (?,?,?)"),
-    ///         &[&3],
-    ///         &[&4.0, &5.0],
-    ///     )
-    ///     .consistency(Consistency::One)
-    ///     .build()?
-    ///     .get_local_blocking()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn insert_prepared_with<'a>(
-        &'a self,
-        statement: InsertStatement,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    > {
-        let statement = statement.with_keyspace(self.name());
-        InsertBuilder {
-            keyspace: PhantomData,
-            builder: PreparedStatement::encode_statement(Query::new(), &statement.to_string()),
-            statement,
-            key,
-            values,
-            _marker: DynamicRequest,
-        }
+        })
     }
 }
 
 /// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
 
-pub trait AsDynamicInsertRequest
-where
-    Self: Sized,
-{
+pub trait AsDynamicInsertRequest: Sized {
     /// Create a dynamic insert request from a statement and variables. Can be specified as either
     /// a query or prepared statement.
     ///
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
-    ///     .as_insert(&[&3], &[&4.0, &5.0], StatementType::Prepared)
+    /// parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
+    ///     .as_insert(&[&3], &[&4.0, &5.0], StatementType::Query)
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn as_insert<'a>(
-        self,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-        statement_type: StatementType,
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    > {
-        match statement_type {
-            StatementType::Query => self.as_insert_query(key, values),
-            StatementType::Prepared => self.as_insert_prepared(key, values),
-        }
-    }
-
-    /// Create a dynamic insert query request from a statement and variables.
-    ///
-    /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
-    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
-    ///     .as_insert_query(&[&3], &[&4.0, &5.0])
-    ///     .consistency(Consistency::One)
-    ///     .build()?
-    ///     .get_local_blocking()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn as_insert_query<'a>(
-        self,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    >;
+    fn query(self) -> InsertBuilder;
 
     /// Create a dynamic insert prepared request from a statement and variables.
     ///
     /// ## Example
     /// ```no_run
     /// use scylla_rs::app::access::*;
-    /// parse_statement!("INSERT INTO my_keyspace.my_table (key, val1, val2) VALUES (?,?,?)")
+    /// parse_statement!("UPDATE my_keyspace.my_table SET val1 = ?, val2 = ? WHERE key = ? AND var = ?")
     ///     .as_insert_prepared(&[&3], &[&4.0, &5.0])
     ///     .consistency(Consistency::One)
     ///     .build()?
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn as_insert_prepared<'a>(
-        self,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    >;
+    fn prepared(self) -> InsertBuilder;
 }
 
-impl<S: Keyspace, K, V> GetStaticInsertRequest<K, V> for S {}
-impl<S: Keyspace> GetDynamicInsertRequest for S {}
+impl<T: Table, S: Keyspace, K> GetStaticInsertRequest<S, K> for T {}
 impl AsDynamicInsertRequest for InsertStatement {
-    fn as_insert_query<'a>(
-        self,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    > {
+    fn query(self) -> InsertBuilder {
+        let mut builder = QueryBuilder::default();
+        builder.consistency(Consistency::Quorum).statement(&self.to_string());
         InsertBuilder {
-            _marker: DynamicRequest,
-            keyspace: PhantomData,
-            builder: QueryStatement::encode_statement(Query::new(), &self.to_string()),
-            statement: self,
-            key,
-            values,
-        }
-    }
-
-    fn as_insert_prepared<'a>(
-        self,
-        key: &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-        values: &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> InsertBuilder<
-        'a,
-        Self,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    > {
-        InsertBuilder {
-            _marker: DynamicRequest,
-            keyspace: PhantomData,
-            builder: PreparedStatement::encode_statement(Query::new(), &self.to_string()),
-            statement: self,
-            key,
-            values,
-        }
-    }
-}
-
-pub struct InsertBuilder<'a, S, K: ?Sized, V: ?Sized, Stage, T> {
-    pub(crate) keyspace: PhantomData<fn(S) -> S>,
-    pub(crate) statement: InsertStatement,
-    pub(crate) key: &'a K,
-    pub(crate) values: &'a V,
-    pub(crate) builder: QueryBuilder<Stage>,
-    pub(crate) _marker: T,
-}
-
-impl<'a, S: Insert<K, V>, K: TokenEncoder, V> InsertBuilder<'a, S, K, V, QueryConsistency, StaticRequest> {
-    pub fn consistency(self, consistency: Consistency) -> InsertBuilder<'a, S, K, V, QueryValues, StaticRequest> {
-        InsertBuilder {
-            _marker: self._marker,
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: S::bind_values(
-                self.builder.consistency(consistency).bind_values(),
-                &self.key,
-                &self.values,
-            ),
-        }
-    }
-
-    pub fn timestamp(self, timestamp: i64) -> InsertBuilder<'a, S, K, V, QueryBuild, StaticRequest> {
-        InsertBuilder {
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: S::bind_values(
-                self.builder.consistency(Consistency::Quorum).bind_values(),
-                &self.key,
-                &self.values,
-            )
-            .timestamp(timestamp),
-            _marker: self._marker,
-        }
-    }
-
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
-        let query = S::bind_values(
-            self.builder.consistency(Consistency::Quorum).bind_values(),
-            &self.key,
-            &self.values,
-        )
-        .build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement.into(),
-        }
-        .into())
-    }
-}
-
-impl<'a, S: Keyspace>
-    InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        DynamicRequest,
-    >
-{
-    pub fn bind_values<
-        F: 'static
-            + Fn(
-                QueryBuilder<QueryValues>,
-                &'a [&dyn BindableToken<QueryBuilder<QueryValues>>],
-                &'a [&dyn BindableValue<QueryBuilder<QueryValues>>],
-            ) -> QueryBuilder<QueryValues>,
-    >(
-        self,
-        bind_fn: F,
-    ) -> InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
-    > {
-        InsertBuilder {
-            _marker: ManualBoundRequest {
-                bind_fn: Box::new(bind_fn),
-            },
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: self.builder,
-        }
-    }
-
-    pub fn consistency(
-        self,
-        consistency: Consistency,
-    ) -> InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryValues,
-        DynamicRequest,
-    > {
-        let builder = self
-            .builder
-            .consistency(consistency)
-            .bind_values()
-            .bind(self.key)
-            .bind(self.values);
-        InsertBuilder {
-            _marker: self._marker,
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
             builder,
+            statement: self,
+            token: None,
         }
     }
 
-    pub fn timestamp(
-        self,
-        timestamp: i64,
-    ) -> InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryBuild,
-        DynamicRequest,
-    > {
-        InsertBuilder {
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: self
-                .builder
-                .consistency(Consistency::Quorum)
-                .bind_values()
-                .bind(self.key)
-                .bind(self.values)
-                .timestamp(timestamp),
-            _marker: self._marker,
-        }
-    }
-
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
-        let query = self
-            .builder
+    fn prepared(self) -> InsertBuilder {
+        let mut builder = QueryBuilder::default();
+        builder
             .consistency(Consistency::Quorum)
-            .bind_values()
-            .bind(self.key)
-            .bind(self.values)
-            .build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement.into(),
-        }
-        .into())
-    }
-}
-
-impl<'a, S: Keyspace>
-    InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryConsistency,
-        ManualBoundRequest<'a, QueryBuilder<QueryValues>>,
-    >
-{
-    pub fn consistency(
-        self,
-        consistency: Consistency,
-    ) -> InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryValues,
-        DynamicRequest,
-    > {
+            .id(&md5::compute(self.to_string().as_bytes()).into());
         InsertBuilder {
-            _marker: DynamicRequest,
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: (self._marker.bind_fn)(
-                self.builder.consistency(consistency).bind_values(),
-                self.key,
-                self.values,
-            ),
-        }
-    }
-
-    pub fn timestamp(
-        self,
-        timestamp: i64,
-    ) -> InsertBuilder<
-        'a,
-        S,
-        [&'a dyn BindableToken<QueryBuilder<QueryValues>>],
-        [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-        QueryBuild,
-        DynamicRequest,
-    > {
-        InsertBuilder {
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: (self._marker.bind_fn)(
-                self.builder.consistency(Consistency::Quorum).bind_values(),
-                self.key,
-                self.values,
-            )
-            .timestamp(timestamp),
-            _marker: DynamicRequest,
-        }
-    }
-
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
-        let query = (self._marker.bind_fn)(
-            self.builder.consistency(Consistency::Quorum).bind_values(),
-            self.key,
-            self.values,
-        )
-        .build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement.into(),
-        }
-        .into())
-    }
-}
-
-impl<'a, S, K: ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
-    pub fn timestamp(self, timestamp: i64) -> InsertBuilder<'a, S, K, V, QueryBuild, T> {
-        InsertBuilder {
-            keyspace: self.keyspace,
-            statement: self.statement,
-            key: self.key,
-            values: self.values,
-            builder: self.builder.timestamp(timestamp),
-            _marker: self._marker,
+            builder,
+            statement: self,
+            token: None,
         }
     }
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryValues, T> {
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement.into(),
-        }
-        .into())
-    }
+#[derive(Debug)]
+pub struct InsertBuilder {
+    statement: InsertStatement,
+    builder: QueryBuilder,
+    token: Option<i64>,
 }
 
-impl<'a, S, K: TokenEncoder + ?Sized, V: ?Sized, T> InsertBuilder<'a, S, K, V, QueryBuild, T> {
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
-        let query = self.builder.build()?;
-        // create the request
+impl InsertBuilder {
+    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
+        self.builder.consistency(consistency);
+        self
+    }
+
+    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
+        self.builder.timestamp(timestamp);
+        self
+    }
+
+    pub fn token<V: TokenEncoder>(&mut self, value: &V) -> Result<&mut Self, V::Error> {
+        self.token.replace(value.token()?);
+        Ok(self)
+    }
+
+    pub fn bind<V: Bindable>(&mut self, value: &V) -> Result<&mut Self, <QueryBuilder as Binder>::Error> {
+        self.builder.bind(value)?;
+        Ok(self)
+    }
+
+    pub fn build(&self) -> anyhow::Result<InsertRequest> {
         Ok(CommonRequest {
-            token: self.key.token(),
-            payload: query.into(),
-            statement: self.statement.into(),
+            token: self.token.unwrap_or_else(|| rand::random()),
+            payload: self.builder.build()?.into(),
+            statement: self.statement.clone().into(),
         }
         .into())
     }

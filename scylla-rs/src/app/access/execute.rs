@@ -28,131 +28,45 @@ where
     /// .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn execute<'a>(self) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
+    fn execute(self) -> ExecuteBuilder {
         let statement = self.into();
-        ExecuteBuilder {
-            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
-            statement,
-            variables: &[],
-        }
-    }
-
-    /// Create a dynamic request from a statement and variables. Can be specified as either
-    /// a query or prepared statement.
-    ///
-    /// ## Example
-    /// ```no_run
-    /// use scylla_rs::app::access::*;
-    /// parse_statement!(
-    ///     "CREATE OR REPLACE AGGREGATE test.average(int)
-    ///     SFUNC averageState
-    ///     STYPE tuple<int,bigint>
-    ///     FINALFUNC averageFinal
-    ///     INITCOND (?, ?);"
-    /// )
-    /// .execute_with_vars(&[&0, &0])
-    /// .consistency(Consistency::All)
-    /// .build()?
-    /// .get_local_blocking()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    fn execute_with_vars<'a>(
-        self,
-        variables: &'a [&'a dyn BindableValue<QueryBuilder<QueryValues>>],
-    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
-        let statement = self.into();
-        ExecuteBuilder {
-            builder: QueryStatement::encode_statement(Query::new(), &statement.to_string()),
-            statement,
-            variables,
-        }
+        let mut builder = QueryBuilder::default();
+        builder
+            .statement(&statement.to_string())
+            .consistency(Consistency::Quorum);
+        ExecuteBuilder { builder, statement }
     }
 }
 impl<T: Into<Statement>> AsDynamicExecuteRequest for T {}
 
-pub struct ExecuteBuilder<'a, V: ?Sized, Stage> {
-    pub(crate) statement: Statement,
-    pub(crate) variables: &'a V,
-    pub(crate) builder: QueryBuilder<Stage>,
+pub struct ExecuteBuilder {
+    statement: Statement,
+    builder: QueryBuilder,
 }
 
-impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryConsistency> {
-    pub fn consistency(
-        self,
-        consistency: Consistency,
-    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryValues> {
-        let builder = self.builder.consistency(consistency).bind_values().bind(self.variables);
-        ExecuteBuilder {
-            statement: self.statement,
-            variables: self.variables,
-            builder,
-        }
+impl ExecuteBuilder {
+    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
+        self.builder.consistency(consistency);
+        self
     }
 
-    pub fn timestamp(
-        self,
-        timestamp: i64,
-    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
-        ExecuteBuilder {
-            statement: self.statement,
-            variables: self.variables,
-            builder: self
-                .builder
-                .consistency(Consistency::Quorum)
-                .bind_values()
-                .bind(self.variables)
-                .timestamp(timestamp),
-        }
+    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
+        self.builder.timestamp(timestamp);
+        self
     }
 
-    pub fn build(self) -> anyhow::Result<ExecuteRequest> {
-        let query = self
-            .builder
-            .consistency(Consistency::Quorum)
-            .bind_values()
-            .bind(self.variables)
-            .build()?;
-        // create the request
+    pub fn bind<V: Bindable>(&mut self, value: &V) -> Result<&mut Self, <QueryBuilder as Binder>::Error> {
+        self.builder.bind(value)?;
+        Ok(self)
+    }
+
+    pub fn build(&self) -> anyhow::Result<ExecuteRequest> {
         Ok(ExecuteRequest {
             token: rand::random(),
-            payload: query.into(),
-            statement: self.statement,
-        })
-    }
-}
-
-impl<'a> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryValues> {
-    pub fn timestamp(
-        self,
-        timestamp: i64,
-    ) -> ExecuteBuilder<'a, [&'a dyn BindableValue<QueryBuilder<QueryValues>>], QueryBuild> {
-        ExecuteBuilder {
-            statement: self.statement,
-            variables: self.variables,
-            builder: self.builder.timestamp(timestamp),
+            payload: self.builder.build()?.into(),
+            statement: self.statement.clone().into(),
         }
-    }
-
-    pub fn build(self) -> anyhow::Result<ExecuteRequest> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(ExecuteRequest {
-            token: rand::random(),
-            payload: query.into(),
-            statement: self.statement,
-        })
-    }
-}
-
-impl<'a, V: ?Sized> ExecuteBuilder<'a, V, QueryBuild> {
-    pub fn build(self) -> anyhow::Result<ExecuteRequest> {
-        let query = self.builder.build()?;
-        // create the request
-        Ok(ExecuteRequest {
-            token: rand::random(),
-            payload: query.into(),
-            statement: self.statement,
-        })
+        .into())
     }
 }
 

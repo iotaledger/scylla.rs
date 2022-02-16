@@ -9,6 +9,7 @@ use crate::{
     ListLiteral,
     Operator,
     ReservedKeyword,
+    TaggedTupleLiteral,
     TupleLiteral,
 };
 
@@ -571,7 +572,7 @@ impl TryFrom<TaggedInsertStatement> for InsertStatement {
     fn try_from(value: TaggedInsertStatement) -> Result<Self, Self::Error> {
         Ok(InsertStatement {
             table: value.table.try_into()?,
-            kind: value.kind,
+            kind: value.kind.try_into()?,
             if_not_exists: value.if_not_exists,
             using: value.using.map(|v| v.into_value()).transpose()?,
         })
@@ -583,7 +584,7 @@ impl TryFrom<TaggedInsertStatement> for InsertStatement {
 #[tokenize_as(InsertStatement)]
 pub struct TaggedInsertStatement {
     pub table: TaggedKeyspaceQualifiedName,
-    pub kind: InsertKind,
+    pub kind: TaggedInsertKind,
     #[builder(setter(name = "set_if_not_exists"), default)]
     pub if_not_exists: bool,
     #[builder(default)]
@@ -661,6 +662,7 @@ impl KeyspaceExt for InsertStatement {
 }
 
 #[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[parse_via(TaggedInsertKind)]
 pub enum InsertKind {
     NameValue {
         names: Vec<Name>,
@@ -701,24 +703,67 @@ impl InsertKind {
     }
 }
 
-impl Parse for InsertKind {
+impl TryFrom<TaggedInsertKind> for InsertKind {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedInsertKind) -> Result<Self, Self::Error> {
+        Ok(match value {
+            TaggedInsertKind::NameValue { names, values } => InsertKind::NameValue {
+                names: names
+                    .into_value()?
+                    .into_iter()
+                    .map(|t| t.into_value())
+                    .collect::<Result<Vec<_>, _>>()?,
+                values: values.try_into()?,
+            },
+            TaggedInsertKind::Json { json, default } => InsertKind::Json {
+                json: json.into_value()?,
+                default: default.map(|v| v.into_value()).transpose()?,
+            },
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, ToTokens, PartialEq, Eq)]
+#[tokenize_as(InsertKind)]
+pub enum TaggedInsertKind {
+    NameValue {
+        names: Tag<Vec<Tag<Name>>>,
+        values: TaggedTupleLiteral,
+    },
+    Json {
+        json: Tag<LitStr>,
+        default: Option<Tag<ColumnDefault>>,
+    },
+}
+
+impl Parse for TaggedInsertKind {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         if s.parse::<Option<JSON>>()?.is_some() {
-            let (json, default) = s.parse_from::<(LitStr, Option<(DEFAULT, ColumnDefault)>)>()?;
+            let (json, default) = s.parse_from::<(Tag<LitStr>, Option<Tag<(DEFAULT, ColumnDefault)>>)>()?;
             Ok(Self::Json {
                 json,
-                default: default.map(|(_, d)| d),
+                default: default.map(|t| match t {
+                    Tag::Tag(t) => Tag::Tag(t),
+                    Tag::Value((_, v)) => Tag::Value(v),
+                }),
             })
         } else {
-            let (names, _, values) = s.parse_from::<(Parens<List<Name, Comma>>, VALUES, TupleLiteral)>()?;
-            if names.len() != values.elements.len() {
-                anyhow::bail!(
-                    "Number of column names and values do not match! ({} names vs {} values)",
-                    names.len(),
-                    values.elements.len()
-                );
+            let (names, _, values) =
+                s.parse_from::<(Parens<Tag<List<Tag<Name>, Comma>>>, VALUES, TaggedTupleLiteral)>()?;
+            match (&names, &values.elements) {
+                (Tag::Value(names), Tag::Value(values)) => {
+                    if names.len() != values.len() {
+                        anyhow::bail!(
+                            "Number of column names and values do not match! ({} names vs {} values)",
+                            names.len(),
+                            values.len()
+                        );
+                    }
+                }
+                _ => (),
             }
+
             Ok(Self::NameValue { names, values })
         }
     }

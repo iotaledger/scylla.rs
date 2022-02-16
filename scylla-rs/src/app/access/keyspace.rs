@@ -12,6 +12,8 @@ use scylla_parse::{
     KeyspaceOpts,
 };
 
+use super::BatchCollector;
+
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.
 /// A keyspace can have predefined queries and functionality to
@@ -29,7 +31,11 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
     fn opts(&self) -> KeyspaceOpts;
 
     /// Get the name of the keyspace as represented in the database
-    fn name(&self) -> String;
+    fn name(&self) -> &str;
+
+    fn batch<'a>(&'a self) -> BatchCollector<'a, Self> {
+        BatchCollector::new(self)
+    }
 
     /// Decode void result
     fn decode_void(decoder: Decoder) -> anyhow::Result<()> {
@@ -67,10 +73,10 @@ pub trait Keyspace: Send + Sized + Sync + Clone {
 
 impl<T> Keyspace for T
 where
-    T: ToString + Clone + Send + Sync,
+    T: AsRef<str> + Clone + Send + Sync,
 {
-    fn name(&self) -> String {
-        self.to_string()
+    fn name(&self) -> &str {
+        self.as_ref()
     }
 
     fn opts(&self) -> KeyspaceOpts {

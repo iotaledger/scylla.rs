@@ -98,7 +98,7 @@ pub struct StatementStream<'a> {
     rem: usize,
     cache: Rc<RefCell<HashMap<usize, AnyMap>>>,
     ordered_tags: Rc<RefCell<Vec<TokenStream>>>,
-    curr_ordered_tag: usize,
+    curr_ordered_tag: Rc<RefCell<usize>>,
     keyed_tags: Rc<RefCell<HashMap<String, TokenStream>>>,
 }
 
@@ -249,8 +249,8 @@ impl<'a> StatementStream<'a> {
     }
 
     fn next_ordered_tag(&mut self) -> Option<TokenStream> {
-        let c = self.curr_ordered_tag;
-        self.curr_ordered_tag += 1;
+        let c = *self.curr_ordered_tag.borrow();
+        *self.curr_ordered_tag.borrow_mut() += 1;
         self.ordered_tags.borrow().get(c).cloned()
     }
 
@@ -543,7 +543,7 @@ impl<T> Tag<T> {
     pub(crate) fn into_value(self) -> anyhow::Result<T> {
         match self {
             Tag::Value(v) => Ok(v),
-            _ => anyhow::bail!("Expected value!"),
+            _ => anyhow::bail!("Expected value for tag!"),
         }
     }
 }
@@ -591,27 +591,26 @@ impl<T: Default> Default for Tag<T> {
     }
 }
 
-impl<'a, T: 'a> CustomToTokens<'a> for Tag<T>
+impl<'a, T> CustomToTokens<'a> for Tag<T>
 where
-    TokenWrapper<'a, T>: ToTokens,
+    T: 'a + CustomToTokens<'a>,
 {
     fn to_tokens(&'a self, tokens: &mut TokenStream) {
-        tokens.extend(match self {
+        match self {
             Tag::Tag(t) => {
                 let t = TokenStream::from_str(t).unwrap();
-                quote!(#t.into())
+                tokens.extend(quote!(#t.into()));
             }
             Tag::Value(v) => {
-                let v = TokenWrapper(v);
-                quote! {#v}
+                v.to_tokens(tokens);
             }
-        });
+        }
     }
 }
 
 impl<T> ToTokens for Tag<T>
 where
-    for<'a> TokenWrapper<'a, T>: ToTokens,
+    for<'a> T: CustomToTokens<'a>,
 {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         CustomToTokens::to_tokens(self, tokens);
@@ -630,7 +629,7 @@ impl Parse for HashTag {
             let mut res = String::new();
             if c == '#' {
                 while let Some(c) = s.peek() {
-                    if c.is_alphanumeric() || c == '_' {
+                    if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
                         s.next();
                         res.push(c);
                     } else {
@@ -639,7 +638,7 @@ impl Parse for HashTag {
                 }
                 Ok(if res.is_empty() {
                     Self::Next
-                } else if res.chars().all(|c| c.is_numeric()) {
+                } else if res.chars().all(|c| matches!(c, '0'..='9')) {
                     Self::Ordered(res.parse().unwrap())
                 } else {
                     Self::Keyed(res)
@@ -660,7 +659,7 @@ impl Parse for Alpha {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
         while let Some(c) = s.peek() {
-            if c.is_alphabetic() {
+            if matches!(c, 'a'..='z' | 'A'..='Z') {
                 res.push(c);
                 s.next();
             } else {
@@ -684,7 +683,7 @@ impl Parse for Hex {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
         while let Some(c) = s.peek() {
-            if c.is_alphanumeric() {
+            if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9') {
                 res.push(c);
                 s.next();
             } else {
@@ -708,7 +707,7 @@ impl Parse for Alphanumeric {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
         while let Some(c) = s.peek() {
-            if c.is_alphanumeric() {
+            if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9') {
                 res.push(c);
                 s.next();
             } else {
@@ -729,7 +728,7 @@ impl Parse for Number {
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output> {
         let mut res = String::new();
         while let Some(c) = s.peek() {
-            if c.is_numeric() {
+            if matches!(c, '0'..='9') {
                 res.push(c);
                 s.next();
             } else {
@@ -755,7 +754,7 @@ impl Parse for SignedNumber {
         let mut has_numerals = false;
         let mut has_negative = false;
         while let Some(c) = s.peek() {
-            if c.is_numeric() {
+            if matches!(c, '0'..='9') {
                 has_numerals = true;
                 res.push(c);
                 s.next();
@@ -795,7 +794,7 @@ impl Parse for Float {
         let mut has_negative = false;
         let mut has_e = false;
         while let Some(c) = s.peek() {
-            if c.is_numeric() {
+            if matches!(c, '0'..='9') {
                 has_numerals = true;
                 res.push(c);
                 s.next();
@@ -826,7 +825,7 @@ impl Parse for Float {
                     s.next();
                     has_e = true;
                     if let Some(next) = s.next() {
-                        if next == '-' || next == '+' || next.is_numeric() {
+                        if next == '-' || next == '+' || matches!(next, '0'..='9') {
                             res.push(next);
                         } else {
                             anyhow::bail!("Invalid float: Invalid scientific notation")
@@ -1066,7 +1065,7 @@ impl Parse for Name {
             anyhow::bail!("End of statement!")
         } else {
             while let Some(c) = s.peek() {
-                if c.is_alphanumeric() || c == '_' {
+                if matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
                     s.next();
                     res.push(c);
                 } else {

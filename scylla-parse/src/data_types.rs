@@ -1087,18 +1087,39 @@ impl<T: Into<Term>> From<BTreeMap<T, T>> for MapLiteral {
 }
 
 #[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[parse_via(TaggedTupleLiteral)]
 pub struct TupleLiteral {
     pub elements: Vec<Term>,
 }
 
-impl Parse for TupleLiteral {
+impl TryFrom<TaggedTupleLiteral> for TupleLiteral {
+    type Error = anyhow::Error;
+    fn try_from(value: TaggedTupleLiteral) -> Result<Self, Self::Error> {
+        Ok(Self {
+            elements: value
+                .elements
+                .into_value()?
+                .into_iter()
+                .map(|t| t.into_value())
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+#[derive(ParseFromStr, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, ToTokens)]
+#[tokenize_as(TupleLiteral)]
+pub struct TaggedTupleLiteral {
+    pub elements: Tag<Vec<Tag<Term>>>,
+}
+
+impl Parse for TaggedTupleLiteral {
     type Output = Self;
     fn parse(s: &mut StatementStream<'_>) -> anyhow::Result<Self::Output>
     where
         Self: Sized,
     {
         Ok(Self {
-            elements: s.parse_from::<Parens<List<Term, Comma>>>()?,
+            elements: s.parse_from::<Parens<Tag<List<Tag<Term>, Comma>>>>()?,
         })
     }
 }
@@ -1460,7 +1481,7 @@ impl Parse for DurationLiteral {
                             }
                         }
                         s.next();
-                    } else if c.is_alphabetic() {
+                    } else if matches!(c, 'a'..='z' | 'A'..='Z') {
                         match alternative {
                             Some(false) => (),
                             Some(true) => anyhow::bail!("Invalid ISO8601 duration literal: Invalid unit specifier character in alternative format"),
@@ -1536,7 +1557,7 @@ impl Parse for DurationLiteral {
                             }
                         }
                         s.next();
-                    } else if c.is_numeric() {
+                    } else if matches!(c, '0'..='9') {
                         num = Some(s.parse::<u64>()? as i64);
                     } else {
                         break;
@@ -1584,9 +1605,9 @@ impl Parse for DurationLiteral {
                 let mut res = DurationLiteral::default();
                 let mut num = None;
                 while let Some(c) = s.peek() {
-                    if c.is_numeric() {
+                    if matches!(c, '0'..='9') {
                         num = Some(s.parse_from::<u64>()? as i64);
-                    } else if c.is_alphabetic() {
+                    } else if matches!(c, 'a'..='z' | 'A'..='Z') {
                         if let Some(num) = num.take() {
                             match s.parse::<TimeUnit>()? {
                                 TimeUnit::Nanos => res.nanos += num,

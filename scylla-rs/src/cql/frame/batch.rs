@@ -14,13 +14,13 @@ use super::{
     },
     opcode::BATCH,
     Binder,
-    Statements,
     MD5_BE_LENGTH,
 };
 use crate::cql::compression::{
     Compression,
     MyCompression,
 };
+use thiserror::Error;
 
 /// Blanket cql frame header for BATCH frame.
 const BATCH_HEADER: &'static [u8] = &[4, 0, 0, 0, BATCH, 0, 0, 0, 0];
@@ -59,12 +59,32 @@ pub enum BatchTypes {
 /// let payload = batch.0;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-#[derive(Clone)]
-pub struct BatchBuilder<Type: Copy + Into<u8>, Stage: Copy> {
-    buffer: Vec<u8>,
-    query_count: u16,
-    batch_type: Type,
-    stage: Stage,
+#[derive(Clone, Debug)]
+pub struct BatchBuilder {
+    stmt_builders: Vec<BatchStatementBuilder>,
+    batch_type: BatchType,
+    consistency: Consistency,
+    serial_consistency: Option<Consistency>,
+    timestamp: Option<i64>,
+}
+
+impl Default for BatchBuilder {
+    fn default() -> Self {
+        Self {
+            stmt_builders: Default::default(),
+            batch_type: Default::default(),
+            consistency: Consistency::Quorum,
+            serial_consistency: Default::default(),
+            timestamp: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BatchStatementBuilder {
+    stmt_buf: Vec<u8>,
+    val_buf: Option<Vec<u8>>,
+    value_count: u16,
 }
 
 /// Gating type for batch headers
@@ -72,353 +92,205 @@ pub struct BatchBuilder<Type: Copy + Into<u8>, Stage: Copy> {
 pub struct BatchHeader;
 
 /// Gating type for batch type
-#[derive(Copy, Clone)]
-pub struct BatchType;
+#[derive(Copy, Clone, Debug)]
+#[repr(u8)]
+pub enum BatchType {
+    /// The batch will be logged.
+    Logged = 0,
+    /// The batch will be unlogged.
+    Unlogged = 1,
+    /// The batch will be a "counter" batch.
+    Counter = 2,
+}
 
-/// Gating type for unset batch type
-#[derive(Copy, Clone)]
-pub struct BatchTypeUnset;
-impl Into<u8> for BatchTypeUnset {
-    fn into(self) -> u8 {
-        panic!("Batch type is not set!")
+impl Default for BatchType {
+    fn default() -> Self {
+        BatchType::Logged
     }
 }
 
-/// Gating type for logged batch type
-#[derive(Copy, Clone)]
-pub struct BatchTypeLogged;
-impl Into<u8> for BatchTypeLogged {
-    fn into(self) -> u8 {
-        0
-    }
+#[derive(Debug, Error)]
+pub enum BatchBuildError {
+    #[error("No batch statements provided")]
+    NoStatements,
+    #[error("Failed to compress the frame: {0}")]
+    BadCompression(#[from] anyhow::Error),
 }
 
-/// Gating type for unlogged batch type
-#[derive(Copy, Clone)]
-pub struct BatchTypeUnlogged;
-impl Into<u8> for BatchTypeUnlogged {
-    fn into(self) -> u8 {
-        1
-    }
-}
-
-/// Gating type for counter batch type
-#[derive(Copy, Clone)]
-pub struct BatchTypeCounter;
-impl Into<u8> for BatchTypeCounter {
-    fn into(self) -> u8 {
-        2
-    }
-}
-
-/// Gating type for statement / prepared id
-#[derive(Copy, Clone)]
-pub struct BatchStatementOrId;
-
-/// Gating type for statement values
-#[derive(Copy, Clone)]
-pub struct BatchValues {
-    value_count: u16,
-    index: usize,
-}
-
-/// Gating type for batch flags
-#[derive(Copy, Clone)]
-pub struct BatchFlags;
-
-/// Gating type for batch timestamp
-#[derive(Copy, Clone)]
-pub struct BatchTimestamp;
-
-/// Gating type for completed batch
-#[derive(Copy, Clone)]
-pub struct BatchBuild;
-
-impl BatchBuilder<BatchTypeUnset, BatchHeader> {
-    /// Create a new batch builder
-    pub fn new() -> BatchBuilder<BatchTypeUnset, BatchType> {
-        let mut buffer: Vec<u8> = Vec::new();
-        buffer.extend_from_slice(&BATCH_HEADER);
-        BatchBuilder {
-            buffer,
-            query_count: 0,
-            batch_type: BatchTypeUnset,
-            stage: BatchType,
-        }
-    }
-    /// Create a new batch build with a given buffer capacity
-    pub fn with_capacity(capacity: usize) -> BatchBuilder<BatchTypeUnset, BatchType> {
-        let mut buffer: Vec<u8> = Vec::with_capacity(capacity);
-        buffer.extend_from_slice(&BATCH_HEADER);
-        BatchBuilder {
-            buffer,
-            query_count: 0,
-            batch_type: BatchTypeUnset,
-            stage: BatchType,
-        }
-    }
-}
-
-impl BatchBuilder<BatchTypeUnset, BatchType> {
+impl BatchBuilder {
     /// Set the batch type in the Batch frame. See https://cassandra.apache.org/doc/latest/cql/dml.html#batch
-    pub fn batch_type<Type: Copy + Into<u8>>(mut self, batch_type: Type) -> BatchBuilder<Type, BatchStatementOrId> {
+    pub fn batch_type(&mut self, batch_type: BatchType) -> &mut Self {
         // push batch_type and pad zero querycount
-        self.buffer.extend(&[batch_type.into(), 0, 0]);
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type,
-            stage: BatchStatementOrId,
-        }
+        // self.buffer.extend(&[batch_type.into(), 0, 0]);
+        self.batch_type = batch_type;
+        self
     }
     /// Set the batch type to logged. See https://cassandra.apache.org/doc/latest/cql/dml.html#batch
-    pub fn logged(mut self) -> BatchBuilder<BatchTypeLogged, BatchStatementOrId> {
-        // push logged batch_type and pad zero querycount
-        self.buffer.extend(&[0, 0, 0]);
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: BatchTypeLogged,
-            stage: BatchStatementOrId,
-        }
+    pub fn logged(&mut self) -> &mut Self {
+        self.batch_type = BatchType::Logged;
+        self
     }
     /// Set the batch type to unlogged. See https://cassandra.apache.org/doc/latest/cql/dml.html#unlogged-batches
-    pub fn unlogged(mut self) -> BatchBuilder<BatchTypeUnlogged, BatchStatementOrId> {
-        // push unlogged batch_type and pad zero querycount
-        self.buffer.extend(&[1, 0, 0]);
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: BatchTypeUnlogged,
-            stage: BatchStatementOrId,
-        }
+    pub fn unlogged(&mut self) -> &mut Self {
+        self.batch_type = BatchType::Unlogged;
+        self
     }
     /// Set the batch type to counter. See https://cassandra.apache.org/doc/latest/cql/dml.html#counter-batches
-    pub fn counter(mut self) -> BatchBuilder<BatchTypeCounter, BatchStatementOrId> {
-        // push counter batch_type and pad zero querycount
-        self.buffer.extend(&[2, 0, 0]);
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: BatchTypeCounter,
-            stage: BatchStatementOrId,
-        }
+    pub fn counter(&mut self) -> &mut Self {
+        self.batch_type = BatchType::Counter;
+        self
     }
-}
 
-impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchStatementOrId> {
-    type Return = BatchBuilder<Type, BatchValues>;
     /// Set the statement in the Batch frame.
-    fn statement(mut self, statement: &str) -> Self::Return {
+    pub fn statement(&mut self, statement: &str) -> &mut Self {
         // normal query
-        self.buffer.push(0);
-        self.buffer.extend(&i32::to_be_bytes(statement.len() as i32));
-        self.buffer.extend(statement.bytes());
-        self.query_count += 1; // update querycount
-        let index = self.buffer.len();
-        // pad zero value_count for the query
-        self.buffer.extend(&[0, 0]);
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchValues { value_count: 0, index },
-        }
+        let mut buf = Vec::new();
+        buf.push(0);
+        buf.extend(&i32::to_be_bytes(statement.len() as i32));
+        buf.extend(statement.bytes());
+        self.stmt_builders.push(BatchStatementBuilder {
+            stmt_buf: buf,
+            ..Default::default()
+        });
+        self
     }
     /// Set the id in the Batch frame.
-    fn id(mut self, id: &[u8; 16]) -> Self::Return {
+    pub fn id(&mut self, id: &[u8; 16]) -> &mut Self {
         // prepared query
-        self.buffer.push(1);
-        self.buffer.extend(&MD5_BE_LENGTH);
-        self.buffer.extend(id);
-        self.query_count += 1;
-        let index = self.buffer.len();
-        // pad zero value_count for the query
-        self.buffer.extend(&[0, 0]);
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchValues { value_count: 0, index },
+        let mut buf = Vec::new();
+        buf.push(1);
+        buf.extend(&MD5_BE_LENGTH);
+        buf.extend(id);
+        self.stmt_builders.push(BatchStatementBuilder {
+            stmt_buf: buf,
+            ..Default::default()
+        });
+        self
+    }
+
+    /// Set the consistency of the Batch frame.
+    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
+        self.consistency = consistency;
+        self
+    }
+
+    /// Set the serial consistency in the Batch frame.
+    pub fn serial_consistency(&mut self, serial_consistency: Consistency) -> &mut Self {
+        self.serial_consistency.replace(serial_consistency);
+        self
+    }
+    /// Set the timestamp of the Batch frame.
+    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
+        self.timestamp.replace(timestamp);
+        self
+    }
+    /// Build a Batch frame.
+    pub fn build(&self) -> Result<Batch, BatchBuildError> {
+        if self.stmt_builders.is_empty() {
+            return Err(BatchBuildError::NoStatements);
         }
+        let mut buf = Vec::new();
+        // add batch header
+        buf.extend_from_slice(&BATCH_HEADER);
+        // apply compression flag(if any to the header)
+        buf[1] |= MyCompression::flag();
+        let mut body_buf = Vec::new();
+        // add batch type
+        body_buf.push(self.batch_type as u8);
+        // add query count
+        body_buf.extend_from_slice(&u16::to_be_bytes(self.stmt_builders.len() as u16));
+        for stmt_builder in self.stmt_builders.iter() {
+            body_buf.extend(stmt_builder.stmt_buf.iter());
+            body_buf.extend(u16::to_be_bytes(stmt_builder.value_count));
+            if let Some(val_buf) = stmt_builder.val_buf.as_ref() {
+                body_buf.extend(val_buf.iter());
+            }
+        }
+        // add consistency
+        body_buf.extend(&u16::to_be_bytes(self.consistency as u16));
+        let flags_idx = body_buf.len();
+        body_buf.push(NOFLAGS);
+        // add serial consistency
+        if let Some(serial_consistency) = self.serial_consistency {
+            body_buf[flags_idx] |= SERIAL_CONSISTENCY;
+            body_buf.extend(&u16::to_be_bytes(serial_consistency as u16));
+        }
+        // add timestamp
+        if let Some(timestamp) = self.timestamp {
+            body_buf[flags_idx] |= TIMESTAMP;
+            body_buf.extend(&BE_8_BYTES_LEN);
+            body_buf.extend(&i64::to_be_bytes(timestamp));
+        }
+        body_buf = MyCompression::get().compress(body_buf)?;
+        buf.extend_from_slice(&u32::to_be_bytes(body_buf.len() as u32));
+        buf.extend(body_buf);
+        Ok(Batch(buf))
     }
 }
 
-impl<Type: Copy + Into<u8>> Binder for BatchBuilder<Type, BatchValues> {
+#[derive(Debug, Error)]
+pub enum BatchBindError {
+    #[error("No statements to bind values for")]
+    NoStatements,
+    #[error("Batch encode error: {0}")]
+    EncodeError(#[from] anyhow::Error),
+}
+
+impl Binder for BatchBuilder {
+    type Error = BatchBindError;
     /// Set the value in the Batch frame.
-    fn value<V: ColumnEncoder + Sync>(mut self, value: V) -> Self
+    fn value<V: ColumnEncoder>(&mut self, value: &V) -> Result<&mut Self, Self::Error>
     where
         Self: Sized,
     {
-        value.encode(&mut self.buffer);
-        self.stage.value_count += 1;
-        self
+        if let Some(stmt_builder) = self.stmt_builders.last_mut() {
+            stmt_builder.value_count += 1;
+            let buf = stmt_builder.val_buf.get_or_insert_with(|| Vec::new());
+            value.encode(buf).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            Ok(self)
+        } else {
+            Err(BatchBindError::NoStatements)
+        }
+    }
+
+    fn named_value<V: ColumnEncoder>(&mut self, name: &str, value: &V) -> Result<&mut Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        todo!()
     }
 
     /// Set the value to be unset in the Batch frame.
-    fn unset_value(mut self) -> Self
+    fn unset_value(&mut self) -> Result<&mut Self, Self::Error>
     where
         Self: Sized,
     {
-        self.buffer.extend(&BE_UNSET_BYTES_LEN);
-        self.stage.value_count += 1;
-        self
+        if let Some(stmt_builder) = self.stmt_builders.last_mut() {
+            stmt_builder.value_count += 1;
+            let buf = stmt_builder.val_buf.get_or_insert_with(|| Vec::new());
+            buf.extend(&BE_UNSET_BYTES_LEN);
+            Ok(self)
+        } else {
+            Err(BatchBindError::NoStatements)
+        }
     }
 
     /// Set the value to be null in the Batch frame.
-    fn null_value(mut self) -> Self
+    fn null_value(&mut self) -> Result<&mut Self, Self::Error>
     where
         Self: Sized,
     {
-        self.buffer.extend(&BE_NULL_BYTES_LEN);
-        self.stage.value_count += 1;
-        self
-    }
-}
-
-impl<Type: Copy + Into<u8>> Statements for BatchBuilder<Type, BatchValues> {
-    type Return = Self;
-    /// Set the statement in the Batch frame.
-    fn statement(mut self, statement: &str) -> BatchBuilder<Type, BatchValues> {
-        // adjust value_count for prev query(if any)
-        self.buffer[self.stage.index..(self.stage.index + 2)]
-            .copy_from_slice(&u16::to_be_bytes(self.stage.value_count));
-        // normal query
-        self.buffer.push(0);
-        self.buffer.extend(&i32::to_be_bytes(statement.len() as i32));
-        self.buffer.extend(statement.bytes());
-        self.query_count += 1; // update querycount
-                               // pad zero value_count for the query
-        self.buffer.extend(&[0, 0]);
-        let index = self.buffer.len();
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchValues { value_count: 0, index },
-        }
-    }
-    /// Set the id in the Batch frame.
-    fn id(mut self, id: &[u8; 16]) -> BatchBuilder<Type, BatchValues> {
-        // adjust value_count for prev query
-        self.buffer[self.stage.index..(self.stage.index + 2)]
-            .copy_from_slice(&u16::to_be_bytes(self.stage.value_count));
-        // prepared query
-        self.buffer.push(1);
-        self.buffer.extend(&MD5_BE_LENGTH);
-        self.buffer.extend(id);
-        self.query_count += 1;
-        // pad zero value_count for the query
-        self.buffer.extend(&[0, 0]);
-        let index = self.buffer.len();
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchValues { value_count: 0, index },
-        }
-    }
-}
-impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchValues> {
-    /// Set the consistency of the Batch frame.
-    pub fn consistency(mut self, consistency: Consistency) -> BatchBuilder<Type, BatchFlags> {
-        // adjust value_count for prev query
-        self.buffer[self.stage.index..(self.stage.index + 2)]
-            .copy_from_slice(&u16::to_be_bytes(self.stage.value_count));
-        self.buffer.extend(&u16::to_be_bytes(consistency as u16));
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchFlags,
+        if let Some(stmt_builder) = self.stmt_builders.last_mut() {
+            stmt_builder.value_count += 1;
+            let buf = stmt_builder.val_buf.get_or_insert_with(|| Vec::new());
+            buf.extend(&BE_NULL_BYTES_LEN);
+            Ok(self)
+        } else {
+            Err(BatchBindError::NoStatements)
         }
     }
 }
 
-impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchFlags> {
-    /// Set the serial consistency in the Batch frame.
-    pub fn serial_consistency(mut self, consistency: Consistency) -> BatchBuilder<Type, BatchTimestamp> {
-        // add serial_consistency byte for batch flags
-        self.buffer.push(SERIAL_CONSISTENCY);
-        self.buffer.extend(&u16::to_be_bytes(consistency as u16));
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchTimestamp,
-        }
-    }
-    /// Set the timestamp of the Batch frame.
-    pub fn timestamp(mut self, timestamp: i64) -> BatchBuilder<Type, BatchBuild> {
-        // add timestamp byte for batch flags
-        self.buffer.push(TIMESTAMP);
-        self.buffer.extend(&BE_8_BYTES_LEN);
-        self.buffer.extend(&i64::to_be_bytes(timestamp));
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchBuild,
-        }
-    }
-    /// Build a Batch frame.
-    pub fn build(mut self) -> anyhow::Result<Batch> {
-        // apply compression flag(if any to the header)
-        self.buffer[1] |= MyCompression::flag();
-        // add noflags byte for batch flags
-        self.buffer.push(NOFLAGS);
-        // adjust the querycount
-        self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = MyCompression::get().compress(self.buffer)?;
-        Ok(Batch(self.buffer))
-    }
-}
-
-impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchTimestamp> {
-    /// Set the timestamp of the Batch frame.
-    pub fn timestamp(mut self, timestamp: i64) -> BatchBuilder<Type, BatchBuild> {
-        self.buffer.last_mut().map(|last_byte| *last_byte |= TIMESTAMP);
-        self.buffer.extend(&BE_8_BYTES_LEN);
-        self.buffer.extend(&i64::to_be_bytes(timestamp));
-        BatchBuilder {
-            buffer: self.buffer,
-            query_count: self.query_count,
-            batch_type: self.batch_type,
-            stage: BatchBuild,
-        }
-    }
-    /// Build a Batch frame.
-    pub fn build(mut self) -> anyhow::Result<Batch> {
-        // apply compression flag(if any to the header)
-        self.buffer[1] |= MyCompression::flag();
-        // adjust the querycount
-        self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = MyCompression::get().compress(self.buffer)?;
-        Ok(Batch(self.buffer))
-    }
-}
-
-impl<Type: Copy + Into<u8>> BatchBuilder<Type, BatchBuild> {
-    /// Build a Batch frame.
-    pub fn build(mut self) -> anyhow::Result<Batch> {
-        // apply compression flag(if any to the header)
-        self.buffer[1] |= MyCompression::flag();
-        // adjust the querycount
-        self.buffer[10..12].copy_from_slice(&u16::to_be_bytes(self.query_count));
-        self.buffer = MyCompression::get().compress(self.buffer)?;
-        Ok(Batch(self.buffer))
-    }
-}
-impl Batch {
-    /// Create Batch cql frame
-    pub fn new() -> BatchBuilder<BatchTypeUnset, BatchType> {
-        BatchBuilder::new()
-    }
-    /// Create Batch cql frame with capacity
-    pub fn with_capacity(capacity: usize) -> BatchBuilder<BatchTypeUnset, BatchType> {
-        BatchBuilder::with_capacity(capacity)
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,13 +298,16 @@ mod tests {
     #[test]
     // note: junk data
     fn simple_query_builder_test() {
-        let Batch(_payload) = Batch::new()
+        let Batch(_payload) = BatchBuilder::default()
             .logged()
             .statement("INSERT_TX_QUERY")
             .value(&"HASH_VALUE")
+            .unwrap()
             .value(&"PAYLOAD_VALUE")
+            .unwrap()
             .id(&[0; 16]) // add second query(prepared one) to the batch
-            .value(&"JUNK_VALUE") // junk value
+            .value(&"JUNK_VALUE")
+            .unwrap() // junk value
             .consistency(Consistency::One)
             .build()
             .unwrap();

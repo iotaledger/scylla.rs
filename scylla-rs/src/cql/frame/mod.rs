@@ -32,6 +32,7 @@ pub use auth_response::{
 pub use auth_success::AuthSuccess;
 pub use batch::*;
 pub use consistency::Consistency;
+use core::fmt::Debug;
 pub use decoder::{
     ColumnDecoder,
     Decoder,
@@ -40,7 +41,6 @@ pub use decoder::{
     VoidDecoder,
 };
 pub use encoder::{
-    ColumnEncodeChain,
     ColumnEncoder,
     TokenEncodeChain,
     TokenEncoder,
@@ -51,208 +51,105 @@ pub use error::{
 };
 pub use prepare::Prepare;
 pub use query::{
-    PreparedStatement,
     Query,
-    QueryBuild,
     QueryBuilder,
-    QueryConsistency,
-    QueryFlags,
-    QueryPagingState,
-    QuerySerialConsistency,
-    QueryStatement,
-    QueryValues,
 };
 pub use rows::*;
 pub use std::convert::TryInto;
-use std::{
-    collections::HashMap,
-    io::Cursor,
+use std::ops::{
+    Deref,
+    DerefMut,
 };
 
-use self::encoder::{
-    Null,
-    Unset,
-};
+#[derive(Debug, Clone)]
+pub struct Blob(pub Vec<u8>);
+
+impl Blob {
+    pub fn new(data: Vec<u8>) -> Self {
+        Blob(data)
+    }
+
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl Deref for Blob {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Blob {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Vec<u8>> for Blob {
+    fn from(v: Vec<u8>) -> Self {
+        Blob(v)
+    }
+}
 
 /// Big Endian 16-length, used for MD5 ID
 const MD5_BE_LENGTH: [u8; 2] = [0, 16];
 
-/// Statement or ID
-pub trait QueryOrPrepared: Sized {
-    /// Encode the statement as either a query string or an md5 hash prepared id
-    fn encode_statement<T: Statements>(query_or_batch: T, statement: &str) -> T::Return;
-    /// Returns whether this is a prepared statement
-    fn is_prepared() -> bool;
-}
-
-/// Defines shared functionality for frames that can receive statements
-pub trait Statements {
-    /// The return type after applying a statement
-    type Return;
-    /// Add a statement to the frame
-    fn statement(self, statement: &str) -> Self::Return;
-    /// Add a prepared statement id to the frame
-    fn id(self, id: &[u8; 16]) -> Self::Return;
-}
-
 /// Defines how values are bound to the frame
 pub trait Binder {
+    type Error: Debug;
     /// Add a single value
-    fn value<V: ColumnEncoder + Sync>(self, value: V) -> Self
+    fn value<V: ColumnEncoder>(&mut self, value: &V) -> Result<&mut Self, Self::Error>
+    where
+        Self: Sized;
+    /// Add a single named value
+    fn named_value<V: ColumnEncoder>(&mut self, name: &str, value: &V) -> Result<&mut Self, Self::Error>
     where
         Self: Sized;
     /// Add a slice of values
-    fn bind<V: Bindable<Self> + Sync>(self, values: V) -> Self
+    fn bind<V: Bindable>(&mut self, values: &V) -> Result<&mut Self, Self::Error>
     where
         Self: Sized,
     {
-        values.bind(self)
+        values.bind(self)?;
+        Ok(self)
     }
     /// Unset value
-    fn unset_value(self) -> Self
+    fn unset_value(&mut self) -> Result<&mut Self, Self::Error>
     where
         Self: Sized;
     /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> Self
+    fn null_value(&mut self) -> Result<&mut Self, Self::Error>
     where
         Self: Sized;
-
-    /// Skip binding a value
-    fn skip_value(self) -> Self
-    where
-        Self: Sized,
-    {
-        self
-    }
 }
 
 /// Defines a query bindable value
-pub trait Bindable<B: Binder> {
+pub trait Bindable {
     /// Bind the value using the provided binder
-    fn bind(&self, binder: B) -> B;
+    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error>;
 }
 
-macro_rules! impl_token_col_encoder {
-    ($($t:ty),*) => {
-        $(
-            impl<B: Binder> Bindable<B> for $t {
-                fn bind(&self, binder: B) -> B {
-                    binder.value(self)
-                }
-            }
-        )*
-    };
-}
-
-impl_token_col_encoder!(
-    i8,
-    i16,
-    i32,
-    i64,
-    u8,
-    u16,
-    u32,
-    u64,
-    f32,
-    f64,
-    bool,
-    String,
-    str,
-    Cursor<Vec<u8>>,
-    Unset,
-    Null
-);
-
-impl<B: Binder, T: ColumnEncoder + Sync> Bindable<B> for Vec<T> {
-    fn bind(&self, binder: B) -> B {
-        binder.value(self)
+impl<T: ColumnEncoder> Bindable for T {
+    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
+        binder.value(self);
+        Ok(())
     }
 }
 
-impl<B: Binder, K: ColumnEncoder + Sync, V: ColumnEncoder + Sync> Bindable<B> for HashMap<K, V> {
-    fn bind(&self, binder: B) -> B {
-        binder.value(self)
+impl Bindable for () {
+    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
+        Ok(())
     }
 }
 
-impl<B: Binder, T: ColumnEncoder + Sync> Bindable<B> for Option<T> {
-    fn bind(&self, binder: B) -> B {
-        binder.value(self)
-    }
-}
-
-impl<B: Binder, T: Bindable<B> + ?Sized> Bindable<B> for &T {
-    fn bind(&self, binder: B) -> B {
-        (*self).bind(binder)
-    }
-}
-
-impl<B: Binder> Bindable<B> for () {
-    fn bind(&self, binder: B) -> B {
-        binder.skip_value()
-    }
-}
-
-impl<B: Binder, T: Bindable<B> + Sync> Bindable<B> for [T] {
-    fn bind(&self, mut binder: B) -> B {
+impl<T: Bindable> Bindable for [T] {
+    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
         for v in self.iter() {
-            binder = binder.bind(v);
+            v.bind(binder)?;
         }
-        binder
+        Ok(())
     }
 }
-
-macro_rules! impl_tuple_bind {
-    ($(($t:tt, $n:tt)),*) => {
-        impl<B: Binder, $($t: Bindable<B> + Sync),*> Bindable<B> for ($(&$t),*,) {
-            fn bind(&self, binder: B) -> B {
-                binder$(.bind(self.$n))*
-            }
-        }
-    };
-}
-
-impl_tuple_bind!((T0, 0));
-impl_tuple_bind!((T0, 0), (T1, 1));
-impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2));
-impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3));
-impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4));
-impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4), (T5, 5));
-impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4), (T5, 5), (T6, 6));
-impl_tuple_bind!((T0, 0), (T1, 1), (T2, 2), (T3, 3), (T4, 4), (T5, 5), (T6, 6), (T7, 7));
-impl_tuple_bind!(
-    (T0, 0),
-    (T1, 1),
-    (T2, 2),
-    (T3, 3),
-    (T4, 4),
-    (T5, 5),
-    (T6, 6),
-    (T7, 7),
-    (T8, 8)
-);
-impl_tuple_bind!(
-    (T0, 0),
-    (T1, 1),
-    (T2, 2),
-    (T3, 3),
-    (T4, 4),
-    (T5, 5),
-    (T6, 6),
-    (T7, 7),
-    (T8, 8),
-    (T9, 9)
-);
-impl_tuple_bind!(
-    (T0, 0),
-    (T1, 1),
-    (T2, 2),
-    (T3, 3),
-    (T4, 4),
-    (T5, 5),
-    (T6, 6),
-    (T7, 7),
-    (T8, 8),
-    (T9, 9),
-    (T10, 10)
-);

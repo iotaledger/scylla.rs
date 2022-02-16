@@ -10,7 +10,7 @@ use std::convert::{
     TryFrom,
     TryInto,
 };
-#[derive(Debug, FromPrimitive)]
+#[derive(Copy, Clone, Debug, FromPrimitive)]
 #[repr(u16)]
 /// The consistency level enum.
 pub enum Consistency {

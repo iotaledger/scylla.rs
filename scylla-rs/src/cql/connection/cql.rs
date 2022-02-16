@@ -5,32 +5,34 @@ use super::tokens::{
     Info,
     Row,
 };
-use crate::cql::{
-    compression::{
-        MyCompression,
-        UNCOMPRESSED,
-    },
-    frame::{
-        auth_challenge::AuthChallenge,
-        auth_response::{
-            AllowAllAuth,
-            AuthResponse,
-            Authenticator,
-            PasswordAuth,
+use crate::{
+    cql::{
+        compression::{
+            MyCompression,
+            UNCOMPRESSED,
         },
-        authenticate::Authenticate,
-        consistency::Consistency,
-        decoder::{
-            Decoder,
-            Frame,
+        frame::{
+            auth_challenge::AuthChallenge,
+            auth_response::{
+                AllowAllAuth,
+                AuthResponse,
+                Authenticator,
+                PasswordAuth,
+            },
+            authenticate::Authenticate,
+            consistency::Consistency,
+            decoder::{
+                Decoder,
+                Frame,
+            },
+            options::Options,
+            query::Query,
+            rows::Rows,
+            startup::Startup,
+            supported::Supported,
         },
-        options::Options,
-        query::Query,
-        rows::Rows,
-        startup::Startup,
-        supported::Supported,
-        Statements,
     },
+    prelude::QueryBuilder,
 };
 use anyhow::{
     anyhow,
@@ -401,7 +403,8 @@ impl Cql {
                     .collect(),
             );
         } else {
-            bail!("CQL connection didn't return rows due to CqlError");
+            let error = decoder.get_error()?;
+            bail!("CQL connection didn't return rows due to CqlError: {error}");
         }
         Ok(())
     }
@@ -454,9 +457,10 @@ async fn collect_frame_response(stream: &mut TcpStream) -> anyhow::Result<Vec<u8
 
 /// Query the data center, and tokens from the ScyllaDB.
 fn fetch_tokens_query() -> anyhow::Result<Vec<u8>> {
-    let Query(payload) = Query::new()
+    let Query(payload) = QueryBuilder::default()
         .statement("SELECT data_center, tokens FROM system.local")
         .consistency(Consistency::One)
         .build()?;
+    dbg!(&payload);
     Ok(payload)
 }
