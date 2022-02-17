@@ -106,7 +106,7 @@ impl Receiver {
     fn handle_frame_header(&mut self, padding: usize, payloads: &mut Payloads) -> anyhow::Result<()> {
         // if no-header decode the header and resize the payload(if needed).
         if !self.header {
-            log::info!("Response header: {:?}", &self.buffer[0..9]);
+            // log::info!("Response header: {:?}", &self.buffer[0..9]);
             // decode total_length(HEADER_LENGTH + frame_body_length)
             let buf = &self.buffer[padding..];
             self.total_length = get_total_length_usize(&buf);
@@ -116,11 +116,9 @@ impl Receiver {
             let payload = payloads[self.stream_id as usize]
                 .as_mut_payload()
                 .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
-            // resize payload only if total_length is larger than the payload length
-            if self.total_length > payload.len() {
-                // resize the len of the payload.
-                payload.resize(self.total_length, 0);
-            }
+
+            payload.resize(self.total_length, 0);
+
             // set header to true
             self.header = true;
         }

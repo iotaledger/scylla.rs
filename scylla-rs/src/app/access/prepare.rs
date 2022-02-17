@@ -126,7 +126,6 @@ pub trait GetStaticPrepareRequest: Table {
         K: Bindable + TokenEncoder,
         S: Keyspace,
     {
-        dbg!(Self::statement(keyspace).to_string());
         PrepareRequest::new(Self::statement(keyspace))
     }
 

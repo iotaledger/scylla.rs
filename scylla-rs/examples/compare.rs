@@ -33,7 +33,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some("lz4"));
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some("snappy"));
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
@@ -51,13 +51,19 @@ async fn main() {
             Err(e) => error!("{}", e),
         }
     }
-    drop_keyspace(None).await.expect("Failed to drop keyspace");
     runtime.handle().shutdown().await;
     runtime
         .block_on()
         .await
         .expect("Runtime failed to shutdown gracefully!");
-    let session = Arc::new(SessionBuilder::new().known_node_addr(node).build().await.unwrap());
+    let session = Arc::new(
+        SessionBuilder::new()
+            .known_node_addr(node)
+            .compression(scylla::transport::Compression::Snappy.into())
+            .build()
+            .await
+            .unwrap(),
+    );
 
     for (n, t, _) in timings.iter_mut() {
         match run_benchmark_scylla(&session, *n).await {
@@ -68,7 +74,6 @@ async fn main() {
             Err(e) => error!("{}", e),
         }
     }
-    drop_keyspace(Some(node)).await.expect("Failed to drop keyspace");
     info!("Timings:");
     info!("{:8} | {:^25} | {:^25} |", "", "scylla", "scylla-rs");
     info!("{:8} | {:-<25} | {:-<25} |", "", "", "");
@@ -102,6 +107,14 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
 
     let keyspace = MyKeyspace::new();
     keyspace
+        .drop()
+        .execute()
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
+    keyspace
         .create()
         .execute()
         .consistency(Consistency::All)
@@ -109,8 +122,6 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .get_local()
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
-
-    info!("Created keyspace");
 
     for s in parse_statements!(
         "DROP TABLE IF EXISTS #0.test;
@@ -130,16 +141,10 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
     }
 
-    info!("Created table");
-
     TestTable::prepare_insert::<_, TestTable>(&keyspace).get_local().await?;
-
-    info!("Prepared insert");
     TestTable::prepare_select::<_, String, i32>(&keyspace)
         .get_local()
         .await?;
-
-    info!("Prepared select");
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
@@ -204,12 +209,27 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         anyhow::bail!("Did not receive all values!");
     }
     let time = start.elapsed().unwrap().as_nanos();
+    keyspace
+        .drop()
+        .execute()
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
     info!("Finished benchmark. Total time: {} ms", time / 1000000);
     Ok(time)
 }
 
 async fn run_benchmark_scylla(session: &Arc<Session>, n: i32) -> anyhow::Result<u128> {
     warn!("Initializing database");
+
+    let mut query = Query::new("DROP KEYSPACE IF EXISTS scylla_example".to_string());
+    query.set_consistency(scylla::frame::types::Consistency::All);
+    session
+        .query(query, ())
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
 
     let mut query = Query::new(
         "CREATE KEYSPACE IF NOT EXISTS scylla_example
@@ -314,34 +334,14 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32) -> anyhow::Result<
     }
 
     let time = start.elapsed().unwrap().as_nanos();
+    let mut query = Query::new("DROP KEYSPACE IF EXISTS scylla_example".to_string());
+    query.set_consistency(scylla::frame::types::Consistency::All);
+    session
+        .query(query, ())
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
     info!("Finished benchmark. Total time: {} ms", time / 1000000);
     Ok(time)
-}
-
-async fn drop_keyspace(node: Option<SocketAddr>) -> anyhow::Result<()> {
-    if let Some(node) = node {
-        let mut scylla = Scylla::default();
-        scylla.insert_node(node);
-        let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
-        parse_statement!("DROP KEYSPACE scylla_example")
-            .execute()
-            .consistency(Consistency::All)
-            .build()?
-            .get_local()
-            .await
-            .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
-        runtime.handle().shutdown().await;
-        runtime.block_on().await?;
-    } else {
-        parse_statement!("DROP KEYSPACE scylla_example")
-            .execute()
-            .consistency(Consistency::All)
-            .build()?
-            .get_local()
-            .await
-            .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
-    }
-    Ok(())
 }
 
 #[derive(Default, Clone, Debug)]

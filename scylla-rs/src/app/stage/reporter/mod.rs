@@ -32,6 +32,7 @@ use backstage::core::{
 };
 use std::{
     collections::HashMap,
+    convert::TryInto,
     marker::PhantomData,
 };
 
@@ -100,15 +101,15 @@ where
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
                 ReporterEvent::Request { worker, payload } => {
-                    log::info!("reporter received request, payload len: {}", payload.len());
+                    // log::info!("reporter received request, payload len: {}", payload.len());
                     match C::compress(&payload) {
                         Ok(mut payload) => {
-                            log::info!("Compressed payload len: {}", payload.len());
+                            // log::info!("Compressed payload len: {}", payload.len());
                             if let Some(stream) = self.streams.pop() {
-                                log::info!("Assigning payload to stream {}", stream);
+                                // log::info!("Assigning payload to stream {}", stream);
                                 // Assign stream_id to the payload
                                 assign_stream_to_payload(stream, &mut payload);
-                                log::info!("Request header: {:?}", &payload[0..9]);
+                                // log::info!("Request header: {:?}", &payload[0..9]);
                                 // store payload as reusable at payloads[stream]
                                 payloads[stream as usize].as_mut().replace(payload);
                                 self.workers.insert(stream, worker);

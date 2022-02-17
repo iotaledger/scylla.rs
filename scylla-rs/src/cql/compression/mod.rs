@@ -19,7 +19,7 @@ pub trait Compression: Sync {
         if compressed[1] & Self::FLAG == 0 {
             return Ok(compressed.to_vec());
         }
-        // Decompress the body by lz4
+        // Decompress the body
         let header = &compressed[0..5];
         let decompressed_buffer = Self::decompress_body(&compressed[5..])?;
         let mut res = header.to_vec();
@@ -66,20 +66,18 @@ impl Compression for Lz4 {
         if size == 0 {
             return Ok(vec![0; 4]);
         }
-        let body = lz4::block::decompress(&buffer[8..], Some(size))
+        let mut body = lz4::block::decompress(&buffer[8..], Some(size))
             .map_err(|e| CompressionError::BadDecompression(e.into()))?;
-        let mut res = Vec::with_capacity(body.len() + 4);
-        res.extend(&i32::to_be_bytes(body.len() as i32));
-        res.extend(body);
-        Ok(res)
+        body.extend(&i32::to_be_bytes(body.len() as i32));
+        body.rotate_right(4);
+        Ok(body)
     }
     fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        let body =
+        let mut body =
             lz4::block::compress(&buffer[4..], None, true).map_err(|e| CompressionError::BadCompression(e.into()))?;
-        let mut res = Vec::with_capacity(body.len() + 4);
-        res.extend(&i32::to_be_bytes(body.len() as i32));
-        res.extend(body);
-        Ok(res)
+        body.extend(&i32::to_be_bytes(body.len() as i32));
+        body.rotate_right(4);
+        Ok(body)
     }
 }
 
@@ -90,22 +88,20 @@ impl Compression for Snappy {
     const FLAG: u8 = 1;
     const KIND: Option<&'static str> = Some("snappy");
     fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        let body = snap::raw::Decoder::new()
+        let mut body = snap::raw::Decoder::new()
             .decompress_vec(&buffer[4..])
             .map_err(|e| CompressionError::BadDecompression(e.into()))?;
-        let mut res = Vec::with_capacity(body.len() + 4);
-        res.extend(&i32::to_be_bytes(body.len() as i32));
-        res.extend(body);
-        Ok(res)
+        body.extend(&i32::to_be_bytes(body.len() as i32));
+        body.rotate_right(4);
+        Ok(body)
     }
     fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        let body = snap::raw::Encoder::new()
+        let mut body = snap::raw::Encoder::new()
             .compress_vec(&buffer[4..])
             .map_err(|e| CompressionError::BadCompression(e.into()))?;
-        let mut res = Vec::with_capacity(body.len() + 4);
-        res.extend(&i32::to_be_bytes(body.len() as i32));
-        res.extend(body);
-        Ok(res)
+        body.extend(&i32::to_be_bytes(body.len() as i32));
+        body.rotate_right(4);
+        Ok(body)
     }
 }
 /// Uncompressed unit structure which implements compression trait.
