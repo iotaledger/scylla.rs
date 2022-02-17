@@ -128,8 +128,20 @@ pub use update::{
 pub trait Table: TokenEncoder {
     const NAME: &'static str;
     const COLS: &'static [&'static str];
+    const PARTITION_KEY: &'static [&'static str];
+    const CLUSTERING_COLS: &'static [&'static str];
     type PartitionKey;
     type PrimaryKey;
+}
+
+pub trait IdExt {
+    fn id(&self) -> [u8; 16];
+}
+
+impl<T: ToString> IdExt for T {
+    fn id(&self) -> [u8; 16] {
+        md5::compute(self.to_string().as_bytes()).into()
+    }
 }
 
 /// The possible request types
@@ -387,7 +399,7 @@ pub trait GetStatementIdExt {
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
     {
-        T::id(self)
+        T::statement(self).id()
     }
 
     fn insert_statement<T, K>(&self) -> InsertStatement
@@ -405,7 +417,7 @@ pub trait GetStatementIdExt {
         T: Insert<Self, K>,
         K: Bindable + TokenEncoder,
     {
-        T::id(self)
+        T::statement(self).id()
     }
 
     fn update_statement<T, K, V>(&self) -> UpdateStatement
@@ -423,7 +435,7 @@ pub trait GetStatementIdExt {
         T: Update<Self, K, V>,
         K: Bindable + TokenEncoder,
     {
-        T::id(self)
+        T::statement(self).id()
     }
 
     fn delete_statement<T, K>(&self) -> DeleteStatement
@@ -441,7 +453,7 @@ pub trait GetStatementIdExt {
         T: Delete<Self, K>,
         K: Bindable + TokenEncoder,
     {
-        T::id(self)
+        T::statement(self).id()
     }
 }
 
@@ -846,6 +858,8 @@ mod tests {
     impl Table for MyTable {
         const NAME: &'static str = "my_table";
         const COLS: &'static [&'static str] = &["key", "val1", "val2"];
+        const PARTITION_KEY: &'static [&'static str] = &["key"];
+        const CLUSTERING_COLS: &'static [&'static str] = &[];
 
         type PartitionKey = f32;
         type PrimaryKey = f32;

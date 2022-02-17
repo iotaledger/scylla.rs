@@ -162,7 +162,7 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
         T: Insert<S, K>,
     {
         let statement = T::statement(self.keyspace);
-        let id = T::id(self.keyspace);
+        let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
         self.builder.id(&id);
@@ -199,7 +199,7 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
         V: 'static + Clone + Send + Debug,
     {
         let statement = T::statement(self.keyspace);
-        let id = T::id(self.keyspace);
+        let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
         self.builder.id(&id);
@@ -231,7 +231,7 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
         K: 'static + Bindable + TokenEncoder + Clone + Send + Debug,
     {
         let statement = T::statement(self.keyspace);
-        let id = T::id(self.keyspace);
+        let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
         self.builder.id(&id);

@@ -59,12 +59,6 @@ pub trait Select<S: Keyspace, K: Bindable + TokenEncoder, O: RowsDecoder>: Table
     /// Create your select statement here.
     fn statement(keyspace: &S) -> SelectStatement;
 
-    /// Get the MD5 hash of this implementation's statement
-    /// for use when generating queries that should use
-    /// the prepared statement.
-    fn id(keyspace: &S) -> [u8; 16] {
-        md5::compute(Self::statement(keyspace).to_string().as_bytes()).into()
-    }
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: &mut B, key: &K) -> Result<(), B::Error> {
         binder.bind(key)?;
@@ -77,11 +71,12 @@ where
     T::PrimaryKey: Bindable + TokenEncoder,
 {
     fn statement(keyspace: &S) -> SelectStatement {
-        let where_clause = Self::COLS
+        let where_clause = Self::PARTITION_KEY
             .iter()
+            .chain(Self::CLUSTERING_COLS.iter())
             .map(|&c| Relation::normal(c, Operator::Equal, BindMarker::Anonymous))
             .collect::<Vec<_>>();
-        parse_statement!("SELECT * FROM #.# WHERE #", keyspace.name(), Self::NAME, where_clause)
+        parse_statement!("SELECT * FROM #.# #", keyspace.name(), Self::NAME, where_clause)
     }
 }
 
@@ -222,7 +217,7 @@ pub trait GetStaticSelectRequest<S: Keyspace, K: Bindable + TokenEncoder>: Table
     {
         let statement = Self::statement(keyspace);
         let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::One).id(&Self::id(keyspace));
+        builder.consistency(Consistency::One).id(&statement.id());
         Self::bind_values(&mut builder, key)?;
         Ok(SelectBuilder {
             token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),

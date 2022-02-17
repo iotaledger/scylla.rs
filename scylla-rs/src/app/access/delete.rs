@@ -59,13 +59,6 @@ pub trait Delete<S: Keyspace, K: Bindable + TokenEncoder>: Table {
     /// Create your delete statement here.
     fn statement(keyspace: &S) -> DeleteStatement;
 
-    /// Get the MD5 hash of this implementation's statement
-    /// for use when generating queries that should use
-    /// the prepared statement.
-    fn id(keyspace: &S) -> [u8; 16] {
-        md5::compute(Self::statement(keyspace).to_string().as_bytes()).into()
-    }
-
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: &mut B, key: &K) -> Result<(), B::Error> {
         binder.bind(key)?;
@@ -206,7 +199,7 @@ pub trait GetStaticDeleteRequest<S: Keyspace, K>: Table {
     {
         let statement = Self::statement(keyspace);
         let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::Quorum).id(&Self::id(keyspace));
+        builder.consistency(Consistency::Quorum).id(&statement.id());
         Self::bind_values(&mut builder, key)?;
         Ok(DeleteBuilder {
             token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),

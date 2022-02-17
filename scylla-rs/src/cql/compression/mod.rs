@@ -5,6 +5,10 @@
 
 use std::convert::TryInto;
 
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use thiserror::Error;
 
 /// This compression thread provides the buffer compression/decompression methods for uncompressed/Lz4/snappy.
@@ -43,6 +47,14 @@ pub trait Compression: Sync {
     }
     /// Accepts a body buffer with four byte length prepended
     fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError>;
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CompressionType {
+    #[serde(rename = "snappy")]
+    Snappy,
+    #[serde(rename = "lz4")]
+    Lz4,
 }
 
 #[derive(Debug, Error)]

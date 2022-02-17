@@ -3,10 +3,14 @@
 use log::*;
 use scylla::{
     query::Query,
+    transport::Compression,
     *,
 };
 use scylla_rs::{
-    cql::TokenEncodeChain,
+    cql::{
+        compression::CompressionType,
+        TokenEncodeChain,
+    },
     prelude::*,
 };
 use std::{
@@ -33,7 +37,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some("snappy"));
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), None);
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
@@ -59,7 +63,7 @@ async fn main() {
     let session = Arc::new(
         SessionBuilder::new()
             .known_node_addr(node)
-            .compression(scylla::transport::Compression::Snappy.into())
+            .compression(None)
             .build()
             .await
             .unwrap(),
@@ -146,14 +150,22 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .get_local()
         .await?;
 
+    let insert = keyspace.insert_statement::<TestTable, TestTable>();
+
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
         let handle = sender.clone();
-        let keyspace = keyspace.clone();
+        // let keyspace = keyspace.clone();
+        let insert = insert.clone();
         tokio::task::spawn(async move {
+            let key = format!("Key {}", i);
             handle.send(
-                TestTable::insert_prepared(&keyspace, &TestTable::new(format!("Key {}", i), i))?
+                insert
+                    .prepared()
+                    .token(&key)?
+                    .bind(&key)?
+                    .bind(&i)?
                     .build()?
                     .get_local()
                     .await,
@@ -173,14 +185,21 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         anyhow::bail!("Did not receive all insert confirmations!");
     }
 
+    let select = keyspace.select_statement::<TestTable, String, i32>();
+
     let (sender, mut inbox) = unbounded_channel::<(_, Result<Option<_>, _>)>();
     for i in 0..n {
         let handle = sender.clone();
-        let keyspace = keyspace.clone();
+        // let keyspace = keyspace.clone();
+        let select = select.clone();
         tokio::task::spawn(async move {
+            let key = format!("Key {}", i);
             handle.send((
                 i,
-                TestTable::select::<i32>(&keyspace, &format!("Key {}", i))?
+                select
+                    .prepared::<i32>()
+                    .token(&key)?
+                    .bind(&key)?
                     .build()?
                     .get_local()
                     .await,
@@ -388,6 +407,8 @@ impl TestTable {
 impl Table for TestTable {
     const NAME: &'static str = "test";
     const COLS: &'static [&'static str] = &["key", "data"];
+    const PARTITION_KEY: &'static [&'static str] = &["key"];
+    const CLUSTERING_COLS: &'static [&'static str] = &[];
 
     type PartitionKey = String;
     type PrimaryKey = String;

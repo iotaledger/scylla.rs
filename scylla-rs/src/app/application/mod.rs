@@ -5,6 +5,7 @@ pub(crate) use crate::cql::PasswordAuth;
 use crate::{
     app::cluster::ClusterEvent,
     cql::compression::{
+        CompressionType,
         Lz4,
         Snappy,
         Uncompressed,
@@ -100,7 +101,7 @@ pub struct Scylla {
     pub send_buffer_size: Option<u32>,
     /// Default cql authentication
     pub authenticator: PasswordAuth,
-    pub compression: Option<String>,
+    pub compression: Option<CompressionType>,
 }
 
 impl Default for Scylla {
@@ -125,7 +126,7 @@ impl Scylla {
         local_datacenter: T,
         reporter_count: u8,
         password_auth: PasswordAuth,
-        compression: Option<T>,
+        compression: Option<CompressionType>,
     ) -> Self {
         Self {
             local_dc: local_datacenter.into(),
@@ -136,7 +137,7 @@ impl Scylla {
             recv_buffer_size: None,
             send_buffer_size: None,
             authenticator: password_auth,
-            compression: compression.map(Into::into),
+            compression,
         }
     }
     pub fn insert_node(&mut self, node: SocketAddr) -> &mut Self {
@@ -187,17 +188,14 @@ where
         // publish scylla as config
         rt.add_resource(self.clone()).await;
         let cluster_handle = match &self.compression {
-            Some(kind) => match kind.as_str() {
-                "lz4" => {
+            Some(kind) => match kind {
+                CompressionType::Lz4 => {
                     let cluster = Cluster::<Lz4>::new();
                     rt.start("cluster".to_string(), cluster).await?
                 }
-                "snappy" => {
+                CompressionType::Snappy => {
                     let cluster = Cluster::<Snappy>::new();
                     rt.start("cluster".to_string(), cluster).await?
-                }
-                _ => {
-                    return Err(anyhow::anyhow!("Unsupported compression type").into());
                 }
             },
             None => {
