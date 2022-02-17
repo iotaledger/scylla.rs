@@ -201,7 +201,7 @@ pub struct Decoder {
 }
 impl Decoder {
     /// Create a new decoder with an assigned compression type.
-    pub fn new<C: Compression>(mut buffer: &[u8]) -> anyhow::Result<Self> {
+    pub fn new<C: Compression>(buffer: &[u8]) -> anyhow::Result<Self> {
         let buffer = C::decompress(buffer)?;
         let header_flags = HeaderFlags::new(&buffer)?;
         Ok(Decoder { buffer, header_flags })

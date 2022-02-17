@@ -230,7 +230,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
         stream.write_all(&startup_buf).await?;
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer.
-        let decoder = Decoder::new::<Uncompressed>(&buffer)?;
+        let decoder = Decoder::new::<C>(&buffer)?;
         if decoder.is_authenticate()? {
             if self.authenticator.is_none() {
                 Authenticate::new(&decoder)?;
@@ -243,7 +243,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
                         .ok_or_else(|| anyhow!("Failed to read Auth Response!"))?,
                 )
                 .build()?;
-            let auth_response = C::compress(&auth_response)?;
+            // let auth_response = C::compress(&auth_response)?;
             // write_all auth_response frame to stream;
             stream.write_all(&auth_response).await?;
             // collect_frame_response
@@ -514,6 +514,5 @@ fn fetch_tokens_query<C: Compression>() -> anyhow::Result<Vec<u8>> {
         .statement("SELECT data_center, tokens FROM system.local")
         .consistency(Consistency::One)
         .build()?;
-    let payload = C::compress(&payload)?;
     Ok(payload)
 }

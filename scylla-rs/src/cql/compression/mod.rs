@@ -61,8 +61,12 @@ impl Compression for Lz4 {
     const FLAG: u8 = 1;
     const KIND: Option<&'static str> = Some("lz4");
     fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        let len = i32::from_be_bytes(buffer[0..4].try_into().unwrap());
-        let body = lz4::block::decompress(&buffer[4..], Some(len))
+        let size = i32::from_be_bytes(buffer[4..8].try_into().unwrap());
+        // lz4 will fail if we get a zero-sized body, just just skip it
+        if size == 0 {
+            return Ok(vec![0; 4]);
+        }
+        let body = lz4::block::decompress(&buffer[8..], Some(size))
             .map_err(|e| CompressionError::BadDecompression(e.into()))?;
         let mut res = Vec::with_capacity(body.len() + 4);
         res.extend(&i32::to_be_bytes(body.len() as i32));
@@ -70,11 +74,10 @@ impl Compression for Lz4 {
         Ok(res)
     }
     fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        let len = i32::from_be_bytes(buffer[0..4].try_into().unwrap());
         let body =
-            lz4::block::compress(&buffer[4..], None, false).map_err(|e| CompressionError::BadCompression(e.into()))?;
-        let mut res = Vec::with_capacity(len + 4);
-        res.extend(&i32::to_be_bytes(len));
+            lz4::block::compress(&buffer[4..], None, true).map_err(|e| CompressionError::BadCompression(e.into()))?;
+        let mut res = Vec::with_capacity(body.len() + 4);
+        res.extend(&i32::to_be_bytes(body.len() as i32));
         res.extend(body);
         Ok(res)
     }

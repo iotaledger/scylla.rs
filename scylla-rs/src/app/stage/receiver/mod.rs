@@ -106,6 +106,7 @@ impl Receiver {
     fn handle_frame_header(&mut self, padding: usize, payloads: &mut Payloads) -> anyhow::Result<()> {
         // if no-header decode the header and resize the payload(if needed).
         if !self.header {
+            log::info!("Response header: {:?}", &self.buffer[0..9]);
             // decode total_length(HEADER_LENGTH + frame_body_length)
             let buf = &self.buffer[padding..];
             self.total_length = get_total_length_usize(&buf);

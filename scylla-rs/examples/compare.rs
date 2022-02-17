@@ -33,7 +33,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some("snappy"));
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some("lz4"));
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
