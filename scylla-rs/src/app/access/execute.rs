@@ -30,10 +30,13 @@ where
     /// ```
     fn execute(self) -> ExecuteBuilder {
         let statement = self.into();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         ExecuteBuilder {
             builder: QueryBuilder::default()
                 .statement(&statement.to_string())
                 .consistency(Consistency::Quorum),
+            keyspace,
             statement,
         }
     }
@@ -41,7 +44,8 @@ where
 impl<T: Into<Statement>> AsDynamicExecuteRequest for T {}
 
 pub struct ExecuteBuilder {
-    statement: Statement,
+    keyspace: Option<String>,
+    statement: String,
     builder: QueryBuilder,
 }
 
@@ -62,10 +66,11 @@ impl ExecuteBuilder {
     }
 
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
-        Ok(ExecuteRequest {
+        Ok(CommonRequest {
             token: rand::random(),
             payload: self.builder.build()?.into(),
-            statement: self.statement.clone().into(),
+            keyspace: self.keyspace,
+            statement: self.statement,
         }
         .into())
     }
@@ -73,37 +78,29 @@ impl ExecuteBuilder {
 
 /// A request to execute a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct ExecuteRequest {
-    pub(crate) token: i64,
-    pub(crate) payload: Vec<u8>,
-    pub(crate) statement: Statement,
-}
+pub struct ExecuteRequest(CommonRequest);
 
 impl From<CommonRequest> for ExecuteRequest {
     fn from(req: CommonRequest) -> Self {
-        ExecuteRequest {
-            token: req.token,
-            payload: req.payload,
-            statement: req.statement.into(),
-        }
+        ExecuteRequest(req)
     }
 }
 
 impl Request for ExecuteRequest {
     fn token(&self) -> i64 {
-        self.token
+        self.0.token
     }
 
-    fn statement(&self) -> Statement {
-        self.statement.clone().into()
+    fn statement(&self) -> &String {
+        self.0.statement()
     }
 
     fn payload(&self) -> Vec<u8> {
-        self.payload.clone()
+        self.0.payload()
     }
 
-    fn keyspace(&self) -> Option<String> {
-        self.statement.get_keyspace()
+    fn keyspace(&self) -> &Option<String> {
+        self.0.keyspace()
     }
 }
 

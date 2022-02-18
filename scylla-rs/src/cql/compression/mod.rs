@@ -37,6 +37,9 @@ pub trait Compression: Sync {
         if buffer.len() < 9 {
             return Err(CompressionError::SmallBuffer);
         }
+        if Self::FLAG == 0 {
+            return Ok(buffer);
+        }
         // Compress the body
         if let Some(compressed_buffer) = Self::compress_body(&buffer[5..])? {
             buffer[1] |= Self::FLAG;

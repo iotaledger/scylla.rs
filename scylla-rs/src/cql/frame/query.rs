@@ -90,12 +90,10 @@ impl QueryStatementKind {
     pub fn encode(self, buffer: &mut Vec<u8>) {
         match self {
             QueryStatementKind::Query(stmt) => {
-                buffer.reserve(stmt.len() + 4);
                 buffer.extend(&i32::to_be_bytes(stmt.len() as i32));
                 buffer.extend(stmt.as_bytes());
             }
             QueryStatementKind::Execute(id) => {
-                buffer.reserve(18);
                 buffer.extend(&super::MD5_BE_LENGTH);
                 buffer.extend(id);
             }
@@ -172,7 +170,9 @@ impl QueryBuilder {
     /// Build a query frame with an assigned compression type, without any value.
     pub fn build(mut self) -> Result<Query, QueryBuildError> {
         let statement = self.statement.take().ok_or_else(|| QueryBuildError::NoStatement)?;
-        let mut body_buf = Vec::with_capacity(statement.len() + 3);
+        let mut body_buf = Vec::with_capacity(
+            statement.len() + self.values.len() + self.paging_state.as_ref().map(|s| s.len()).unwrap_or_default() + 23,
+        );
         let header = statement.header();
         statement.encode(&mut body_buf);
         body_buf.extend(&u16::to_be_bytes(self.consistency as u16));
@@ -182,7 +182,6 @@ impl QueryBuilder {
         body_buf.push(SKIP_METADATA);
         if self.value_count > 0 {
             body_buf[flags_idx] |= VALUES;
-            body_buf.reserve(self.values.len() + 2);
             body_buf.extend(&u16::to_be_bytes(self.value_count));
             body_buf.extend(self.values);
             if matches!(self.bind_type, Some(BindType::Named)) {
@@ -195,7 +194,6 @@ impl QueryBuilder {
         }
         if let Some(paging_state) = self.paging_state {
             body_buf[flags_idx] |= PAGING_STATE;
-            body_buf.reserve(paging_state.len() + 2);
             body_buf.extend(&u32::to_be_bytes(paging_state.len() as u32));
             body_buf.extend(paging_state);
         }

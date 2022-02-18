@@ -251,8 +251,8 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
             token: rand::random(),
-            map: self.map.clone(),
-            payload: self.builder.build()?.0.into(),
+            map: self.map.into_iter().map(|(k, v)| (k, v.to_string())).collect(),
+            payload: self.builder.build()?.0,
             keyspace: self.keyspace.name().to_owned().into(),
         })
     }
@@ -265,7 +265,7 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
 pub struct BatchRequest {
     token: i64,
     payload: Vec<u8>,
-    map: HashMap<[u8; 16], ModificationStatement>,
+    map: HashMap<[u8; 16], String>,
     keyspace: Option<String>,
 }
 
@@ -274,7 +274,7 @@ impl Request for BatchRequest {
         self.token
     }
 
-    fn statement(&self) -> Statement {
+    fn statement(&self) -> &String {
         panic!("Must use `get_statement` on batch requests!")
     }
 
@@ -282,8 +282,8 @@ impl Request for BatchRequest {
         self.payload.clone()
     }
 
-    fn keyspace(&self) -> Option<String> {
-        self.keyspace.clone()
+    fn keyspace(&self) -> &Option<String> {
+        &self.keyspace
     }
 }
 
@@ -308,17 +308,17 @@ impl BatchRequest {
     }
 
     /// Clone the cql map
-    pub fn clone_map(&self) -> HashMap<[u8; 16], ModificationStatement> {
+    pub fn clone_map(&self) -> HashMap<[u8; 16], String> {
         self.map.clone()
     }
 
     /// Take the cql map, leaving an empty map in the request
-    pub fn take_map(&mut self) -> HashMap<[u8; 16], ModificationStatement> {
+    pub fn take_map(&mut self) -> HashMap<[u8; 16], String> {
         std::mem::take(&mut self.map)
     }
 
     /// Get a statement given an id from the request's map
-    pub fn get_statement(&self, id: &[u8; 16]) -> Option<&ModificationStatement> {
+    pub fn get_statement(&self, id: &[u8; 16]) -> Option<&String> {
         self.map.get(id)
     }
 

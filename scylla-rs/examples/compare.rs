@@ -139,10 +139,10 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
     }
 
-    let insert = keyspace.insert_statement::<TestTable, TestTable>();
-    let select = keyspace.select_statement::<TestTable, String, i32>();
-    insert.clone().prepare().get_local().await?;
-    select.clone().prepare().get_local().await?;
+    let insert = Arc::new(keyspace.insert_statement::<TestTable, TestTable>());
+    let select = Arc::new(keyspace.select_statement::<TestTable, String, i32>());
+    insert.prepare().get_local().await?;
+    select.prepare().get_local().await?;
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
@@ -268,13 +268,15 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32) -> anyhow::Result<
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    let prepared_insert = session
-        .prepare("INSERT INTO scylla_example.test (key, data) VALUES (?, ?)")
-        .await?;
+    let prepared_insert = Arc::new(
+        session
+            .prepare("INSERT INTO scylla_example.test (key, data) VALUES (?, ?)")
+            .await?,
+    );
 
     let mut query = Query::new("SELECT data FROM scylla_example.test WHERE key = ?".to_string());
     query.set_consistency(scylla::frame::types::Consistency::One);
-    let prepared_select = session.prepare(query).await?;
+    let prepared_select = Arc::new(session.prepare(query).await?);
 
     let start = SystemTime::now();
 

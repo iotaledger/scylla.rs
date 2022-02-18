@@ -100,12 +100,11 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
 
     let insert = keyspace.insert_statement::<TestTable, TestTable>();
     let select = keyspace.select_statement::<TestTable, String, i32>();
-    insert.clone().prepare().get_local().await?;
-    select.clone().prepare().get_local().await?;
+    insert.prepare().get_local().await?;
+    select.prepare().get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
-        let insert = insert.clone();
         let key = format!("Key {}", i);
         insert
             .query_prepared()
@@ -121,7 +120,6 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
 
     let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
     for i in 0..n {
-        let select = select.clone();
         let key = format!("Key {}", i);
         select
             .query_prepared::<i32>()

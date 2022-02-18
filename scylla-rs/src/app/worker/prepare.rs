@@ -14,11 +14,12 @@ pub struct PrepareWorker {
 }
 impl PrepareWorker {
     /// Create a new prepare worker
-    pub fn new(keyspace_name: Option<String>, id: [u8; 16], statement: DataManipulationStatement) -> Box<Self> {
+    pub fn new(keyspace: Option<String>, id: [u8; 16], statement: String) -> Box<Self> {
         Box::new(Self {
             id,
             retries: 0,
             request: PrepareRequest {
+                keyspace,
                 statement,
                 token: rand::random(),
             },

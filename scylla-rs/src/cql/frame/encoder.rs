@@ -96,7 +96,7 @@ impl<E: ColumnEncoder> ColumnEncoder for Option<E> {
                 value.encode(buffer)?;
             }
             None => {
-                ColumnEncoder::encode(&UNSET_VALUE, buffer).ok();
+                let _ = ColumnEncoder::encode(&UNSET_VALUE, buffer);
             }
         }
         Ok(())

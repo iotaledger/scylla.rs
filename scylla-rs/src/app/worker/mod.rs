@@ -11,9 +11,10 @@ use crate::{
         ring::RingSendError,
     },
     cql::{
+        compression::CompressionError,
         CqlError,
         Decoder,
-        RowsDecoder, compression::CompressionError,
+        RowsDecoder,
     },
 };
 use anyhow::anyhow;
@@ -102,7 +103,7 @@ pub trait RetryableWorker<R>: Worker {
             *self.retries_mut() -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
             send_global(
-                self.request().keyspace().as_ref().map(|s| s.as_str()),
+                self.request().keyspace().clone().as_ref().map(|s| s.as_str()),
                 self.request().token(),
                 self.request().payload(),
                 self,
@@ -135,7 +136,7 @@ pub trait RetryableWorker<R>: Worker {
         R: SendRequestExt,
     {
         send_local(
-            self.request().keyspace().as_ref().map(|s| s.as_str()),
+            self.request().keyspace().clone().as_ref().map(|s| s.as_str()),
             self.request().token(),
             self.request().payload(),
             self,
@@ -150,7 +151,7 @@ pub trait RetryableWorker<R>: Worker {
         R: SendRequestExt,
     {
         send_global(
-            self.request().keyspace().as_ref().map(|s| s.as_str()),
+            self.request().keyspace().clone().as_ref().map(|s| s.as_str()),
             self.request().token(),
             self.request().payload(),
             self,
@@ -273,9 +274,9 @@ where
     R: Request,
 {
     let statement = worker.request().statement();
-    let keyspace_name = worker.request().keyspace();
+    let keyspace = worker.request().keyspace();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    PrepareWorker::new(keyspace_name, id, statement.try_into().unwrap())
+    PrepareWorker::new(keyspace.clone(), id, statement.to_owned())
         .send_to_reporter(reporter)
         .ok();
     let payload = worker.request().payload();

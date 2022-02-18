@@ -65,7 +65,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
         O: RowsDecoder,
         T: Table,
     {
-        PrepareRequest::new(self.statement())
+        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -126,7 +126,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        PrepareRequest::new(self.statement())
+        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -192,7 +192,7 @@ pub trait GetStaticPrepareRequest: Keyspace {
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        PrepareRequest::new(self.statement())
+        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -249,14 +249,14 @@ pub trait GetStaticPrepareRequest: Keyspace {
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        PrepareRequest::new(self.statement())
+        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
     }
 }
 
 /// Specifies helper functions for creating dynamic prepare requests from anything that can be interpreted as a
 /// statement
 
-pub trait AsDynamicPrepareRequest: Into<DataManipulationStatement> {
+pub trait AsDynamicPrepareRequest: KeyspaceExt + ToString {
     /// Create a dynamic prepare request from a statement.
     /// name.
     ///
@@ -268,25 +268,27 @@ pub trait AsDynamicPrepareRequest: Into<DataManipulationStatement> {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare(self) -> PrepareRequest {
-        PrepareRequest::new(self)
+    fn prepare(&self) -> PrepareRequest {
+        PrepareRequest::new(self.get_keyspace(), self.to_string())
     }
 }
 
 impl<S: Keyspace> GetStaticPrepareRequest for S {}
-impl<T: Into<DataManipulationStatement>> AsDynamicPrepareRequest for T {}
+impl<T: KeyspaceExt + ToString> AsDynamicPrepareRequest for T {}
 
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
 pub struct PrepareRequest {
-    pub(crate) statement: DataManipulationStatement,
+    pub(crate) keyspace: Option<String>,
+    pub(crate) statement: String,
     pub(crate) token: i64,
 }
 
 impl PrepareRequest {
-    fn new(statement: impl Into<DataManipulationStatement>) -> Self {
+    fn new(keyspace: Option<String>, statement: String) -> Self {
         PrepareRequest {
-            statement: statement.into(),
+            keyspace,
+            statement,
             token: rand::random(),
         }
     }
@@ -297,8 +299,8 @@ impl Request for PrepareRequest {
         self.token
     }
 
-    fn statement(&self) -> Statement {
-        self.statement.clone().into()
+    fn statement(&self) -> &String {
+        &self.statement
     }
 
     fn payload(&self) -> Vec<u8> {
@@ -309,8 +311,8 @@ impl Request for PrepareRequest {
             .0
     }
 
-    fn keyspace(&self) -> Option<String> {
-        self.statement.get_keyspace()
+    fn keyspace(&self) -> &Option<String> {
+        &self.keyspace
     }
 }
 

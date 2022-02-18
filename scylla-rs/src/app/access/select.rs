@@ -140,14 +140,17 @@ pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         O: RowsDecoder,
     {
         let statement = self.statement();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
             .consistency(Consistency::One)
-            .statement(&statement.to_string());
+            .statement(&statement);
         builder = Self::bind_values(builder, key)?;
         Ok(SelectBuilder {
             token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            keyspace,
             _marker: PhantomData,
         })
     }
@@ -209,6 +212,8 @@ pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         O: RowsDecoder,
     {
         let statement = self.statement();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
             .consistency(Consistency::One)
             .id(&statement.id());
@@ -217,6 +222,7 @@ pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
             token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            keyspace,
             _marker: PhantomData,
         })
     }
@@ -238,7 +244,7 @@ pub trait AsDynamicSelectRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O>;
+    fn query<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O>;
 
     /// Create a dynamic select prepared request from a statement and variables.
     ///
@@ -252,24 +258,32 @@ pub trait AsDynamicSelectRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query_prepared<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O>;
+    fn query_prepared<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O>;
 }
 impl AsDynamicSelectRequest for SelectStatement {
-    fn query<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O> {
+    fn query<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O> {
+        let keyspace = self.get_keyspace();
+        let statement = self.to_string();
         SelectBuilder {
             builder: QueryBuilder::default()
                 .consistency(Consistency::One)
-                .statement(&self.to_string()),
-            statement: self,
+                .statement(&statement),
+            statement,
+            keyspace,
             token: None,
             _marker: PhantomData,
         }
     }
 
-    fn query_prepared<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O> {
+    fn query_prepared<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O> {
+        let keyspace = self.get_keyspace();
+        let statement = self.to_string();
         SelectBuilder {
-            builder: QueryBuilder::default().consistency(Consistency::One).id(&self.id()),
-            statement: self,
+            builder: QueryBuilder::default()
+                .consistency(Consistency::One)
+                .id(&statement.id()),
+            statement,
+            keyspace,
             token: None,
             _marker: PhantomData,
         }
@@ -277,7 +291,8 @@ impl AsDynamicSelectRequest for SelectStatement {
 }
 
 pub struct SelectBuilder<R, O: RowsDecoder> {
-    statement: SelectStatement,
+    keyspace: Option<String>,
+    statement: String,
     builder: QueryBuilder,
     token: Option<i64>,
     _marker: PhantomData<fn(R, O) -> (R, O)>,
@@ -307,7 +322,8 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
             payload: self.builder.build()?.into(),
-            statement: self.statement.clone().into(),
+            keyspace: self.keyspace,
+            statement: self.statement,
         }
         .into())
     }
@@ -381,14 +397,14 @@ impl<O: 'static> Request for SelectRequest<O> {
         self.inner.token()
     }
 
-    fn statement(&self) -> Statement {
+    fn statement(&self) -> &String {
         self.inner.statement()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.inner.payload()
     }
-    fn keyspace(&self) -> Option<String> {
+    fn keyspace(&self) -> &Option<String> {
         self.inner.keyspace()
     }
 }

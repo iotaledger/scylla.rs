@@ -353,13 +353,13 @@ pub trait Request {
     fn token(&self) -> i64;
 
     /// Get the statement that was used to create this request
-    fn statement(&self) -> Statement;
+    fn statement(&self) -> &String;
 
     /// Get the request payload
     fn payload(&self) -> Vec<u8>;
 
     /// get the keyspace of the request
-    fn keyspace(&self) -> Option<String>;
+    fn keyspace(&self) -> &Option<String>;
 }
 
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
@@ -394,7 +394,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_local(
-            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.keyspace().clone().as_ref().map(|s| s.as_str()),
             self.token(),
             self.payload(),
             self.worker(),
@@ -408,7 +408,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_local(
-            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.keyspace().clone().as_ref().map(|s| s.as_str()),
             self.token(),
             self.payload(),
             worker,
@@ -418,7 +418,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
         send_global(
-            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.keyspace().clone().as_ref().map(|s| s.as_str()),
             self.token(),
             self.payload(),
             self.worker(),
@@ -525,15 +525,17 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
 pub struct CommonRequest {
     pub(crate) token: i64,
     pub(crate) payload: Vec<u8>,
-    pub(crate) statement: DataManipulationStatement,
+    pub(crate) keyspace: Option<String>,
+    pub(crate) statement: String,
 }
 
 impl CommonRequest {
     #[allow(missing_docs)]
-    pub fn new<T: Into<String>>(statement: DataManipulationStatement, payload: Vec<u8>) -> Self {
+    pub fn new<T: Into<String>>(keyspace: Option<String>, statement: String, payload: Vec<u8>) -> Self {
         Self {
             token: 0,
             payload,
+            keyspace,
             statement,
         }
     }
@@ -544,16 +546,16 @@ impl Request for CommonRequest {
         self.token
     }
 
-    fn statement(&self) -> Statement {
-        self.statement.clone().into()
+    fn statement(&self) -> &String {
+        &self.statement
     }
 
     fn payload(&self) -> Vec<u8> {
         self.payload.clone()
     }
 
-    fn keyspace(&self) -> Option<String> {
-        self.statement.get_keyspace()
+    fn keyspace(&self) -> &Option<String> {
+        &self.keyspace
     }
 }
 
@@ -1190,7 +1192,7 @@ mod tests {
         let statement = req.get_statement(&id).unwrap().clone();
         assert_eq!(
             statement,
-            keyspace.insert_statement::<MyTable, (u32, f32, f32)>().into()
+            keyspace.insert_statement::<MyTable, (u32, f32, f32)>().to_string()
         );
         let _res = req.clone().send_local().unwrap();
     }

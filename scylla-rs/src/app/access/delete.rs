@@ -124,14 +124,17 @@ pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         Self: Delete<T, K>,
     {
         let statement = self.statement();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
             .consistency(Consistency::Quorum)
-            .statement(&statement.to_string());
+            .statement(&statement);
         builder = Self::bind_values(builder, key)?;
         Ok(DeleteBuilder {
             token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            keyspace,
             _marker: PhantomData,
         })
     }
@@ -192,6 +195,8 @@ pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         Self: Delete<T, K>,
     {
         let statement = self.statement();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
             .consistency(Consistency::Quorum)
             .id(&statement.id());
@@ -200,6 +205,7 @@ pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
             token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            keyspace,
             _marker: PhantomData,
         })
     }
@@ -220,7 +226,7 @@ pub trait AsDynamicDeleteRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query(self) -> DeleteBuilder<DynamicRequest>;
+    fn query(&self) -> DeleteBuilder<DynamicRequest>;
 
     /// Create a dynamic prepared delete request from a statement and variables.
     ///
@@ -234,24 +240,32 @@ pub trait AsDynamicDeleteRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query_prepared(self) -> DeleteBuilder<DynamicRequest>;
+    fn query_prepared(&self) -> DeleteBuilder<DynamicRequest>;
 }
 impl AsDynamicDeleteRequest for DeleteStatement {
-    fn query(self) -> DeleteBuilder<DynamicRequest> {
+    fn query(&self) -> DeleteBuilder<DynamicRequest> {
+        let keyspace = self.get_keyspace();
+        let statement = self.to_string();
         DeleteBuilder {
             builder: QueryBuilder::default()
                 .consistency(Consistency::Quorum)
-                .statement(&self.to_string()),
-            statement: self,
+                .statement(&statement),
+            statement,
+            keyspace,
             token: None,
             _marker: PhantomData,
         }
     }
 
-    fn query_prepared(self) -> DeleteBuilder<DynamicRequest> {
+    fn query_prepared(&self) -> DeleteBuilder<DynamicRequest> {
+        let keyspace = self.get_keyspace();
+        let statement = self.to_string();
         DeleteBuilder {
-            builder: QueryBuilder::default().consistency(Consistency::Quorum).id(&self.id()),
-            statement: self,
+            builder: QueryBuilder::default()
+                .consistency(Consistency::Quorum)
+                .id(&statement.id()),
+            statement,
+            keyspace,
             token: None,
             _marker: PhantomData,
         }
@@ -259,7 +273,8 @@ impl AsDynamicDeleteRequest for DeleteStatement {
 }
 
 pub struct DeleteBuilder<R> {
-    statement: DeleteStatement,
+    keyspace: Option<String>,
+    statement: String,
     builder: QueryBuilder,
     token: Option<i64>,
     _marker: PhantomData<fn(R) -> R>,
@@ -280,6 +295,7 @@ impl<R> DeleteBuilder<R> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
             payload: self.builder.build()?.into(),
+            keyspace: self.keyspace,
             statement: self.statement.clone().into(),
         }
         .into())
@@ -334,14 +350,14 @@ impl Request for DeleteRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> Statement {
+    fn statement(&self) -> &String {
         self.0.statement()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> Option<String> {
+    fn keyspace(&self) -> &Option<String> {
         self.0.keyspace()
     }
 }

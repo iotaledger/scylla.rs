@@ -142,14 +142,17 @@ pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keysp
         Self: Update<T, K, V>,
     {
         let statement = self.statement();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
             .consistency(Consistency::Quorum)
-            .statement(&statement.to_string());
+            .statement(&statement);
         builder = Self::bind_values(builder, key, values)?;
         Ok(UpdateBuilder {
             token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            keyspace,
             _marker: PhantomData,
         })
     }
@@ -219,6 +222,8 @@ pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keysp
         Self: Update<T, K, V>,
     {
         let statement = self.statement();
+        let keyspace = statement.get_keyspace();
+        let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
             .consistency(Consistency::Quorum)
             .id(&statement.id());
@@ -227,6 +232,7 @@ pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keysp
             token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            keyspace,
             _marker: PhantomData,
         })
     }
@@ -249,7 +255,7 @@ pub trait AsDynamicUpdateRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query(self) -> UpdateBuilder<DynamicRequest>;
+    fn query(&self) -> UpdateBuilder<DynamicRequest>;
 
     /// Create a dynamic update prepared request from a statement and variables.
     ///
@@ -263,24 +269,32 @@ pub trait AsDynamicUpdateRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query_prepared(self) -> UpdateBuilder<DynamicRequest>;
+    fn query_prepared(&self) -> UpdateBuilder<DynamicRequest>;
 }
 impl AsDynamicUpdateRequest for UpdateStatement {
-    fn query(self) -> UpdateBuilder<DynamicRequest> {
+    fn query(&self) -> UpdateBuilder<DynamicRequest> {
+        let keyspace = self.get_keyspace();
+        let statement = self.to_string();
         UpdateBuilder {
             builder: QueryBuilder::default()
                 .consistency(Consistency::Quorum)
-                .statement(&self.to_string()),
-            statement: self,
+                .statement(&statement),
+            statement,
+            keyspace,
             token: None,
             _marker: PhantomData,
         }
     }
 
-    fn query_prepared(self) -> UpdateBuilder<DynamicRequest> {
+    fn query_prepared(&self) -> UpdateBuilder<DynamicRequest> {
+        let keyspace = self.get_keyspace();
+        let statement = self.to_string();
         UpdateBuilder {
-            builder: QueryBuilder::default().consistency(Consistency::Quorum).id(&self.id()),
-            statement: self,
+            builder: QueryBuilder::default()
+                .consistency(Consistency::Quorum)
+                .id(&statement.id()),
+            statement,
+            keyspace,
             token: None,
             _marker: PhantomData,
         }
@@ -289,7 +303,8 @@ impl AsDynamicUpdateRequest for UpdateStatement {
 
 #[derive(Debug)]
 pub struct UpdateBuilder<R> {
-    statement: UpdateStatement,
+    keyspace: Option<String>,
+    statement: String,
     builder: QueryBuilder,
     token: Option<i64>,
     _marker: PhantomData<fn(R) -> R>,
@@ -310,7 +325,8 @@ impl<R> UpdateBuilder<R> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
             payload: self.builder.build()?.into(),
-            statement: self.statement.clone().into(),
+            keyspace: self.keyspace,
+            statement: self.statement,
         }
         .into())
     }
@@ -364,14 +380,14 @@ impl Request for UpdateRequest {
         self.0.token()
     }
 
-    fn statement(&self) -> Statement {
+    fn statement(&self) -> &String {
         self.0.statement()
     }
 
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> Option<String> {
+    fn keyspace(&self) -> &Option<String> {
         self.0.keyspace()
     }
 }
