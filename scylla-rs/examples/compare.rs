@@ -6,13 +6,7 @@ use scylla::{
     transport::Compression,
     *,
 };
-use scylla_rs::{
-    cql::{
-        compression::CompressionType,
-        TokenEncodeChain,
-    },
-    prelude::*,
-};
+use scylla_rs::prelude::*;
 use std::{
     convert::TryInto,
     net::SocketAddr,
@@ -154,15 +148,13 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     let (sender, mut inbox) = unbounded_channel();
     for i in 0..n {
         let handle = sender.clone();
-        // let keyspace = keyspace.clone();
         let insert = insert.clone();
         tokio::task::spawn(async move {
             let key = format!("Key {}", i);
             handle.send(
                 insert
                     .query_prepared()
-                    .token(&key)?
-                    .bind(&key)?
+                    .bind_token(&key)?
                     .bind(&i)?
                     .build()?
                     .get_local()
@@ -186,7 +178,6 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     let (sender, mut inbox) = unbounded_channel::<(_, Result<Option<_>, _>)>();
     for i in 0..n {
         let handle = sender.clone();
-        // let keyspace = keyspace.clone();
         let select = select.clone();
         tokio::task::spawn(async move {
             let key = format!("Key {}", i);
@@ -194,8 +185,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
                 i,
                 select
                     .query_prepared::<i32>()
-                    .token(&key)?
-                    .bind(&key)?
+                    .bind_token(&key)?
                     .build()?
                     .get_local()
                     .await,

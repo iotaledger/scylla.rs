@@ -1,10 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use log::*;
-use scylla_rs::{
-    cql::TokenEncodeChain,
-    prelude::*,
-};
+use scylla_rs::prelude::*;
 use std::{
     net::SocketAddr,
     time::SystemTime,
@@ -31,7 +28,7 @@ async fn main() {
     let mut timings = combinations.map(|(n, r)| (n, r, 0u128)).collect::<Vec<_>>();
 
     for (n, r, t) in timings.iter_mut() {
-        let mut scylla = Scylla::new("datacenter1", *r, Default::default());
+        let mut scylla = Scylla::new("datacenter1", *r, Default::default(), Some(CompressionType::Snappy));
         scylla.insert_node(node);
         scylla.insert_keyspace(KeyspaceConfig {
             name: "scylla_example".into(),
@@ -101,14 +98,19 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     .await
     .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    TestTable::prepare_insert::<_, TestTable>(&keyspace).get_local().await?;
-    TestTable::prepare_select::<_, String, i32>(&keyspace)
-        .get_local()
-        .await?;
+    let insert = keyspace.insert_statement::<TestTable, TestTable>();
+    let select = keyspace.select_statement::<TestTable, String, i32>();
+    insert.clone().prepare().get_local().await?;
+    select.clone().prepare().get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
-        TestTable::insert_prepared(&keyspace, &TestTable::new(format!("Key {}", i), i))?
+        let insert = insert.clone();
+        let key = format!("Key {}", i);
+        insert
+            .query_prepared()
+            .bind_token(&key)?
+            .bind(&i)?
             .build()?
             .send_local()
             .map_err(|e| {
@@ -119,7 +121,11 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
 
     let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
     for i in 0..n {
-        TestTable::select::<i32>(&keyspace, &format!("Key {}", i))?
+        let select = select.clone();
+        let key = format!("Key {}", i);
+        select
+            .query_prepared::<i32>()
+            .bind_token(&key)?
             .build()?
             .worker()
             .with_handle(sender.clone())
@@ -184,19 +190,21 @@ impl Keyspace for MyKeyspace {
 
 #[derive(Debug)]
 pub struct TestTable {
-    pub name: String,
+    pub key: String,
     pub data: i32,
 }
 
 impl TestTable {
-    pub fn new(name: String, data: i32) -> Self {
-        Self { name, data }
+    pub fn new(key: String, data: i32) -> Self {
+        Self { key, data }
     }
 }
 
 impl Table for TestTable {
     const NAME: &'static str = "test";
-    const COLS: &'static [&'static str] = &["name", "data"];
+    const COLS: &'static [&'static str] = &["key", "data"];
+    const PARTITION_KEY: &'static [&'static str] = &["key"];
+    const CLUSTERING_COLS: &'static [&'static str] = &[];
 
     type PartitionKey = String;
     type PrimaryKey = String;
@@ -206,7 +214,7 @@ impl TokenEncoder for TestTable {
     type Error = <<Self as Table>::PartitionKey as TokenEncoder>::Error;
 
     fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
-        self.name.encode_token()
+        self.key.encode_token()
     }
 }
 
@@ -216,21 +224,20 @@ impl Row for TestTable {
         Self: Sized,
     {
         Ok(Self {
-            name: rows.column_value()?,
+            key: rows.column_value()?,
             data: rows.column_value()?,
         })
     }
 }
 
 impl Bindable for TestTable {
-    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
-        binder.bind(&self.name)?.bind(&self.data)?;
-        Ok(())
+    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error> {
+        binder.bind(&self.key)?.bind(&self.data)
     }
 }
 
-impl<S: Keyspace> Select<S, String, i32> for TestTable {
-    fn statement(keyspace: &S) -> SelectStatement {
-        parse_statement!("SELECT data FROM #.test WHERE key = ?", keyspace.name())
+impl Select<TestTable, String, i32> for MyKeyspace {
+    fn statement(&self) -> SelectStatement {
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
     }
 }

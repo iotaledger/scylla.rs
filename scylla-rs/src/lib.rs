@@ -17,6 +17,7 @@ pub mod prelude {
             *,
         },
         cql::{
+            compression::CompressionType,
             Batch,
             Binder,
             ColumnDecoder,
@@ -31,6 +32,7 @@ pub mod prelude {
             Row,
             Rows,
             RowsDecoder,
+            TokenEncodeChain,
             TokenEncoder,
             VoidDecoder,
         },

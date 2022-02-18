@@ -325,7 +325,7 @@ pub struct DynamicRequest;
 /// The possible request types
 #[allow(missing_docs)]
 #[repr(u8)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum RequestType {
     Insert = 0,
     Update = 1,
@@ -647,7 +647,7 @@ pub enum TokenBindError<T: TokenEncoder> {
 
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct DecodeRows<V> {
     _marker: PhantomData<fn(V) -> V>,
 }
@@ -668,7 +668,7 @@ impl<V: RowsDecoder> DecodeRows<V> {
 /// A marker struct which holds the keyspace type
 /// so that it may be decoded (checked for errors)
 /// via `VoidDecoder` later
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct DecodeVoid;
 
 impl DecodeVoid {
@@ -724,7 +724,7 @@ impl Marker for DecodeVoid {
 /// a query to the `Ring`. Provides the request's type
 /// as well as an appropriate decoder which can be used
 /// once the response is received.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DecodeResult<T> {
     inner: T,
     /// Identify the type of request
