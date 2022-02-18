@@ -230,13 +230,15 @@ async fn run_benchmark_scylla(session: &Arc<Session>, n: i32) -> anyhow::Result<
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    let prepared_insert = session
-        .prepare("INSERT INTO scylla_example.test (key, data) VALUES (?, ?)")
-        .await?;
+    let prepared_insert = Arc::new(
+        session
+            .prepare("INSERT INTO scylla_example.test (key, data) VALUES (?, ?)")
+            .await?,
+    );
 
     let mut query = Query::new("SELECT data FROM scylla_example.test WHERE key = ?".to_string());
     query.set_consistency(scylla::frame::types::Consistency::One);
-    let prepared_select = session.prepare(query).await?;
+    let prepared_select = Arc::new(session.prepare(query).await?);
 
     let start = SystemTime::now();
 
