@@ -86,10 +86,6 @@ impl Compression for Lz4 {
     const KIND: Option<CompressionType> = Some(CompressionType::Lz4);
     fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let size = i32::from_be_bytes(buffer[4..8].try_into().unwrap()) as usize;
-        // lz4 will fail if we get a zero-sized body, so just skip it
-        if size == 0 {
-            return Ok(None);
-        }
         let mut body =
             lz4_flex::decompress(&buffer[8..], size).map_err(|e| CompressionError::BadDecompression(e.into()))?;
         body.extend(&i32::to_be_bytes(body.len() as i32));
