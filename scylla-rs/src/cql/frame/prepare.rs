@@ -29,7 +29,7 @@ pub enum PrepareBuildError {
 
 impl PrepareBuilder {
     /// The statement for preparation.
-    pub fn statement(&mut self, statement: &str) -> &mut Self {
+    pub fn statement(mut self, statement: &str) -> Self {
         let mut buf = Vec::new();
         buf.extend(&i32::to_be_bytes(statement.len() as i32));
         buf.extend(statement.bytes());
@@ -38,10 +38,10 @@ impl PrepareBuilder {
     }
 
     /// Build the prepare frame with an assigned compression type.
-    pub fn build(&self) -> Result<Prepare, PrepareBuildError> {
+    pub fn build(mut self) -> Result<Prepare, PrepareBuildError> {
         Ok(Prepare(FrameBuilder::build(
             PREPARE_HEADER,
-            self.stmt.as_ref().ok_or_else(|| PrepareBuildError::NoStatement)?,
+            self.stmt.take().ok_or_else(|| PrepareBuildError::NoStatement)?,
         )))
     }
 }

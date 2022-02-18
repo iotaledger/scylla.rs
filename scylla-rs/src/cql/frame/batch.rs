@@ -114,30 +114,30 @@ pub enum BatchBuildError {
 
 impl BatchBuilder {
     /// Set the batch type in the Batch frame. See https://cassandra.apache.org/doc/latest/cql/dml.html#batch
-    pub fn batch_type(&mut self, batch_type: BatchType) -> &mut Self {
+    pub fn batch_type(mut self, batch_type: BatchType) -> Self {
         // push batch_type and pad zero querycount
         // self.buffer.extend(&[batch_type.into(), 0, 0]);
         self.batch_type = batch_type;
         self
     }
     /// Set the batch type to logged. See https://cassandra.apache.org/doc/latest/cql/dml.html#batch
-    pub fn logged(&mut self) -> &mut Self {
+    pub fn logged(mut self) -> Self {
         self.batch_type = BatchType::Logged;
         self
     }
     /// Set the batch type to unlogged. See https://cassandra.apache.org/doc/latest/cql/dml.html#unlogged-batches
-    pub fn unlogged(&mut self) -> &mut Self {
+    pub fn unlogged(mut self) -> Self {
         self.batch_type = BatchType::Unlogged;
         self
     }
     /// Set the batch type to counter. See https://cassandra.apache.org/doc/latest/cql/dml.html#counter-batches
-    pub fn counter(&mut self) -> &mut Self {
+    pub fn counter(mut self) -> Self {
         self.batch_type = BatchType::Counter;
         self
     }
 
     /// Set the statement in the Batch frame.
-    pub fn statement(&mut self, statement: &str) -> &mut Self {
+    pub fn statement(mut self, statement: &str) -> Self {
         // normal query
         let mut buf = Vec::new();
         buf.push(0);
@@ -150,7 +150,7 @@ impl BatchBuilder {
         self
     }
     /// Set the id in the Batch frame.
-    pub fn id(&mut self, id: &[u8; 16]) -> &mut Self {
+    pub fn id(mut self, id: &[u8; 16]) -> Self {
         // prepared query
         let mut buf = Vec::new();
         buf.push(1);
@@ -164,23 +164,23 @@ impl BatchBuilder {
     }
 
     /// Set the consistency of the Batch frame.
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
         self.consistency = consistency;
         self
     }
 
     /// Set the serial consistency in the Batch frame.
-    pub fn serial_consistency(&mut self, serial_consistency: Consistency) -> &mut Self {
+    pub fn serial_consistency(mut self, serial_consistency: Consistency) -> Self {
         self.serial_consistency.replace(serial_consistency);
         self
     }
     /// Set the timestamp of the Batch frame.
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
         self.timestamp.replace(timestamp);
         self
     }
     /// Build a Batch frame.
-    pub fn build(&self) -> Result<Batch, BatchBuildError> {
+    pub fn build(self) -> Result<Batch, BatchBuildError> {
         if self.stmt_builders.is_empty() {
             return Err(BatchBuildError::NoStatements);
         }
@@ -189,11 +189,11 @@ impl BatchBuilder {
         body_buf.push(self.batch_type as u8);
         // add query count
         body_buf.extend_from_slice(&u16::to_be_bytes(self.stmt_builders.len() as u16));
-        for stmt_builder in self.stmt_builders.iter() {
-            body_buf.extend(stmt_builder.stmt_buf.iter());
+        for stmt_builder in self.stmt_builders {
+            body_buf.extend(stmt_builder.stmt_buf);
             body_buf.extend(u16::to_be_bytes(stmt_builder.value_count));
             if let Some(val_buf) = stmt_builder.val_buf.as_ref() {
-                body_buf.extend(val_buf.iter());
+                body_buf.extend(val_buf);
             }
         }
         // add consistency
@@ -211,7 +211,7 @@ impl BatchBuilder {
             body_buf.extend(&BE_8_BYTES_LEN);
             body_buf.extend(&i64::to_be_bytes(timestamp));
         }
-        Ok(Batch(FrameBuilder::build(BATCH_HEADER, &body_buf)))
+        Ok(Batch(FrameBuilder::build(BATCH_HEADER, body_buf)))
     }
 }
 
@@ -226,7 +226,7 @@ pub enum BatchBindError {
 impl Binder for BatchBuilder {
     type Error = BatchBindError;
     /// Set the value in the Batch frame.
-    fn value<V: ColumnEncoder>(&mut self, value: &V) -> Result<&mut Self, Self::Error>
+    fn value<V: ColumnEncoder>(mut self, value: &V) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
@@ -240,7 +240,7 @@ impl Binder for BatchBuilder {
         }
     }
 
-    fn named_value<V: ColumnEncoder>(&mut self, name: &str, value: &V) -> Result<&mut Self, Self::Error>
+    fn named_value<V: ColumnEncoder>(mut self, name: &str, value: &V) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
@@ -248,7 +248,7 @@ impl Binder for BatchBuilder {
     }
 
     /// Set the value to be unset in the Batch frame.
-    fn unset_value(&mut self) -> Result<&mut Self, Self::Error>
+    fn unset_value(mut self) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
@@ -263,7 +263,7 @@ impl Binder for BatchBuilder {
     }
 
     /// Set the value to be null in the Batch frame.
-    fn null_value(&mut self) -> Result<&mut Self, Self::Error>
+    fn null_value(mut self) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {

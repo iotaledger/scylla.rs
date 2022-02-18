@@ -53,8 +53,7 @@ const EXECUTE_HEADER: [u8; 5] = [4, 0, 0, 0, EXECUTE];
 /// ```
 #[derive(Clone, Debug)]
 pub struct QueryBuilder {
-    header: Option<[u8; 5]>,
-    statement: Option<Vec<u8>>,
+    statement: Option<QueryStatementKind>,
     consistency: Consistency,
     value_count: u16,
     bind_type: Option<BindType>,
@@ -68,7 +67,6 @@ pub struct QueryBuilder {
 impl Default for QueryBuilder {
     fn default() -> Self {
         Self {
-            header: Default::default(),
             statement: Default::default(),
             consistency: Consistency::One,
             value_count: Default::default(),
@@ -82,15 +80,47 @@ impl Default for QueryBuilder {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum QueryStatementKind {
+    Query(String),
+    Execute([u8; 16]),
+}
+
+impl QueryStatementKind {
+    pub fn encode(self, buffer: &mut Vec<u8>) {
+        match self {
+            QueryStatementKind::Query(stmt) => {
+                buffer.reserve(stmt.len() + 4);
+                buffer.extend(&i32::to_be_bytes(stmt.len() as i32));
+                buffer.extend(stmt.as_bytes());
+            }
+            QueryStatementKind::Execute(id) => {
+                buffer.reserve(18);
+                buffer.extend(&super::MD5_BE_LENGTH);
+                buffer.extend(id);
+            }
+        }
+    }
+
+    pub fn header(&self) -> [u8; 5] {
+        match self {
+            QueryStatementKind::Query(_) => QUERY_HEADER,
+            QueryStatementKind::Execute(_) => EXECUTE_HEADER,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            QueryStatementKind::Query(stmt) => stmt.len() + 4,
+            QueryStatementKind::Execute(_) => 18,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum BindType {
     Named,
     Unnamed,
-}
-
-pub enum StatementType {
-    Query,
-    Prepared,
 }
 
 #[derive(Debug, Error)]
@@ -103,62 +133,48 @@ pub enum QueryBuildError {
 
 impl QueryBuilder {
     /// Set the statement in the query frame.
-    pub fn statement(&mut self, statement: &str) -> &mut Self {
-        self.header.replace(QUERY_HEADER);
-        let mut buffer = Vec::new();
-        buffer.extend(&i32::to_be_bytes(statement.len() as i32));
-        buffer.extend(statement.as_bytes());
-        self.statement.replace(buffer);
+    pub fn statement(mut self, statement: &str) -> Self {
+        self.statement.replace(QueryStatementKind::Query(statement.to_owned()));
         self
     }
     /// Set the id in the query frame.
     /// Note: this will make the Query frame identical to Execute frame.
-    pub fn id(&mut self, id: &[u8; 16]) -> &mut Self {
-        self.header.replace(EXECUTE_HEADER);
-        let mut buffer = Vec::new();
-        buffer.extend(&super::MD5_BE_LENGTH);
-        buffer.extend(id);
-        self.statement.replace(buffer);
+    pub fn id(mut self, id: &[u8; 16]) -> Self {
+        self.statement.replace(QueryStatementKind::Execute(id.to_owned()));
         self
     }
     /// Set the consistency in the query frame.
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
         self.consistency = consistency;
         self
     }
 
     /// Set the page size in the query frame, without any value.
-    pub fn page_size(&mut self, page_size: i32) -> &mut Self {
+    pub fn page_size(mut self, page_size: i32) -> Self {
         self.page_size.replace(page_size);
         self
     }
     /// Set the paging state in the query frame. without any value.
-    pub fn paging_state(&mut self, paging_state: Vec<u8>) -> &mut Self {
+    pub fn paging_state(mut self, paging_state: Vec<u8>) -> Self {
         self.paging_state.replace(paging_state);
         self
     }
     /// Set serial consistency for the query frame.
-    pub fn serial_consistency(&mut self, serial_consistency: Consistency) -> &mut Self {
+    pub fn serial_consistency(mut self, serial_consistency: Consistency) -> Self {
         self.serial_consistency.replace(serial_consistency);
         self
     }
     /// Set the timestamp of the query frame, without any value.
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
         self.timestamp.replace(timestamp);
         self
     }
     /// Build a query frame with an assigned compression type, without any value.
-    pub fn build(&self) -> Result<Query, QueryBuildError> {
-        let header = self
-            .header
-            .as_ref()
-            .ok_or_else(|| QueryBuildError::NoStatement)?
-            .clone();
-        let mut body_buf = self
-            .statement
-            .as_ref()
-            .ok_or_else(|| QueryBuildError::NoStatement)?
-            .clone();
+    pub fn build(mut self) -> Result<Query, QueryBuildError> {
+        let statement = self.statement.take().ok_or_else(|| QueryBuildError::NoStatement)?;
+        let mut body_buf = Vec::with_capacity(statement.len() + 3);
+        let header = statement.header();
+        statement.encode(&mut body_buf);
         body_buf.extend(&u16::to_be_bytes(self.consistency as u16));
         let flags_idx = body_buf.len();
         // push SKIP_METADATA query_flag to the buffer
@@ -166,8 +182,9 @@ impl QueryBuilder {
         body_buf.push(SKIP_METADATA);
         if self.value_count > 0 {
             body_buf[flags_idx] |= VALUES;
+            body_buf.reserve(self.values.len() + 2);
             body_buf.extend(&u16::to_be_bytes(self.value_count));
-            body_buf.extend(self.values.iter());
+            body_buf.extend(self.values);
             if matches!(self.bind_type, Some(BindType::Named)) {
                 body_buf[flags_idx] |= NAMED_VALUES;
             }
@@ -176,10 +193,11 @@ impl QueryBuilder {
             body_buf[flags_idx] |= PAGE_SIZE;
             body_buf.extend(&i32::to_be_bytes(page_size));
         }
-        if let Some(paging_state) = self.paging_state.as_ref() {
+        if let Some(paging_state) = self.paging_state {
             body_buf[flags_idx] |= PAGING_STATE;
+            body_buf.reserve(paging_state.len() + 2);
             body_buf.extend(&u32::to_be_bytes(paging_state.len() as u32));
-            body_buf.extend(paging_state.iter());
+            body_buf.extend(paging_state);
         }
         if let Some(serial_consistency) = self.serial_consistency {
             body_buf[flags_idx] |= SERIAL_CONSISTENCY;
@@ -189,7 +207,7 @@ impl QueryBuilder {
             body_buf[flags_idx] |= TIMESTAMP;
             body_buf.extend(&i64::to_be_bytes(timestamp));
         }
-        Ok(Query(FrameBuilder::build(header, &body_buf)))
+        Ok(Query(FrameBuilder::build(header, body_buf)))
     }
 }
 
@@ -206,7 +224,7 @@ pub enum QueryBindError {
 impl Binder for QueryBuilder {
     type Error = QueryBindError;
     /// Set the next value in the query frame.
-    fn value<V: ColumnEncoder>(&mut self, value: &V) -> Result<&mut Self, Self::Error> {
+    fn value<V: ColumnEncoder>(mut self, value: &V) -> Result<Self, Self::Error> {
         if matches!(self.bind_type, Some(BindType::Named)) {
             return Err(QueryBindError::MixedBindTypes);
         }
@@ -217,7 +235,7 @@ impl Binder for QueryBuilder {
         value.encode(&mut self.values).map_err(|e| anyhow::anyhow!("{:?}", e))?;
         Ok(self)
     }
-    fn named_value<V: ColumnEncoder>(&mut self, name: &str, value: &V) -> Result<&mut Self, Self::Error>
+    fn named_value<V: ColumnEncoder>(mut self, name: &str, value: &V) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
@@ -233,7 +251,7 @@ impl Binder for QueryBuilder {
         Ok(self)
     }
     /// Set the value to be unset in the query frame.
-    fn unset_value(&mut self) -> Result<&mut Self, Self::Error> {
+    fn unset_value(mut self) -> Result<Self, Self::Error> {
         // increase the value_count
         self.value_count += 1;
         // apply value
@@ -242,7 +260,7 @@ impl Binder for QueryBuilder {
     }
 
     /// Set the value to be null in the query frame.
-    fn null_value(&mut self) -> Result<&mut Self, Self::Error> {
+    fn null_value(mut self) -> Result<Self, Self::Error> {
         // increase the value_count
         self.value_count += 1;
         // apply value

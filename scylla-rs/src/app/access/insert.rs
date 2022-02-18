@@ -65,39 +65,29 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Insert<S: Keyspace, K: Bindable + TokenEncoder>: Table {
+pub trait Insert<T: Table, K: Bindable + TokenEncoder>: Keyspace {
     /// Create your insert statement here.
-    fn statement(keyspace: &S) -> InsertStatement;
+    fn statement(&self) -> InsertStatement;
 
     /// Bind the cql values to the builder
-    fn bind_values<B: Binder>(binder: &mut B, key: &K) -> Result<(), B::Error> {
-        binder.bind(key)?;
-        Ok(())
+    fn bind_values<B: Binder>(binder: B, key: &K) -> Result<B, B::Error> {
+        binder.bind(key)
     }
 }
 
-impl<T: Table + Bindable + TokenEncoder, S: Keyspace> Insert<S, T> for T {
-    fn statement(keyspace: &S) -> InsertStatement {
-        let names = Self::COLS.iter().map(|&c| Name::from(c)).collect::<Vec<_>>();
-        let values = Self::COLS
+impl<T: Table + Bindable + TokenEncoder, S: Keyspace> Insert<T, T> for S {
+    fn statement(&self) -> InsertStatement {
+        let names = T::COLS.iter().map(|&c| Name::from(c)).collect::<Vec<_>>();
+        let values = T::COLS
             .iter()
             .map(|_| Term::from(BindMarker::Anonymous))
             .collect::<Vec<_>>();
-        parse_statement!(
-            "INSERT INTO #.# (#) VALUES (#)",
-            keyspace.name(),
-            Self::NAME,
-            names,
-            values
-        )
+        parse_statement!("INSERT INTO #.# (#) VALUES (#)", self.name(), T::NAME, names, values)
     }
 }
 
-pub trait InsertTable<T: Insert<Self, K>, K: Bindable + TokenEncoder>: Keyspace {}
-impl<S: Keyspace, T: Insert<Self, K>, K: Bindable + TokenEncoder> InsertTable<T, K> for S {}
-
 /// Specifies helper functions for creating static insert requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticInsertRequest<S: Keyspace, K>: Table {
+pub trait GetStaticInsertRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace {
     /// Create a static insert request from a keyspace with a `Insert<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -159,21 +149,21 @@ pub trait GetStaticInsertRequest<S: Keyspace, K>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert(keyspace: &S, key: &K) -> Result<InsertBuilder, StaticQueryError<K>>
+    fn insert(&self, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Insert<S, K>,
+        Self: Insert<T, K>,
         K: Bindable + TokenEncoder,
     {
-        let statement = Self::statement(keyspace);
-        let mut builder = QueryBuilder::default();
-        builder
+        let statement = self.statement();
+        let mut builder = QueryBuilder::default()
             .consistency(Consistency::Quorum)
             .statement(&statement.to_string());
-        Self::bind_values(&mut builder, key)?;
+        builder = Self::bind_values(builder, key)?;
         Ok(InsertBuilder {
-            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            _marker: PhantomData,
         })
     }
 
@@ -237,22 +227,25 @@ pub trait GetStaticInsertRequest<S: Keyspace, K>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert_prepared(keyspace: &S, key: &K) -> Result<InsertBuilder, StaticQueryError<K>>
+    fn insert_prepared(&self, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Insert<S, K>,
+        Self: Insert<T, K>,
         K: Bindable + TokenEncoder,
     {
-        let statement = Self::statement(keyspace);
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::Quorum).id(&statement.id());
-        Self::bind_values(&mut builder, key)?;
+        let statement = self.statement();
+        let mut builder = QueryBuilder::default()
+            .consistency(Consistency::Quorum)
+            .id(&statement.id());
+        builder = Self::bind_values(builder, key)?;
         Ok(InsertBuilder {
-            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            _marker: PhantomData,
         })
     }
 }
+impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticInsertRequest<T, K> for S {}
 
 /// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
 
@@ -270,7 +263,7 @@ pub trait AsDynamicInsertRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query(self) -> InsertBuilder;
+    fn query(self) -> InsertBuilder<DynamicRequest>;
 
     /// Create a dynamic insert prepared request from a statement and variables.
     ///
@@ -284,69 +277,75 @@ pub trait AsDynamicInsertRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepared(self) -> InsertBuilder;
+    fn query_prepared(self) -> InsertBuilder<DynamicRequest>;
 }
-
-impl<T: Table, S: Keyspace, K> GetStaticInsertRequest<S, K> for T {}
 impl AsDynamicInsertRequest for InsertStatement {
-    fn query(self) -> InsertBuilder {
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::Quorum).statement(&self.to_string());
+    fn query(self) -> InsertBuilder<DynamicRequest> {
         InsertBuilder {
-            builder,
+            builder: QueryBuilder::default()
+                .consistency(Consistency::Quorum)
+                .statement(&self.to_string()),
             statement: self,
             token: None,
+            _marker: PhantomData,
         }
     }
 
-    fn prepared(self) -> InsertBuilder {
-        let mut builder = QueryBuilder::default();
-        builder
-            .consistency(Consistency::Quorum)
-            .id(&md5::compute(self.to_string().as_bytes()).into());
+    fn query_prepared(self) -> InsertBuilder<DynamicRequest> {
         InsertBuilder {
-            builder,
+            builder: QueryBuilder::default().consistency(Consistency::Quorum).id(&self.id()),
             statement: self,
             token: None,
+            _marker: PhantomData,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct InsertBuilder {
+pub struct InsertBuilder<R> {
     statement: InsertStatement,
     builder: QueryBuilder,
     token: Option<i64>,
+    _marker: PhantomData<fn(R) -> R>,
 }
 
-impl InsertBuilder {
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
-        self.builder.consistency(consistency);
+impl<R> InsertBuilder<R> {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
         self
     }
 
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
-        self.builder.timestamp(timestamp);
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
         self
     }
 
-    pub fn token<V: TokenEncoder>(&mut self, value: &V) -> Result<&mut Self, V::Error> {
-        self.token.replace(value.token()?);
-        Ok(self)
-    }
-
-    pub fn bind<V: Bindable>(&mut self, value: &V) -> Result<&mut Self, <QueryBuilder as Binder>::Error> {
-        self.builder.bind(value)?;
-        Ok(self)
-    }
-
-    pub fn build(&self) -> anyhow::Result<InsertRequest> {
+    pub fn build(self) -> anyhow::Result<InsertRequest> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
             payload: self.builder.build()?.into(),
             statement: self.statement.clone().into(),
         }
         .into())
+    }
+}
+
+impl InsertBuilder<DynamicRequest> {
+    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Result<Self, V::Error> {
+        self.token.replace(value.token()?);
+        Ok(self)
+    }
+
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+        self.builder = self.builder.bind(value)?;
+        Ok(self)
+    }
+
+    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, TokenBindError<V>> {
+        self.token
+            .replace(value.token().map_err(TokenBindError::TokenEncodeError)?);
+        self.builder = self.builder.bind(value)?;
+        Ok(self)
     }
 }
 

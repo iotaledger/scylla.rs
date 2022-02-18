@@ -16,34 +16,32 @@ pub trait Compression: Sync {
     const FLAG: u8;
     const KIND: Option<&'static str>;
     /// Accepts a buffer with a header and decompresses it.
-    fn decompress(compressed: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        if compressed.len() < 9 {
+    fn decompress(mut buffer: Vec<u8>) -> Result<Vec<u8>, CompressionError> {
+        if buffer.len() < 9 {
             return Err(CompressionError::SmallBuffer);
         }
-        if compressed[1] & Self::FLAG == 0 {
-            return Ok(compressed.to_vec());
+        if buffer[1] & Self::FLAG == 0 {
+            return Ok(buffer);
         }
         // Decompress the body
-        let header = &compressed[0..5];
-        let decompressed_buffer = Self::decompress_body(&compressed[5..])?;
-        let mut res = header.to_vec();
-        res.extend(decompressed_buffer);
-        Ok(res)
+        let decompressed_buffer = Self::decompress_body(&buffer[5..])?;
+        buffer.resize(decompressed_buffer.len() + 5, 0);
+        buffer[5..].copy_from_slice(&decompressed_buffer);
+        Ok(buffer)
     }
     /// Accepts a body buffer with four byte length prepended
     fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError>;
     /// Accepts a buffer with a header and compresses it.
-    fn compress(uncompressed: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        if uncompressed.len() < 9 {
+    fn compress(mut buffer: Vec<u8>) -> Result<Vec<u8>, CompressionError> {
+        if buffer.len() < 9 {
             return Err(CompressionError::SmallBuffer);
         }
-        let header = &uncompressed[0..5];
         // Compress the body
-        let compressed_buffer = Self::compress_body(&uncompressed[5..])?;
-        let mut res = header.to_vec();
-        res[1] |= Self::FLAG;
-        res.extend(compressed_buffer);
-        Ok(res)
+        let compressed_buffer = Self::compress_body(&buffer[5..])?;
+        buffer[1] |= Self::FLAG;
+        buffer.resize(compressed_buffer.len() + 5, 0);
+        buffer[5..].copy_from_slice(&compressed_buffer);
+        Ok(buffer)
     }
     /// Accepts a body buffer with four byte length prepended
     fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError>;

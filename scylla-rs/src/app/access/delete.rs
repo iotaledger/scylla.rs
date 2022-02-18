@@ -55,22 +55,18 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Delete<S: Keyspace, K: Bindable + TokenEncoder>: Table {
+pub trait Delete<T: Table, K: Bindable + TokenEncoder>: Keyspace {
     /// Create your delete statement here.
-    fn statement(keyspace: &S) -> DeleteStatement;
+    fn statement(&self) -> DeleteStatement;
 
     /// Bind the cql values to the builder
-    fn bind_values<B: Binder>(binder: &mut B, key: &K) -> Result<(), B::Error> {
-        binder.bind(key)?;
-        Ok(())
+    fn bind_values<B: Binder>(binder: B, key: &K) -> Result<B, B::Error> {
+        binder.bind(key)
     }
 }
 
-pub trait DeleteTable<T: Delete<Self, K>, K: Bindable + TokenEncoder>: Keyspace {}
-impl<S: Keyspace, T: Delete<Self, K>, K: Bindable + TokenEncoder> DeleteTable<T, K> for S {}
-
 /// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticDeleteRequest<S: Keyspace, K>: Table {
+pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace {
     /// Create a static delete request from a keyspace with a `Delete<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -123,21 +119,20 @@ pub trait GetStaticDeleteRequest<S: Keyspace, K>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn delete(keyspace: &S, key: &K) -> Result<DeleteBuilder, StaticQueryError<K>>
+    fn delete(&self, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Delete<S, K>,
-        K: Bindable + TokenEncoder,
+        Self: Delete<T, K>,
     {
-        let statement = Self::statement(keyspace);
-        let mut builder = QueryBuilder::default();
-        builder
+        let statement = self.statement();
+        let mut builder = QueryBuilder::default()
             .consistency(Consistency::Quorum)
             .statement(&statement.to_string());
-        Self::bind_values(&mut builder, key)?;
+        builder = Self::bind_values(builder, key)?;
         Ok(DeleteBuilder {
-            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            _marker: PhantomData,
         })
     }
 
@@ -192,22 +187,24 @@ pub trait GetStaticDeleteRequest<S: Keyspace, K>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn delete_prepared(keyspace: &S, key: &K) -> Result<DeleteBuilder, StaticQueryError<K>>
+    fn delete_prepared(&self, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Delete<S, K>,
-        K: Bindable + TokenEncoder,
+        Self: Delete<T, K>,
     {
-        let statement = Self::statement(keyspace);
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::Quorum).id(&statement.id());
-        Self::bind_values(&mut builder, key)?;
+        let statement = self.statement();
+        let mut builder = QueryBuilder::default()
+            .consistency(Consistency::Quorum)
+            .id(&statement.id());
+        builder = Self::bind_values(builder, key)?;
         Ok(DeleteBuilder {
-            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
+            _marker: PhantomData,
         })
     }
 }
+impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticDeleteRequest<T, K> for S {}
 
 /// Specifies helper functions for creating dynamic delete requests from anything that can be interpreted as a statement
 pub trait AsDynamicDeleteRequest: Sized {
@@ -223,7 +220,7 @@ pub trait AsDynamicDeleteRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query(self) -> DeleteBuilder;
+    fn query(self) -> DeleteBuilder<DynamicRequest>;
 
     /// Create a dynamic prepared delete request from a statement and variables.
     ///
@@ -237,68 +234,74 @@ pub trait AsDynamicDeleteRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepared(self) -> DeleteBuilder;
+    fn query_prepared(self) -> DeleteBuilder<DynamicRequest>;
 }
-
-impl<T: Table, S: Keyspace, K> GetStaticDeleteRequest<S, K> for T {}
 impl AsDynamicDeleteRequest for DeleteStatement {
-    fn query(self) -> DeleteBuilder {
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::Quorum).statement(&self.to_string());
+    fn query(self) -> DeleteBuilder<DynamicRequest> {
         DeleteBuilder {
-            builder,
+            builder: QueryBuilder::default()
+                .consistency(Consistency::Quorum)
+                .statement(&self.to_string()),
             statement: self,
             token: None,
+            _marker: PhantomData,
         }
     }
 
-    fn prepared(self) -> DeleteBuilder {
-        let mut builder = QueryBuilder::default();
-        builder
-            .consistency(Consistency::Quorum)
-            .id(&md5::compute(self.to_string().as_bytes()).into());
+    fn query_prepared(self) -> DeleteBuilder<DynamicRequest> {
         DeleteBuilder {
-            builder,
+            builder: QueryBuilder::default().consistency(Consistency::Quorum).id(&self.id()),
             statement: self,
             token: None,
+            _marker: PhantomData,
         }
     }
 }
 
-pub struct DeleteBuilder {
+pub struct DeleteBuilder<R> {
     statement: DeleteStatement,
     builder: QueryBuilder,
     token: Option<i64>,
+    _marker: PhantomData<fn(R) -> R>,
 }
 
-impl DeleteBuilder {
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
-        self.builder.consistency(consistency);
+impl<R> DeleteBuilder<R> {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
         self
     }
 
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
-        self.builder.timestamp(timestamp);
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
         self
     }
 
-    pub fn token<V: TokenEncoder>(&mut self, value: &V) -> Result<&mut Self, V::Error> {
-        self.token.replace(value.token()?);
-        Ok(self)
-    }
-
-    pub fn bind<V: Bindable>(&mut self, value: &V) -> Result<&mut Self, <QueryBuilder as Binder>::Error> {
-        self.builder.bind(value)?;
-        Ok(self)
-    }
-
-    pub fn build(&self) -> anyhow::Result<DeleteRequest> {
+    pub fn build(self) -> anyhow::Result<DeleteRequest> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
             payload: self.builder.build()?.into(),
             statement: self.statement.clone().into(),
         }
         .into())
+    }
+}
+
+impl DeleteBuilder<DynamicRequest> {
+    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Result<Self, V::Error> {
+        self.token.replace(value.token()?);
+        Ok(self)
+    }
+
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+        self.builder = self.builder.bind(value)?;
+        Ok(self)
+    }
+
+    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, TokenBindError<V>> {
+        self.token
+            .replace(value.token().map_err(TokenBindError::TokenEncodeError)?);
+        self.builder = self.builder.bind(value)?;
+        Ok(self)
     }
 }
 

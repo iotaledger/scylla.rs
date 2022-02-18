@@ -101,27 +101,26 @@ const MD5_BE_LENGTH: [u8; 2] = [0, 16];
 pub trait Binder {
     type Error: Debug;
     /// Add a single value
-    fn value<V: ColumnEncoder>(&mut self, value: &V) -> Result<&mut Self, Self::Error>
+    fn value<V: ColumnEncoder>(self, value: &V) -> Result<Self, Self::Error>
     where
         Self: Sized;
     /// Add a single named value
-    fn named_value<V: ColumnEncoder>(&mut self, name: &str, value: &V) -> Result<&mut Self, Self::Error>
+    fn named_value<V: ColumnEncoder>(self, name: &str, value: &V) -> Result<Self, Self::Error>
     where
         Self: Sized;
     /// Add a slice of values
-    fn bind<V: Bindable>(&mut self, values: &V) -> Result<&mut Self, Self::Error>
+    fn bind<V: Bindable>(self, values: &V) -> Result<Self, Self::Error>
     where
         Self: Sized,
     {
-        values.bind(self)?;
-        Ok(self)
+        values.bind(self)
     }
     /// Unset value
-    fn unset_value(&mut self) -> Result<&mut Self, Self::Error>
+    fn unset_value(self) -> Result<Self, Self::Error>
     where
         Self: Sized;
     /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(&mut self) -> Result<&mut Self, Self::Error>
+    fn null_value(self) -> Result<Self, Self::Error>
     where
         Self: Sized;
 }
@@ -129,39 +128,39 @@ pub trait Binder {
 /// Defines a query bindable value
 pub trait Bindable {
     /// Bind the value using the provided binder
-    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error>;
+    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error>;
 }
 
 impl<T: ColumnEncoder> Bindable for T {
-    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
-        binder.value(self);
-        Ok(())
+    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error> {
+        binder.value(self)
     }
 }
 
 impl Bindable for () {
-    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
-        Ok(())
+    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error> {
+        Ok(binder)
     }
 }
 
 impl<T: Bindable> Bindable for [T] {
-    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
+    fn bind<B: Binder>(&self, mut binder: B) -> Result<B, B::Error> {
         for v in self.iter() {
-            v.bind(binder)?;
+            binder = v.bind(binder)?;
         }
-        Ok(())
+        Ok(binder)
     }
 }
 
 pub struct FrameBuilder;
 
 impl FrameBuilder {
-    pub fn build(header: [u8; 5], body: &[u8]) -> Vec<u8> {
-        let mut body_buf = i32::to_be_bytes(body.len() as i32).to_vec();
-        body_buf.extend(body);
-        let mut buf = header.to_vec();
-        buf.extend(body_buf);
-        buf
+    pub fn build(header: [u8; 5], mut body: Vec<u8>) -> Vec<u8> {
+        let len = body.len() as i32;
+        body.reserve(9);
+        body.extend(header);
+        body.extend(i32::to_be_bytes(len));
+        body.rotate_right(9);
+        body
     }
 }

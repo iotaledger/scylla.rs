@@ -55,37 +55,33 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Select<S: Keyspace, K: Bindable + TokenEncoder, O: RowsDecoder>: Table {
+pub trait Select<T: Table, K: Bindable + TokenEncoder, O: RowsDecoder>: Keyspace {
     /// Create your select statement here.
-    fn statement(keyspace: &S) -> SelectStatement;
+    fn statement(&self) -> SelectStatement;
 
     /// Bind the cql values to the builder
-    fn bind_values<B: Binder>(binder: &mut B, key: &K) -> Result<(), B::Error> {
-        binder.bind(key)?;
-        Ok(())
+    fn bind_values<B: Binder>(binder: B, key: &K) -> Result<B, B::Error> {
+        binder.bind(key)
     }
 }
 
-impl<T: Table + RowsDecoder, S: Keyspace> Select<S, T::PrimaryKey, T> for T
+impl<T: Table + RowsDecoder, S: Keyspace> Select<T, T::PrimaryKey, T> for S
 where
     T::PrimaryKey: Bindable + TokenEncoder,
 {
-    fn statement(keyspace: &S) -> SelectStatement {
-        let where_clause = Self::PARTITION_KEY
+    fn statement(&self) -> SelectStatement {
+        let where_clause = T::PARTITION_KEY
             .iter()
-            .chain(Self::CLUSTERING_COLS.iter())
+            .chain(T::CLUSTERING_COLS.iter())
             .map(|&c| Relation::normal(c, Operator::Equal, BindMarker::Anonymous))
             .collect::<Vec<_>>();
-        parse_statement!("SELECT * FROM #.# #", keyspace.name(), Self::NAME, where_clause)
+        parse_statement!("SELECT * FROM #.# #", self.name(), T::NAME, where_clause)
     }
 }
 
-pub trait SelectTable<T: Select<Self, K, O>, K: Bindable + TokenEncoder, O: RowsDecoder>: Keyspace {}
-impl<S: Keyspace, T: Select<Self, K, O>, K: Bindable + TokenEncoder, O: RowsDecoder> SelectTable<T, K, O> for S {}
-
 /// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
 
-pub trait GetStaticSelectRequest<S: Keyspace, K: Bindable + TokenEncoder>: Table {
+pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace {
     /// Create a static select request from a keyspace with a `Select<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -138,19 +134,18 @@ pub trait GetStaticSelectRequest<S: Keyspace, K: Bindable + TokenEncoder>: Table
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select<O>(keyspace: &S, key: &K) -> Result<SelectBuilder<O>, StaticQueryError<K>>
+    fn select<O>(&self, key: &K) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
     where
-        Self: Select<S, K, O>,
-        K: TokenEncoder,
+        Self: Select<T, K, O>,
         O: RowsDecoder,
-        S: Keyspace,
     {
-        let statement = Self::statement(keyspace);
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::One).statement(&statement.to_string());
-        Self::bind_values(&mut builder, key)?;
+        let statement = self.statement();
+        let mut builder = QueryBuilder::default()
+            .consistency(Consistency::One)
+            .statement(&statement.to_string());
+        builder = Self::bind_values(builder, key)?;
         Ok(SelectBuilder {
-            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
             _marker: PhantomData,
@@ -208,25 +203,25 @@ pub trait GetStaticSelectRequest<S: Keyspace, K: Bindable + TokenEncoder>: Table
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_prepared<O>(keyspace: &S, key: &K) -> Result<SelectBuilder<O>, StaticQueryError<K>>
+    fn select_prepared<O>(&self, key: &K) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
     where
-        Self: Select<S, K, O>,
-        K: TokenEncoder,
+        Self: Select<T, K, O>,
         O: RowsDecoder,
-        S: Keyspace,
     {
-        let statement = Self::statement(keyspace);
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::One).id(&statement.id());
-        Self::bind_values(&mut builder, key)?;
+        let statement = self.statement();
+        let mut builder = QueryBuilder::default()
+            .consistency(Consistency::One)
+            .id(&statement.id());
+        builder = Self::bind_values(builder, key)?;
         Ok(SelectBuilder {
-            token: Some(key.token().map_err(StaticQueryError::TokenEncodeError)?),
+            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
             builder,
             statement,
             _marker: PhantomData,
         })
     }
 }
+impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticSelectRequest<T, K> for S {}
 
 /// Specifies helper functions for creating dynamic select requests from anything that can be interpreted as a statement
 
@@ -243,7 +238,7 @@ pub trait AsDynamicSelectRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query<O: RowsDecoder>(self) -> SelectBuilder<O>;
+    fn query<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O>;
 
     /// Create a dynamic select prepared request from a statement and variables.
     ///
@@ -257,29 +252,23 @@ pub trait AsDynamicSelectRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepared<O: RowsDecoder>(self) -> SelectBuilder<O>;
+    fn query_prepared<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O>;
 }
-
-impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticSelectRequest<S, K> for T {}
 impl AsDynamicSelectRequest for SelectStatement {
-    fn query<O: RowsDecoder>(self) -> SelectBuilder<O> {
-        let mut builder = QueryBuilder::default();
-        builder.consistency(Consistency::One).statement(&self.to_string());
+    fn query<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O> {
         SelectBuilder {
-            builder,
+            builder: QueryBuilder::default()
+                .consistency(Consistency::One)
+                .statement(&self.to_string()),
             statement: self,
             token: None,
             _marker: PhantomData,
         }
     }
 
-    fn prepared<O: RowsDecoder>(self) -> SelectBuilder<O> {
-        let mut builder = QueryBuilder::default();
-        builder
-            .consistency(Consistency::One)
-            .id(&md5::compute(self.to_string().as_bytes()).into());
+    fn query_prepared<O: RowsDecoder>(self) -> SelectBuilder<DynamicRequest, O> {
         SelectBuilder {
-            builder,
+            builder: QueryBuilder::default().consistency(Consistency::One).id(&self.id()),
             statement: self,
             token: None,
             _marker: PhantomData,
@@ -287,50 +276,59 @@ impl AsDynamicSelectRequest for SelectStatement {
     }
 }
 
-pub struct SelectBuilder<O: RowsDecoder> {
+pub struct SelectBuilder<R, O: RowsDecoder> {
     statement: SelectStatement,
     builder: QueryBuilder,
     token: Option<i64>,
-    _marker: PhantomData<fn(O) -> O>,
+    _marker: PhantomData<fn(R, O) -> (R, O)>,
 }
 
-impl<O: RowsDecoder> SelectBuilder<O> {
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
-        self.builder.consistency(consistency);
+impl<R, O: RowsDecoder> SelectBuilder<R, O> {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
         self
     }
 
-    pub fn page_size(&mut self, page_size: i32) -> &mut Self {
-        self.builder.page_size(page_size);
+    pub fn page_size(mut self, page_size: i32) -> Self {
+        self.builder = self.builder.page_size(page_size);
         self
     }
     /// Set the paging state.
-    pub fn paging_state(&mut self, paging_state: Vec<u8>) -> &mut Self {
-        self.builder.paging_state(paging_state);
+    pub fn paging_state(mut self, paging_state: Vec<u8>) -> Self {
+        self.builder = self.builder.paging_state(paging_state);
         self
     }
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
-        self.builder.timestamp(timestamp);
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
         self
     }
 
-    pub fn token<V: TokenEncoder>(&mut self, value: &V) -> Result<&mut Self, V::Error> {
-        self.token.replace(value.token()?);
-        Ok(self)
-    }
-
-    pub fn bind<V: Bindable>(&mut self, value: &V) -> Result<&mut Self, <QueryBuilder as Binder>::Error> {
-        self.builder.bind(value)?;
-        Ok(self)
-    }
-
-    pub fn build(&self) -> anyhow::Result<SelectRequest<O>> {
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
             payload: self.builder.build()?.into(),
             statement: self.statement.clone().into(),
         }
         .into())
+    }
+}
+
+impl<O: RowsDecoder> SelectBuilder<DynamicRequest, O> {
+    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Result<Self, V::Error> {
+        self.token.replace(value.token()?);
+        Ok(self)
+    }
+
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+        self.builder = self.builder.bind(value)?;
+        Ok(self)
+    }
+
+    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, TokenBindError<V>> {
+        self.token
+            .replace(value.token().map_err(TokenBindError::TokenEncodeError)?);
+        self.builder = self.builder.bind(value)?;
+        Ok(self)
     }
 }
 

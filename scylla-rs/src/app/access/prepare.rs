@@ -9,7 +9,7 @@ use crate::{
 
 /// Specifies helper functions for creating static prepare requests from a keyspace with any access trait definition
 
-pub trait GetStaticPrepareRequest: Table {
+pub trait GetStaticPrepareRequest: Keyspace {
     /// Create a static prepare request from a keyspace with a `Select<K, V>` definition.
     ///
     /// ## Example
@@ -58,14 +58,14 @@ pub trait GetStaticPrepareRequest: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_select<S, K, O>(keyspace: &S) -> PrepareRequest
+    fn prepare_select<T, K, O>(&self) -> PrepareRequest
     where
-        Self: Select<S, K, O>,
+        Self: Select<T, K, O>,
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
-        S: Keyspace,
+        T: Table,
     {
-        PrepareRequest::new(Self::statement(keyspace))
+        PrepareRequest::new(self.statement())
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -120,13 +120,13 @@ pub trait GetStaticPrepareRequest: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_insert<S, K>(keyspace: &S) -> PrepareRequest
+    fn prepare_insert<T, K>(&self) -> PrepareRequest
     where
-        Self: Insert<S, K>,
+        Self: Insert<T, K>,
         K: Bindable + TokenEncoder,
-        S: Keyspace,
+        T: Table,
     {
-        PrepareRequest::new(Self::statement(keyspace))
+        PrepareRequest::new(self.statement())
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -186,13 +186,13 @@ pub trait GetStaticPrepareRequest: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_update<S, K, V>(keyspace: &S) -> PrepareRequest
+    fn prepare_update<T, K, V>(&self) -> PrepareRequest
     where
-        Self: Update<S, K, V>,
+        Self: Update<T, K, V>,
         K: Bindable + TokenEncoder,
-        S: Keyspace,
+        T: Table,
     {
-        PrepareRequest::new(Self::statement(keyspace))
+        PrepareRequest::new(self.statement())
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -243,13 +243,13 @@ pub trait GetStaticPrepareRequest: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_delete<S, K>(keyspace: &S) -> PrepareRequest
+    fn prepare_delete<T, K>(&self) -> PrepareRequest
     where
-        Self: Delete<S, K>,
+        Self: Delete<T, K>,
         K: Bindable + TokenEncoder,
-        S: Keyspace,
+        T: Table,
     {
-        PrepareRequest::new(Self::statement(keyspace))
+        PrepareRequest::new(self.statement())
     }
 }
 
@@ -273,7 +273,7 @@ pub trait AsDynamicPrepareRequest: Into<DataManipulationStatement> {
     }
 }
 
-impl<S: Table> GetStaticPrepareRequest for S {}
+impl<S: Keyspace> GetStaticPrepareRequest for S {}
 impl<T: Into<DataManipulationStatement>> AsDynamicPrepareRequest for T {}
 
 /// A request to prepare a record which can be sent to the ring

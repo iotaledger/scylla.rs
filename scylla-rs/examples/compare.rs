@@ -37,7 +37,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), None);
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some(CompressionType::Snappy));
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
@@ -63,7 +63,7 @@ async fn main() {
     let session = Arc::new(
         SessionBuilder::new()
             .known_node_addr(node)
-            .compression(None)
+            .compression(Some(Compression::Snappy))
             .build()
             .await
             .unwrap(),
@@ -145,12 +145,10 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
     }
 
-    TestTable::prepare_insert::<_, TestTable>(&keyspace).get_local().await?;
-    TestTable::prepare_select::<_, String, i32>(&keyspace)
-        .get_local()
-        .await?;
-
     let insert = keyspace.insert_statement::<TestTable, TestTable>();
+    let select = keyspace.select_statement::<TestTable, String, i32>();
+    insert.clone().prepare().get_local().await?;
+    select.clone().prepare().get_local().await?;
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
@@ -162,7 +160,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             let key = format!("Key {}", i);
             handle.send(
                 insert
-                    .prepared()
+                    .query_prepared()
                     .token(&key)?
                     .bind(&key)?
                     .bind(&i)?
@@ -185,8 +183,6 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         anyhow::bail!("Did not receive all insert confirmations!");
     }
 
-    let select = keyspace.select_statement::<TestTable, String, i32>();
-
     let (sender, mut inbox) = unbounded_channel::<(_, Result<Option<_>, _>)>();
     for i in 0..n {
         let handle = sender.clone();
@@ -197,7 +193,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             handle.send((
                 i,
                 select
-                    .prepared::<i32>()
+                    .query_prepared::<i32>()
                     .token(&key)?
                     .bind(&key)?
                     .build()?
@@ -435,14 +431,13 @@ impl Row for TestTable {
 }
 
 impl Bindable for TestTable {
-    fn bind<B: Binder>(&self, binder: &mut B) -> Result<(), B::Error> {
-        binder.bind(&self.key)?.bind(&self.data)?;
-        Ok(())
+    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error> {
+        binder.bind(&self.key)?.bind(&self.data)
     }
 }
 
-impl<S: Keyspace> Select<S, String, i32> for TestTable {
-    fn statement(keyspace: &S) -> SelectStatement {
-        parse_statement!("SELECT data FROM #.test WHERE key = ?", keyspace.name())
+impl Select<TestTable, String, i32> for MyKeyspace {
+    fn statement(&self) -> SelectStatement {
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
     }
 }

@@ -29,7 +29,7 @@ pub enum StartupBuildError {
 
 impl StartupBuilder {
     /// Update the options in Startup frame.
-    pub fn options(&mut self, map: &HashMap<String, String>) -> &mut Self {
+    pub fn options(mut self, map: &HashMap<String, String>) -> Self {
         let mut buf = Vec::new();
         buf.extend(&u16::to_be_bytes(map.keys().len() as u16));
         for (k, v) in map {
@@ -43,10 +43,10 @@ impl StartupBuilder {
     }
 
     /// Build the Startup frame.
-    pub fn build(&self) -> Result<Startup, StartupBuildError> {
+    pub fn build(mut self) -> Result<Startup, StartupBuildError> {
         Ok(Startup(FrameBuilder::build(
             STARTUP_HEADER,
-            self.opts_buf.as_ref().ok_or_else(|| StartupBuildError::NoOptions)?,
+            self.opts_buf.take().ok_or_else(|| StartupBuildError::NoOptions)?,
         )))
     }
 }

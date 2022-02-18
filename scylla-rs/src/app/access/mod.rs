@@ -27,12 +27,6 @@ pub(crate) mod execute;
 
 pub(crate) mod prepare;
 
-use self::{
-    delete::DeleteTable,
-    insert::InsertTable,
-    select::SelectTable,
-    update::UpdateTable,
-};
 use super::{
     worker::BasicRetryWorker,
     Worker,
@@ -51,7 +45,6 @@ pub use crate::{
             Compression,
             Uncompressed,
         },
-        query::StatementType,
         Bindable,
         Binder,
         Consistency,
@@ -110,6 +103,7 @@ pub use std::{
     },
 };
 use std::{
+    collections::BTreeMap,
     fmt::Debug,
     marker::PhantomData,
     ops::{
@@ -143,6 +137,190 @@ impl<T: ToString> IdExt for T {
         md5::compute(self.to_string().as_bytes()).into()
     }
 }
+
+pub trait TokenIndices: Table {
+    fn select_indices(stmt: &SelectStatement) -> Vec<usize>;
+
+    fn insert_indices(stmt: &InsertStatement) -> Vec<usize>;
+
+    fn update_indices(stmt: &UpdateStatement) -> Vec<usize>;
+
+    fn delete_indices(stmt: &DeleteStatement) -> Vec<usize>;
+
+    fn check_term(term: &Term, col: Option<&String>, idx: &mut usize, map: &mut BTreeMap<usize, usize>) {
+        match term {
+            Term::FunctionCall(f) => {
+                for t in f.args.iter() {
+                    Self::check_term(t, col, idx, map)
+                }
+            }
+            Term::ArithmeticOp { lhs, op: _, rhs } => {
+                match lhs {
+                    Some(t) => Self::check_term(&**t, col, idx, map),
+                    _ => (),
+                }
+                Self::check_term(&**rhs, col, idx, map)
+            }
+            Term::BindMarker(_) => {
+                if let Some(col) = col {
+                    if let Some(key_idx) = Self::PARTITION_KEY.iter().position(|&c| c == col.as_str()) {
+                        map.insert(key_idx, *idx);
+                    }
+                }
+                *idx += 1;
+            }
+            _ => (),
+        }
+    }
+
+    fn check_selector(selector: &Selector, col: Option<&String>, idx: &mut usize, map: &mut BTreeMap<usize, usize>) {
+        match &selector.kind {
+            SelectorKind::Term(t) => Self::check_term(t, col, idx, map),
+            SelectorKind::Cast(s, _) => Self::check_selector(&**s, col, idx, map),
+            SelectorKind::Function(f) => {
+                for s in f.args.iter() {
+                    Self::check_selector(s, col, idx, map)
+                }
+            }
+            _ => (),
+        }
+    }
+
+    fn check_where(where_clause: &WhereClause, idx: &mut usize, map: &mut BTreeMap<usize, usize>) {
+        for r in where_clause.relations.iter() {
+            match r {
+                Relation::Normal {
+                    column,
+                    operator: _,
+                    term,
+                } => {
+                    Self::check_term(
+                        term,
+                        Some(match column {
+                            Name::Quoted(s) | Name::Unquoted(s) => s,
+                        }),
+                        idx,
+                        map,
+                    );
+                }
+                Relation::Token {
+                    columns: _,
+                    operator: _,
+                    term,
+                } => Self::check_term(term, None, idx, map),
+                Relation::Tuple {
+                    columns: _,
+                    operator: _,
+                    tuple_literal,
+                } => {
+                    for t in tuple_literal.elements.iter() {
+                        Self::check_term(t, None, idx, map);
+                    }
+                }
+                _ => (),
+            }
+        }
+    }
+}
+
+impl<T: Table> TokenIndices for T {
+    fn select_indices(stmt: &SelectStatement) -> Vec<usize> {
+        let mut idx = 0;
+        let mut map = BTreeMap::new();
+        // Check select clause for bind markers
+        match &stmt.select_clause {
+            SelectClause::Selectors(selectors) => {
+                for s in selectors.iter() {
+                    Self::check_selector(s, None, &mut idx, &mut map);
+                }
+            }
+            SelectClause::All => (),
+        }
+        // Check where clause for bind markers
+        if let Some(where_clause) = &stmt.where_clause {
+            Self::check_where(where_clause, &mut idx, &mut map);
+        }
+        map.into_values().collect()
+    }
+
+    fn insert_indices(stmt: &InsertStatement) -> Vec<usize> {
+        let mut idx = 0;
+        let mut map = BTreeMap::new();
+        match &stmt.kind {
+            InsertKind::NameValue { names, values } => {
+                for (name, value) in names.iter().zip(values.elements.iter()) {
+                    Self::check_term(
+                        value,
+                        Some(match name {
+                            Name::Quoted(s) | Name::Unquoted(s) => s,
+                        }),
+                        &mut idx,
+                        &mut map,
+                    );
+                }
+            }
+            _ => (),
+        }
+        map.into_values().collect()
+    }
+
+    fn update_indices(stmt: &UpdateStatement) -> Vec<usize> {
+        let mut idx = 0;
+        let mut map = BTreeMap::new();
+        // Check set clause for bind markers
+        for a in stmt.set_clause.iter() {
+            match a {
+                Assignment::Simple { selection, term } => {
+                    match selection {
+                        SimpleSelection::Term(_, t) => Self::check_term(t, None, &mut idx, &mut map),
+                        _ => (),
+                    }
+                    Self::check_term(term, None, &mut idx, &mut map);
+                }
+                Assignment::Arithmetic {
+                    assignee: _,
+                    lhs: _,
+                    op: _,
+                    rhs,
+                } => {
+                    Self::check_term(rhs, None, &mut idx, &mut map);
+                }
+                Assignment::Append {
+                    assignee: _,
+                    list,
+                    item: _,
+                } => {
+                    for t in list.elements.iter() {
+                        Self::check_term(t, None, &mut idx, &mut map);
+                    }
+                }
+            }
+        }
+        // Check where clause for bind markers
+        Self::check_where(&stmt.where_clause, &mut idx, &mut map);
+        map.into_values().collect()
+    }
+
+    fn delete_indices(stmt: &DeleteStatement) -> Vec<usize> {
+        let mut idx = 0;
+        let mut map = BTreeMap::new();
+        // Check select clause for bind markers
+        if let Some(selections) = &stmt.selections {
+            for selection in selections.iter() {
+                match selection {
+                    SimpleSelection::Term(_, t) => Self::check_term(t, None, &mut idx, &mut map),
+                    _ => (),
+                }
+            }
+        }
+        // Check where clause for bind markers
+        Self::check_where(&stmt.where_clause, &mut idx, &mut map);
+        map.into_values().collect()
+    }
+}
+
+pub struct StaticRequest;
+pub struct DynamicRequest;
 
 /// The possible request types
 #[allow(missing_docs)]
@@ -384,83 +562,83 @@ impl Request for CommonRequest {
 pub trait GetStatementIdExt {
     fn select_statement<T, K, O>(&self) -> SelectStatement
     where
-        Self: SelectTable<T, K, O>,
-        T: Select<Self, K, O>,
+        Self: Select<T, K, O>,
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
+        T: Table,
     {
-        T::statement(self)
+        self.statement()
     }
 
     fn select_id<T, K, O>(&self) -> [u8; 16]
     where
-        Self: SelectTable<T, K, O>,
-        T: Select<Self, K, O>,
+        Self: Select<T, K, O>,
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
+        T: Table,
     {
-        T::statement(self).id()
+        self.statement().id()
     }
 
     fn insert_statement<T, K>(&self) -> InsertStatement
     where
-        Self: InsertTable<T, K>,
-        T: Insert<Self, K>,
+        Self: Insert<T, K>,
         K: Bindable + TokenEncoder,
+        T: Table,
     {
-        T::statement(self)
+        self.statement()
     }
 
     fn insert_id<T, K>(&self) -> [u8; 16]
     where
-        Self: InsertTable<T, K>,
-        T: Insert<Self, K>,
+        Self: Insert<T, K>,
         K: Bindable + TokenEncoder,
+        T: Table,
     {
-        T::statement(self).id()
+        self.statement().id()
     }
 
     fn update_statement<T, K, V>(&self) -> UpdateStatement
     where
-        Self: UpdateTable<T, K, V>,
-        T: Update<Self, K, V>,
+        Self: Update<T, K, V>,
         K: Bindable + TokenEncoder,
+        T: Table,
     {
-        T::statement(self)
+        self.statement()
     }
 
     fn update_id<T, K, V>(&self) -> [u8; 16]
     where
-        Self: UpdateTable<T, K, V>,
-        T: Update<Self, K, V>,
+        Self: Update<T, K, V>,
         K: Bindable + TokenEncoder,
+        T: Table,
     {
-        T::statement(self).id()
+        self.statement().id()
     }
 
     fn delete_statement<T, K>(&self) -> DeleteStatement
     where
-        Self: DeleteTable<T, K>,
-        T: Delete<Self, K>,
+        Self: Delete<T, K>,
         K: Bindable + TokenEncoder,
+        T: Table,
     {
-        T::statement(self)
+        self.statement()
     }
 
     fn delete_id<T, K>(&self) -> [u8; 16]
     where
-        Self: DeleteTable<T, K>,
-        T: Delete<Self, K>,
+        Self: Delete<T, K>,
         K: Bindable + TokenEncoder,
+        T: Table,
     {
-        T::statement(self).id()
+        self.statement().id()
     }
 }
 
 impl<S: Keyspace> GetStatementIdExt for S {}
 
 #[derive(Debug, Error)]
-pub enum StaticQueryError<T: TokenEncoder> {
+pub enum TokenBindError<T: TokenEncoder> {
     #[error("Error binding values {0}")]
     BindError(#[from] <QueryBuilder as Binder>::Error),
     #[error("Error encoding token {0:?}")]
@@ -482,7 +660,7 @@ impl<V> DecodeRows<V> {
 
 impl<V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
-    pub fn decode<C: Compression>(&self, bytes: &[u8]) -> anyhow::Result<Option<V>> {
+    pub fn decode<C: Compression>(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
         V::try_decode_rows(Decoder::new::<C>(bytes)?)
     }
 }
@@ -496,7 +674,7 @@ pub struct DecodeVoid;
 impl DecodeVoid {
     /// Decode a result payload using the `VoidDecoder` impl
     #[inline]
-    pub fn decode<C: Compression>(&self, bytes: &[u8]) -> anyhow::Result<()> {
+    pub fn decode<C: Compression>(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
         VoidDecoder::try_decode_void(Decoder::new::<C>(bytes)?)
     }
 }
@@ -873,44 +1051,37 @@ mod tests {
         }
     }
 
-    impl<S: Keyspace> Select<S, u32, f32> for MyTable {
-        fn statement(keyspace: &S) -> SelectStatement {
-            parse_statement!("SELECT col1 FROM #.my_table WHERE key = ?", keyspace.name())
+    impl<S: Keyspace> Select<MyTable, u32, f32> for S {
+        fn statement(&self) -> SelectStatement {
+            parse_statement!("SELECT col1 FROM #.my_table WHERE key = ?", self.name())
         }
     }
 
-    impl<S: Keyspace> Select<S, u32, i32> for MyTable {
-        fn statement(keyspace: &S) -> SelectStatement {
-            parse_statement!("SELECT col2 FROM #.my_table WHERE key = ?", keyspace.name())
+    impl<S: Keyspace> Select<MyTable, u32, i32> for S {
+        fn statement(&self) -> SelectStatement {
+            parse_statement!("SELECT col2 FROM #.my_table WHERE key = ?", self.name())
         }
     }
 
-    impl<S: Keyspace> Insert<S, (u32, f32, f32)> for MyTable {
-        fn statement(keyspace: &S) -> InsertStatement {
-            parse_statement!(
-                "INSERT INTO #.my_table (key, val1, val2) VALUES (?,?,?)",
-                keyspace.name()
-            )
+    impl<S: Keyspace> Insert<MyTable, (u32, f32, f32)> for S {
+        fn statement(&self) -> InsertStatement {
+            parse_statement!("INSERT INTO #.my_table (key, val1, val2) VALUES (?,?,?)", self.name())
         }
     }
 
-    impl<S: Keyspace> Update<S, u32, (f32, f32)> for MyTable {
-        fn statement(keyspace: &S) -> UpdateStatement {
-            parse_statement!(
-                "UPDATE #.my_table SET val1 = ?, val2 = ? WHERE key = ?",
-                keyspace.name()
-            )
+    impl<S: Keyspace> Update<MyTable, u32, (f32, f32)> for S {
+        fn statement(&self) -> UpdateStatement {
+            parse_statement!("UPDATE #.my_table SET val1 = ?, val2 = ? WHERE key = ?", self.name())
         }
 
-        fn bind_values<B: Binder>(binder: &mut B, key: &u32, values: &(f32, f32)) -> Result<(), B::Error> {
-            binder.bind(values)?.bind(key)?;
-            Ok(())
+        fn bind_values<B: Binder>(binder: B, key: &u32, values: &(f32, f32)) -> Result<B, B::Error> {
+            binder.bind(values)?.bind(key)
         }
     }
 
-    impl<S: Keyspace> Delete<S, u32> for MyTable {
-        fn statement(keyspace: &S) -> DeleteStatement {
-            parse_statement!("DELETE FROM #.my_table WHERE key = ?", keyspace.name())
+    impl<S: Keyspace> Delete<MyTable, u32> for S {
+        fn statement(&self) -> DeleteStatement {
+            parse_statement!("DELETE FROM #.my_table WHERE key = ?", self.name())
         }
     }
 
@@ -928,31 +1099,28 @@ mod tests {
             .send_local();
         assert!(res.is_err());
         let res = parse_statement!(r#"SELECT col1 FROM #."table" WHERE key = ?"#, keyspace.name())
-            .prepared::<f32>()
+            .query_prepared::<f32>()
             .bind(&3)
             .unwrap()
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let res = MyTable::select::<f32>(&keyspace, &3)
+        let res = keyspace
+            .select::<f32>(&3)
             .unwrap()
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let req2 = MyTable::select::<i32>(&keyspace, &3)
-            .unwrap()
-            .page_size(500)
-            .build()
-            .unwrap();
+        let req2 = keyspace.select::<i32>(&3).unwrap().page_size(500).build().unwrap();
         let _res = req2.clone().send_local();
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = MyTable::insert(&keyspace, &(3, 8.0, 7.5)).unwrap().build().unwrap();
+        let req = keyspace.insert(&(3, 8.0, 7.5)).unwrap().build().unwrap();
         let _res = req.send_local();
 
         parse_statement!(
@@ -971,7 +1139,7 @@ mod tests {
             "INSERT INTO #.my_table (key, val1, val2) VALUES (?,?,?)",
             keyspace.name()
         )
-        .prepared()
+        .query_prepared()
         .bind(&(3, 8.0, 7.5))
         .unwrap()
         .build()
@@ -983,7 +1151,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = MyTable::update(&keyspace, &3, &(8.0, 5.5)).unwrap().build().unwrap();
+        let req = keyspace.update(&3, &(8.0, 5.5)).unwrap().build().unwrap();
 
         let _res = req.send_local();
     }
@@ -991,7 +1159,8 @@ mod tests {
     #[allow(dead_code)]
     fn test_delete() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = MyTable::delete(&keyspace, &3)
+        let req = keyspace
+            .delete(&3)
             .unwrap()
             .consistency(Consistency::All)
             .build()

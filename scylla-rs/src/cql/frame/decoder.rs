@@ -201,7 +201,7 @@ pub struct Decoder {
 }
 impl Decoder {
     /// Create a new decoder with an assigned compression type.
-    pub fn new<C: Compression>(buffer: &[u8]) -> anyhow::Result<Self> {
+    pub fn new<C: Compression>(buffer: Vec<u8>) -> anyhow::Result<Self> {
         let buffer = C::decompress(buffer)?;
         let header_flags = HeaderFlags::new(&buffer)?;
         Ok(Decoder { buffer, header_flags })
@@ -235,7 +235,7 @@ pub struct HeaderFlags {
 #[allow(dead_code)]
 impl HeaderFlags {
     /// Create a new header flags.
-    pub fn new(buffer: &Vec<u8>) -> anyhow::Result<Self> {
+    pub fn new(buffer: &[u8]) -> anyhow::Result<Self> {
         let mut body_start = 9;
         let flags = buffer[1];
         let compression = flags & header::COMPRESSION == header::COMPRESSION;

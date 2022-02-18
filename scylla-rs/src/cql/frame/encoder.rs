@@ -371,7 +371,7 @@ impl ColumnEncoder for NaiveDateTime {
 }
 
 /// An encode chain. Allows sequential encodes stored back-to-back in a buffer.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct TokenEncodeChain {
     len: usize,
     buffer: Option<Vec<u8>>,
@@ -402,11 +402,11 @@ impl TokenEncodeChain {
                     Some(buffer) => {
                         buffer.push(0);
                         buffer.extend_from_slice(&other_buffer[..]);
-                        self.len += 1;
+                        self.len += other.len;
                     }
                     None => {
                         self.buffer = Some(other_buffer);
-                        self.len = 1;
+                        self.len = other.len;
                     }
                 }
             }
@@ -460,6 +460,14 @@ pub trait TokenEncoder {
     /// Encode a single token
     fn token(&self) -> Result<i64, Self::Error> {
         Ok(self.encode_token()?.finish())
+    }
+}
+
+impl TokenEncoder for TokenEncodeChain {
+    type Error = Infallible;
+
+    fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
+        Ok(self.clone())
     }
 }
 

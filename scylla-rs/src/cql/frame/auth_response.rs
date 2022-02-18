@@ -79,17 +79,17 @@ pub enum AuthResponseBuildError {
 
 impl AuthResponseBuilder {
     /// Update the response token to be the token from autenticator.
-    pub fn token(&mut self, authenticator: &impl Authenticator) -> &mut Self {
+    pub fn token(mut self, authenticator: &impl Authenticator) -> Self {
         let token = authenticator.token();
         self.token.replace(token);
         self
     }
 
     /// Build the prepare frame with an assigned compression type.
-    pub fn build(&self) -> Result<AuthResponse, AuthResponseBuildError> {
+    pub fn build(mut self) -> Result<AuthResponse, AuthResponseBuildError> {
         Ok(AuthResponse(FrameBuilder::build(
             AUTH_RESPONSE_HEADER,
-            self.token.as_ref().ok_or_else(|| AuthResponseBuildError::NoToken)?,
+            self.token.take().ok_or_else(|| AuthResponseBuildError::NoToken)?,
         )))
     }
 }

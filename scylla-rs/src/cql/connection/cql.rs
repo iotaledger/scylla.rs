@@ -193,14 +193,14 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
             .connect(self.address.ok_or_else(|| anyhow!("Address does not exist!"))?)
             .await?;
         // create options frame
-        let Options(opt_buf) = Options::new().build();
+        let Options(opt_buf) = Options::new();
         // write_all options frame to stream
         stream.write_all(&opt_buf).await?;
         // collect_frame_response
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer. OPTIONS cannot be compressed as
         // the client and protocol didn't yet settle on compression algo (if any)
-        let decoder = Decoder::new::<Uncompressed>(&buffer)?;
+        let decoder = Decoder::new::<Uncompressed>(buffer)?;
         // make sure the frame response is not error
         if decoder.is_error()? {
             // check if response is_error.
@@ -230,7 +230,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
         stream.write_all(&startup_buf).await?;
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer.
-        let decoder = Decoder::new::<C>(&buffer)?;
+        let decoder = Decoder::new::<C>(buffer)?;
         if decoder.is_authenticate()? {
             if self.authenticator.is_none() {
                 Authenticate::new(&decoder)?;
@@ -249,7 +249,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
             // collect_frame_response
             let buffer = collect_frame_response(&mut stream).await?;
             // Create Decoder from buffer.
-            let decoder = Decoder::new::<C>(&buffer)?;
+            let decoder = Decoder::new::<C>(buffer)?;
             if decoder.is_error()? {
                 bail!("CQL connection not ready due to CqlError: {}", decoder.get_error()?);
             }
@@ -443,7 +443,7 @@ impl<C: Compression> Cql<C> {
         // collect_frame_response
         let buffer = collect_frame_response(&mut self.stream).await?;
         // Create Decoder from buffer.
-        let decoder = Decoder::new::<C>(&buffer)?;
+        let decoder = Decoder::new::<C>(buffer)?;
 
         if decoder.is_rows()? {
             let Row { data_center, tokens } = Info::new(decoder)?.next().ok_or(anyhow!("No info found!"))?;

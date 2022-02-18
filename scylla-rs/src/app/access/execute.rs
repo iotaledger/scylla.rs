@@ -30,11 +30,12 @@ where
     /// ```
     fn execute(self) -> ExecuteBuilder {
         let statement = self.into();
-        let mut builder = QueryBuilder::default();
-        builder
-            .statement(&statement.to_string())
-            .consistency(Consistency::Quorum);
-        ExecuteBuilder { builder, statement }
+        ExecuteBuilder {
+            builder: QueryBuilder::default()
+                .statement(&statement.to_string())
+                .consistency(Consistency::Quorum),
+            statement,
+        }
     }
 }
 impl<T: Into<Statement>> AsDynamicExecuteRequest for T {}
@@ -45,22 +46,22 @@ pub struct ExecuteBuilder {
 }
 
 impl ExecuteBuilder {
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
-        self.builder.consistency(consistency);
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
         self
     }
 
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
-        self.builder.timestamp(timestamp);
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
         self
     }
 
-    pub fn bind<V: Bindable>(&mut self, value: &V) -> Result<&mut Self, <QueryBuilder as Binder>::Error> {
-        self.builder.bind(value)?;
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+        self.builder = self.builder.bind(value)?;
         Ok(self)
     }
 
-    pub fn build(&self) -> anyhow::Result<ExecuteRequest> {
+    pub fn build(self) -> anyhow::Result<ExecuteRequest> {
         Ok(ExecuteRequest {
             token: rand::random(),
             payload: self.builder.build()?.into(),

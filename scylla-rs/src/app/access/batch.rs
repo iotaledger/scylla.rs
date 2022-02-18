@@ -1,12 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    delete::DeleteTable,
-    insert::InsertTable,
-    update::UpdateTable,
-    *,
-};
+use super::*;
 use crate::cql::{
     BatchBuilder,
     BatchType,
@@ -119,145 +114,141 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
     }
 
     /// Specify the batch type using an enum
-    pub fn batch_type(&mut self, batch_type: BatchType) -> &mut Self {
-        self.builder.batch_type(batch_type);
+    pub fn batch_type(mut self, batch_type: BatchType) -> Self {
+        self.builder = self.builder.batch_type(batch_type);
         self
     }
 
     /// Specify the batch type as Logged
-    pub fn logged(&mut self) -> &mut Self {
+    pub fn logged(self) -> Self {
         self.batch_type(BatchType::Logged)
     }
 
     /// Specify the batch type as Unlogged
-    pub fn unlogged(&mut self) -> &mut Self {
+    pub fn unlogged(self) -> Self {
         self.batch_type(BatchType::Unlogged)
     }
 
     /// Specify the batch type as Counter
-    pub fn counter(&mut self) -> &mut Self {
+    pub fn counter(self) -> Self {
         self.batch_type(BatchType::Counter)
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert<T, K>(&mut self, key: &K) -> Result<&mut Self, <BatchBuilder as Binder>::Error>
+    pub fn insert<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: InsertTable<T, K>,
-        T: Insert<S, K>,
+        S: Insert<T, K>,
+        T: Table,
         K: Bindable + TokenEncoder,
     {
-        let statement = T::statement(self.keyspace);
+        let statement = self.keyspace.statement();
         // this will advance the builder with QueryStatement
-        self.builder.statement(&statement.to_string());
+        self.builder = self.builder.statement(&statement.to_string());
         // bind_values of Insert<K>
-        T::bind_values(&mut self.builder, key)?;
+        self.builder = S::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_prepared<T, K>(&mut self, key: &K) -> Result<&mut Self, <BatchBuilder as Binder>::Error>
+    pub fn insert_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: 'static + InsertTable<T, K> + Debug,
+        S: 'static + Insert<T, K> + Debug,
+        T: Table,
         K: 'static + Bindable + TokenEncoder + Clone + Send + Debug,
-        T: Insert<S, K>,
     {
-        let statement = T::statement(self.keyspace);
+        let statement = self.keyspace.statement();
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
-        self.builder.id(&id);
+        self.builder = self.builder.id(&id);
         // bind_values of Insert<K, V>
-        T::bind_values(&mut self.builder, key)?;
+        self.builder = S::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update<T, K, V>(&mut self, key: &K, values: &V) -> Result<&mut Self, <BatchBuilder as Binder>::Error>
+    pub fn update<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: UpdateTable<T, K, V>,
-        T: Update<S, K, V>,
+        S: Update<T, K, V>,
+        T: Table,
         K: TokenEncoder,
     {
-        let statement = T::statement(self.keyspace);
+        let statement = self.keyspace.statement();
         // this will advance the builder with QueryStatement
-        self.builder.statement(&statement.to_string());
+        self.builder = self.builder.statement(&statement.to_string());
         // bind_values of Update<K, V>
-        T::bind_values(&mut self.builder, key, values)?;
+        self.builder = S::bind_values(self.builder, key, values)?;
         Ok(self)
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<T, K, V>(
-        &mut self,
-        key: &K,
-        values: &V,
-    ) -> Result<&mut Self, <BatchBuilder as Binder>::Error>
+    pub fn update_prepared<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: 'static + UpdateTable<T, K, V> + Debug,
-        T: Update<S, K, V>,
+        S: 'static + Update<T, K, V> + Debug,
+        T: Table,
         K: 'static + TokenEncoder + Clone + Send + Debug,
         V: 'static + Clone + Send + Debug,
     {
-        let statement = T::statement(self.keyspace);
+        let statement = self.keyspace.statement();
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
-        self.builder.id(&id);
+        self.builder = self.builder.id(&id);
         // bind_values of Update<K, V>
-        T::bind_values(&mut self.builder, key, values)?;
+        self.builder = S::bind_values(self.builder, key, values)?;
         Ok(self)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete<T, K>(&mut self, key: &K) -> Result<&mut Self, <BatchBuilder as Binder>::Error>
+    pub fn delete<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: DeleteTable<T, K>,
-        T: Delete<S, K>,
+        S: Delete<T, K>,
+        T: Table,
         K: Bindable + TokenEncoder,
     {
-        let statement = T::statement(self.keyspace);
+        let statement = self.keyspace.statement();
         // this will advance the builder with QueryStatement
-        self.builder.statement(&statement.to_string());
+        self.builder = self.builder.statement(&statement.to_string());
         // bind_values of Delete<K>
-        T::bind_values(&mut self.builder, key)?;
+        self.builder = S::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<T, K>(&mut self, key: &K) -> Result<&mut Self, <BatchBuilder as Binder>::Error>
+    pub fn delete_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: 'static + DeleteTable<T, K> + Debug,
-        T: Delete<S, K>,
+        S: 'static + Delete<T, K> + Debug,
+        T: Table,
         K: 'static + Bindable + TokenEncoder + Clone + Send + Debug,
     {
-        let statement = T::statement(self.keyspace);
+        let statement = self.keyspace.statement();
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
-        self.builder.id(&id);
+        self.builder = self.builder.id(&id);
         // bind_values of Delete<K>
-        T::bind_values(&mut self.builder, key)?;
+        self.builder = S::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Set the consistency for this batch
-    pub fn consistency(&mut self, consistency: Consistency) -> &mut Self {
-        self.builder.consistency(consistency);
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
         self
     }
 
     /// Set the serial consistency for the batch
-    pub fn serial_consistency(&mut self, consistency: Consistency) -> &mut Self {
-        self.builder.serial_consistency(consistency);
+    pub fn serial_consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.serial_consistency(consistency);
         self
     }
     /// Set the timestamp for the batch
-    pub fn timestamp(&mut self, timestamp: i64) -> &mut Self {
-        self.builder.timestamp(timestamp);
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
         self
     }
     /// Build the batch request using the current collector
-    pub fn build(&self) -> anyhow::Result<BatchRequest> {
+    pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
             token: rand::random(),
             map: self.map.clone(),

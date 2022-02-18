@@ -32,7 +32,6 @@ use backstage::core::{
 };
 use std::{
     collections::HashMap,
-    convert::TryInto,
     marker::PhantomData,
 };
 
@@ -102,7 +101,7 @@ where
             match event {
                 ReporterEvent::Request { worker, payload } => {
                     // log::info!("reporter received request, payload len: {}", payload.len());
-                    match C::compress(&payload) {
+                    match C::compress(payload) {
                         Ok(mut payload) => {
                             // log::info!("Compressed payload len: {}", payload.len());
                             if let Some(stream) = self.streams.pop() {
@@ -164,7 +163,7 @@ impl<C: 'static + Compression> Reporter<C> {
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = payloads[stream as usize].as_mut().take() {
-                match Decoder::new::<C>(&payload) {
+                match Decoder::new::<C>(payload) {
                     Ok(decoder) => {
                         if decoder.is_error().unwrap_or(true) {
                             worker.handle_error(
