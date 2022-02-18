@@ -3,12 +3,11 @@
 
 //! This crates implements the uncompressed, LZ4, and snappy compression methods for Cassandra.
 
-use std::convert::TryInto;
-
 use serde::{
     Deserialize,
     Serialize,
 };
+use std::convert::TryInto;
 use thiserror::Error;
 
 /// This compression thread provides the buffer compression/decompression methods for uncompressed/Lz4/snappy.
@@ -86,20 +85,19 @@ impl Compression for Lz4 {
     const FLAG: u8 = 1;
     const KIND: Option<CompressionType> = Some(CompressionType::Lz4);
     fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
-        let size = i32::from_be_bytes(buffer[4..8].try_into().unwrap());
+        let size = i32::from_be_bytes(buffer[4..8].try_into().unwrap()) as usize;
         // lz4 will fail if we get a zero-sized body, so just skip it
         if size == 0 {
             return Ok(None);
         }
-        let mut body = lz4::block::decompress(&buffer[8..], Some(size))
-            .map_err(|e| CompressionError::BadDecompression(e.into()))?;
+        let mut body =
+            lz4_flex::decompress(&buffer[8..], size).map_err(|e| CompressionError::BadDecompression(e.into()))?;
         body.extend(&i32::to_be_bytes(body.len() as i32));
         body.rotate_right(4);
         Ok(Some(body))
     }
     fn compress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
-        let mut body =
-            lz4::block::compress(&buffer[4..], None, true).map_err(|e| CompressionError::BadCompression(e.into()))?;
+        let mut body = lz4_flex::compress_prepend_size(&buffer[4..]);
         // Don't use the compressed bytes if they're BIGGER than the uncompressed ones...
         if body.len() > buffer[4..].len() {
             return Ok(None);

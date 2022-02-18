@@ -12,7 +12,7 @@ exclude = [".github/**/*"]
 
 [dependencies]
 # CQL
-lz4 = "1.23"
+lz4_flex = { version = "0.9", default-features = false }
 snap = "1.0"
 port_scanner = "0.1"
 tokio = { version = "1.12", features = ["io-util", "net"] }

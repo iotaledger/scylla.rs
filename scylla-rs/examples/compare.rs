@@ -31,7 +31,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some(CompressionType::Snappy));
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some(CompressionType::Lz4));
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
@@ -57,7 +57,7 @@ async fn main() {
     let session = Arc::new(
         SessionBuilder::new()
             .known_node_addr(node)
-            .compression(Some(Compression::Snappy))
+            .compression(Some(Compression::Lz4))
             .build()
             .await
             .unwrap(),
@@ -73,7 +73,7 @@ async fn main() {
         }
     }
     info!("Timings:");
-    info!("{:8} | {:^25} | {:^25} |", "", "scylla", "scylla-rs");
+    info!("{:8} | {:^25} | {:^25} |", "", "scylla-rust-driver", "scylla-rs");
     info!("{:8} | {:-<25} | {:-<25} |", "", "", "");
     info!(
         "{:8} | {:12} {:12} | {:12} {:12} | {:>10}",
