@@ -24,27 +24,29 @@ pub trait Compression: Sync {
             return Ok(buffer);
         }
         // Decompress the body
-        let decompressed_buffer = Self::decompress_body(&buffer[5..])?;
-        buffer.resize(decompressed_buffer.len() + 5, 0);
-        buffer[5..].copy_from_slice(&decompressed_buffer);
+        if let Some(decompressed_buffer) = Self::decompress_body(&buffer[5..])? {
+            buffer.resize(decompressed_buffer.len() + 5, 0);
+            buffer[5..].copy_from_slice(&decompressed_buffer);
+        }
         Ok(buffer)
     }
     /// Accepts a body buffer with four byte length prepended
-    fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError>;
+    fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError>;
     /// Accepts a buffer with a header and compresses it.
     fn compress(mut buffer: Vec<u8>) -> Result<Vec<u8>, CompressionError> {
         if buffer.len() < 9 {
             return Err(CompressionError::SmallBuffer);
         }
         // Compress the body
-        let compressed_buffer = Self::compress_body(&buffer[5..])?;
-        buffer[1] |= Self::FLAG;
-        buffer.resize(compressed_buffer.len() + 5, 0);
-        buffer[5..].copy_from_slice(&compressed_buffer);
+        if let Some(compressed_buffer) = Self::compress_body(&buffer[5..])? {
+            buffer[1] |= Self::FLAG;
+            buffer.resize(compressed_buffer.len() + 5, 0);
+            buffer[5..].copy_from_slice(&compressed_buffer);
+        }
         Ok(buffer)
     }
     /// Accepts a body buffer with four byte length prepended
-    fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError>;
+    fn compress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError>;
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,24 +72,28 @@ pub struct Lz4;
 impl Compression for Lz4 {
     const FLAG: u8 = 1;
     const KIND: Option<&'static str> = Some("lz4");
-    fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
+    fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let size = i32::from_be_bytes(buffer[4..8].try_into().unwrap());
-        // lz4 will fail if we get a zero-sized body, just just skip it
+        // lz4 will fail if we get a zero-sized body, so just skip it
         if size == 0 {
-            return Ok(vec![0; 4]);
+            return Ok(None);
         }
         let mut body = lz4::block::decompress(&buffer[8..], Some(size))
             .map_err(|e| CompressionError::BadDecompression(e.into()))?;
         body.extend(&i32::to_be_bytes(body.len() as i32));
         body.rotate_right(4);
-        Ok(body)
+        Ok(Some(body))
     }
-    fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
+    fn compress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let mut body =
             lz4::block::compress(&buffer[4..], None, true).map_err(|e| CompressionError::BadCompression(e.into()))?;
+        // Don't use the compressed bytes if they're BIGGER than the uncompressed ones...
+        if body.len() > buffer[4..].len() {
+            return Ok(None);
+        }
         body.extend(&i32::to_be_bytes(body.len() as i32));
         body.rotate_right(4);
-        Ok(body)
+        Ok(Some(body))
     }
 }
 
@@ -97,21 +103,25 @@ pub struct Snappy;
 impl Compression for Snappy {
     const FLAG: u8 = 1;
     const KIND: Option<&'static str> = Some("snappy");
-    fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
+    fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let mut body = snap::raw::Decoder::new()
             .decompress_vec(&buffer[4..])
             .map_err(|e| CompressionError::BadDecompression(e.into()))?;
         body.extend(&i32::to_be_bytes(body.len() as i32));
         body.rotate_right(4);
-        Ok(body)
+        Ok(Some(body))
     }
-    fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
+    fn compress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let mut body = snap::raw::Encoder::new()
             .compress_vec(&buffer[4..])
             .map_err(|e| CompressionError::BadCompression(e.into()))?;
+        // Don't use the compressed bytes if they're BIGGER than the uncompressed ones...
+        if body.len() > buffer[4..].len() {
+            return Ok(None);
+        }
         body.extend(&i32::to_be_bytes(body.len() as i32));
         body.rotate_right(4);
-        Ok(body)
+        Ok(Some(body))
     }
 }
 /// Uncompressed unit structure which implements compression trait.
@@ -120,10 +130,10 @@ pub struct Uncompressed;
 impl Compression for Uncompressed {
     const FLAG: u8 = 0;
     const KIND: Option<&'static str> = None;
-    fn decompress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        Ok(buffer.to_vec())
+    fn decompress_body(_: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
+        Ok(None)
     }
-    fn compress_body(buffer: &[u8]) -> Result<Vec<u8>, CompressionError> {
-        Ok(buffer.to_vec())
+    fn compress_body(_: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
+        Ok(None)
     }
 }
