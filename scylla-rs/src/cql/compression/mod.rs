@@ -14,7 +14,7 @@ use thiserror::Error;
 /// This compression thread provides the buffer compression/decompression methods for uncompressed/Lz4/snappy.
 pub trait Compression: Sync {
     const FLAG: u8;
-    const KIND: Option<&'static str>;
+    const KIND: Option<CompressionType>;
     /// Accepts a buffer with a header and decompresses it.
     fn decompress(mut buffer: Vec<u8>) -> Result<Vec<u8>, CompressionError> {
         if buffer.len() < 9 {
@@ -53,11 +53,21 @@ pub trait Compression: Sync {
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CompressionType {
     #[serde(rename = "snappy")]
-    Snappy,
+    Snappy = 0,
     #[serde(rename = "lz4")]
-    Lz4,
+    Lz4 = 1,
+}
+
+impl core::fmt::Display for CompressionType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            CompressionType::Snappy => write!(f, "snappy"),
+            CompressionType::Lz4 => write!(f, "lz4"),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -74,7 +84,7 @@ pub enum CompressionError {
 pub struct Lz4;
 impl Compression for Lz4 {
     const FLAG: u8 = 1;
-    const KIND: Option<&'static str> = Some("lz4");
+    const KIND: Option<CompressionType> = Some(CompressionType::Lz4);
     fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let size = i32::from_be_bytes(buffer[4..8].try_into().unwrap());
         // lz4 will fail if we get a zero-sized body, so just skip it
@@ -105,7 +115,7 @@ impl Compression for Lz4 {
 pub struct Snappy;
 impl Compression for Snappy {
     const FLAG: u8 = 1;
-    const KIND: Option<&'static str> = Some("snappy");
+    const KIND: Option<CompressionType> = Some(CompressionType::Snappy);
     fn decompress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         let mut body = snap::raw::Decoder::new()
             .decompress_vec(&buffer[4..])
@@ -132,7 +142,7 @@ impl Compression for Snappy {
 pub struct Uncompressed;
 impl Compression for Uncompressed {
     const FLAG: u8 = 0;
-    const KIND: Option<&'static str> = None;
+    const KIND: Option<CompressionType> = None;
     fn decompress_body(_: &[u8]) -> Result<Option<Vec<u8>>, CompressionError> {
         Ok(None)
     }

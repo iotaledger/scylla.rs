@@ -222,7 +222,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
         options.insert("CQL_VERSION".to_owned(), cql_version.to_owned());
         // insert the supported_compression option into the options if it was set.;
         if let Some(compression) = C::KIND {
-            options.insert("COMPRESSION".to_owned(), compression.to_owned());
+            options.insert("COMPRESSION".to_owned(), compression.to_string());
         }
         // create startup frame using the selected options;
         let Startup(startup_buf) = StartupBuilder::default().options(&options).build()?;
