@@ -55,9 +55,9 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Select<T: Table, K: Bindable + TokenEncoder, O: RowsDecoder>: Keyspace {
+pub trait Select<K: Bindable + TokenEncoder, O: RowsDecoder>: Table {
     /// Create your select statement here.
-    fn statement(&self) -> SelectStatement;
+    fn statement(keyspace: &dyn Keyspace) -> SelectStatement;
 
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: B, key: &K) -> Result<B, B::Error> {
@@ -65,23 +65,23 @@ pub trait Select<T: Table, K: Bindable + TokenEncoder, O: RowsDecoder>: Keyspace
     }
 }
 
-impl<T: Table + RowsDecoder, S: Keyspace> Select<T, T::PrimaryKey, T> for S
+impl<T: Table + RowsDecoder> Select<T::PrimaryKey, T> for T
 where
     T::PrimaryKey: Bindable + TokenEncoder,
 {
-    fn statement(&self) -> SelectStatement {
+    fn statement(keyspace: &dyn Keyspace) -> SelectStatement {
         let where_clause = T::PARTITION_KEY
             .iter()
-            .chain(T::CLUSTERING_COLS.iter())
+            .chain(T::CLUSTERING_COLS.iter().map(|(c, _)| c))
             .map(|&c| Relation::normal(c, Operator::Equal, BindMarker::Anonymous))
             .collect::<Vec<_>>();
-        parse_statement!("SELECT * FROM #.# #", self.name(), T::NAME, where_clause)
+        parse_statement!("SELECT * FROM #.# #", keyspace.name(), T::NAME, where_clause)
     }
 }
 
 /// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
 
-pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace {
+pub trait GetStaticSelectRequest<K: Bindable + TokenEncoder>: Table {
     /// Create a static select request from a keyspace with a `Select<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -134,12 +134,12 @@ pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select<O>(&self, key: &K) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
+    fn select<O>(keyspace: &dyn Keyspace, key: &K) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
     where
-        Self: Select<T, K, O>,
+        Self: Select<K, O>,
         O: RowsDecoder,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -206,12 +206,15 @@ pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select_prepared<O>(&self, key: &K) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
+    fn select_prepared<O>(
+        keyspace: &dyn Keyspace,
+        key: &K,
+    ) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
     where
-        Self: Select<T, K, O>,
+        Self: Select<K, O>,
         O: RowsDecoder,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -227,7 +230,7 @@ pub trait GetStaticSelectRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         })
     }
 }
-impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticSelectRequest<T, K> for S {}
+impl<T: Table, K: Bindable + TokenEncoder> GetStaticSelectRequest<K> for T {}
 
 /// Specifies helper functions for creating dynamic select requests from anything that can be interpreted as a statement
 

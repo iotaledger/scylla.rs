@@ -198,18 +198,27 @@ impl TestTable {
     }
 }
 
-impl Table for TestTable {
+impl TableMetadata for TestTable {
     const NAME: &'static str = "test";
-    const COLS: &'static [&'static str] = &["key", "data"];
+    const COLS: &'static [(&'static str, NativeType)] = &[("key", NativeType::Text), ("data", NativeType::Int)];
     const PARTITION_KEY: &'static [&'static str] = &["key"];
-    const CLUSTERING_COLS: &'static [&'static str] = &[];
+    const CLUSTERING_COLS: &'static [(&'static str, Order)] = &[];
 
     type PartitionKey = String;
     type PrimaryKey = String;
+
+    fn partition_key(&self) -> &Self::PartitionKey {
+        &self.key
+    }
+
+    fn primary_key(&self) -> &Self::PrimaryKey {
+        &self.key
+    }
 }
+impl Table for TestTable {}
 
 impl TokenEncoder for TestTable {
-    type Error = <<Self as Table>::PartitionKey as TokenEncoder>::Error;
+    type Error = <<Self as TableMetadata>::PartitionKey as TokenEncoder>::Error;
 
     fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
         self.key.encode_token()
@@ -234,8 +243,8 @@ impl Bindable for TestTable {
     }
 }
 
-impl Select<TestTable, String, i32> for MyKeyspace {
-    fn statement(&self) -> SelectStatement {
-        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
+impl Select<String, i32> for TestTable {
+    fn statement(keyspace: &dyn Keyspace) -> SelectStatement {
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", keyspace.name())
     }
 }

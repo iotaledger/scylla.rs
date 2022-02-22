@@ -55,9 +55,9 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Delete<T: Table, K: Bindable + TokenEncoder>: Keyspace {
+pub trait Delete<K: Bindable + TokenEncoder>: Table {
     /// Create your delete statement here.
-    fn statement(&self) -> DeleteStatement;
+    fn statement(keyspace: &dyn Keyspace) -> DeleteStatement;
 
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: B, key: &K) -> Result<B, B::Error> {
@@ -66,7 +66,7 @@ pub trait Delete<T: Table, K: Bindable + TokenEncoder>: Keyspace {
 }
 
 /// Specifies helper functions for creating static delete requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace {
+pub trait GetStaticDeleteRequest<K: Bindable + TokenEncoder>: Table {
     /// Create a static delete request from a keyspace with a `Delete<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -119,11 +119,11 @@ pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn delete(&self, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
+    fn delete(keyspace: &dyn Keyspace, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Delete<T, K>,
+        Self: Delete<K>,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -190,11 +190,11 @@ pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn delete_prepared(&self, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
+    fn delete_prepared(keyspace: &dyn Keyspace, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Delete<T, K>,
+        Self: Delete<K>,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -210,7 +210,7 @@ pub trait GetStaticDeleteRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         })
     }
 }
-impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticDeleteRequest<T, K> for S {}
+impl<T: Table, K: Bindable + TokenEncoder> GetStaticDeleteRequest<K> for T {}
 
 /// Specifies helper functions for creating dynamic delete requests from anything that can be interpreted as a statement
 pub trait AsDynamicDeleteRequest: Sized {

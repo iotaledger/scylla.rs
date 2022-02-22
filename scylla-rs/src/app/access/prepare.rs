@@ -9,7 +9,7 @@ use crate::{
 
 /// Specifies helper functions for creating static prepare requests from a keyspace with any access trait definition
 
-pub trait GetStaticPrepareRequest: Keyspace {
+pub trait GetStaticPrepareRequest: Keyspace + Sized {
     /// Create a static prepare request from a keyspace with a `Select<K, V>` definition.
     ///
     /// ## Example
@@ -60,12 +60,11 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// ```
     fn prepare_select<T, K, O>(&self) -> PrepareRequest
     where
-        Self: Select<T, K, O>,
+        T: Select<K, O>,
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
-        T: Table,
     {
-        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
+        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -122,11 +121,10 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// ```
     fn prepare_insert<T, K>(&self) -> PrepareRequest
     where
-        Self: Insert<T, K>,
+        T: Insert<K>,
         K: Bindable + TokenEncoder,
-        T: Table,
     {
-        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
+        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -188,11 +186,10 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// ```
     fn prepare_update<T, K, V>(&self) -> PrepareRequest
     where
-        Self: Update<T, K, V>,
+        T: Update<K, V>,
         K: Bindable + TokenEncoder,
-        T: Table,
     {
-        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
+        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -245,11 +242,10 @@ pub trait GetStaticPrepareRequest: Keyspace {
     /// ```
     fn prepare_delete<T, K>(&self) -> PrepareRequest
     where
-        Self: Delete<T, K>,
+        T: Delete<K>,
         K: Bindable + TokenEncoder,
-        T: Table,
     {
-        PrepareRequest::new(Some(self.name().to_string()), self.statement().to_string())
+        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
 }
 

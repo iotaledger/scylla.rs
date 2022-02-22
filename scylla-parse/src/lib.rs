@@ -1701,7 +1701,11 @@ impl Display for TableOpts {
 impl TableOptsBuilder {
     fn validate(&self) -> Result<(), String> {
         if self.compact_storage.is_some()
-            || self.clustering_order.as_ref().map(|v| v.is_some()).unwrap_or_default()
+            || self
+                .clustering_order
+                .as_ref()
+                .map(|v| if let Some(v) = v { !v.is_empty() } else { false })
+                .unwrap_or_default()
             || self.comment.as_ref().map(|v| v.is_some()).unwrap_or_default()
             || self.speculative_retry.as_ref().map(|v| v.is_some()).unwrap_or_default()
             || self

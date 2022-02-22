@@ -66,16 +66,16 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Update<T: Table, K: TokenEncoder, V>: Keyspace {
+pub trait Update<K: TokenEncoder, V>: Table {
     /// Create your update statement here.
-    fn statement(&self) -> UpdateStatement;
+    fn statement(keyspace: &dyn Keyspace) -> UpdateStatement;
 
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: B, key: &K, values: &V) -> Result<B, B::Error>;
 }
 
 /// Specifies helper functions for creating static update requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keyspace {
+pub trait GetStaticUpdateRequest<K: Bindable + TokenEncoder, V>: Table {
     /// Create a static update request from a keyspace with a `Update<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -137,11 +137,11 @@ pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keysp
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn update(&self, key: &K, values: &V) -> Result<UpdateBuilder<StaticRequest>, TokenBindError<K>>
+    fn update(keyspace: &dyn Keyspace, key: &K, values: &V) -> Result<UpdateBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Update<T, K, V>,
+        Self: Update<K, V>,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -217,11 +217,15 @@ pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keysp
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn update_prepared(&self, key: &K, values: &V) -> Result<UpdateBuilder<StaticRequest>, TokenBindError<K>>
+    fn update_prepared(
+        keyspace: &dyn Keyspace,
+        key: &K,
+        values: &V,
+    ) -> Result<UpdateBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Update<T, K, V>,
+        Self: Update<K, V>,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -237,7 +241,7 @@ pub trait GetStaticUpdateRequest<T: Table, K: Bindable + TokenEncoder, V>: Keysp
         })
     }
 }
-impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder, V> GetStaticUpdateRequest<T, K, V> for S {}
+impl<T: Table, K: Bindable + TokenEncoder, V> GetStaticUpdateRequest<K, V> for T {}
 
 /// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
 

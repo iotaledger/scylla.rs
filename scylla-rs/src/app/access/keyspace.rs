@@ -26,24 +26,31 @@ use super::BatchCollector;
 /// - `Update`
 /// - `Insert`
 /// - `Delete`
-pub trait Keyspace: Send + Sized + Sync + Clone {
+pub trait Keyspace: Send + Sync {
     /// Options defined for this keyspace
     fn opts(&self) -> KeyspaceOpts;
 
     /// Get the name of the keyspace as represented in the database
     fn name(&self) -> &str;
 
-    fn batch<'a>(&'a self) -> BatchCollector<'a, Self> {
+    fn batch<'a>(&'a self) -> BatchCollector<'a>
+    where
+        Self: Sized,
+    {
         BatchCollector::new(self)
     }
 
     /// Decode void result
-    fn decode_void(decoder: Decoder) -> anyhow::Result<()> {
+    fn decode_void(decoder: Decoder) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
         VoidDecoder::try_decode_void(decoder)
     }
     /// Decode rows result
     fn decode_rows<V>(decoder: Decoder) -> anyhow::Result<Option<V>>
     where
+        Self: Sized,
         V: RowsDecoder,
     {
         V::try_decode_rows(decoder)

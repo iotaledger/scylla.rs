@@ -65,9 +65,9 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Insert<T: Table, K: Bindable + TokenEncoder>: Keyspace {
+pub trait Insert<K: Bindable + TokenEncoder>: Table {
     /// Create your insert statement here.
-    fn statement(&self) -> InsertStatement;
+    fn statement(keyspace: &dyn Keyspace) -> InsertStatement;
 
     /// Bind the cql values to the builder
     fn bind_values<B: Binder>(binder: B, key: &K) -> Result<B, B::Error> {
@@ -75,19 +75,25 @@ pub trait Insert<T: Table, K: Bindable + TokenEncoder>: Keyspace {
     }
 }
 
-impl<T: Table + Bindable + TokenEncoder, S: Keyspace> Insert<T, T> for S {
-    fn statement(&self) -> InsertStatement {
-        let names = T::COLS.iter().map(|&c| Name::from(c)).collect::<Vec<_>>();
+impl<T: Table + Bindable + TokenEncoder> Insert<T> for T {
+    fn statement(keyspace: &dyn Keyspace) -> InsertStatement {
+        let names = T::COLS.iter().map(|&(c, _)| Name::from(c)).collect::<Vec<_>>();
         let values = T::COLS
             .iter()
             .map(|_| Term::from(BindMarker::Anonymous))
             .collect::<Vec<_>>();
-        parse_statement!("INSERT INTO #.# (#) VALUES (#)", self.name(), T::NAME, names, values)
+        parse_statement!(
+            "INSERT INTO #.# (#) VALUES (#)",
+            keyspace.name(),
+            T::NAME,
+            names,
+            values
+        )
     }
 }
 
 /// Specifies helper functions for creating static insert requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticInsertRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace {
+pub trait GetStaticInsertRequest<K: Bindable + TokenEncoder>: Table {
     /// Create a static insert request from a keyspace with a `Insert<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -149,12 +155,12 @@ pub trait GetStaticInsertRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert(&self, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
+    fn insert(keyspace: &dyn Keyspace, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Insert<T, K>,
+        Self: Insert<K>,
         K: Bindable + TokenEncoder,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -230,12 +236,12 @@ pub trait GetStaticInsertRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert_prepared(&self, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
+    fn insert_prepared(keyspace: &dyn Keyspace, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
     where
-        Self: Insert<T, K>,
+        Self: Insert<K>,
         K: Bindable + TokenEncoder,
     {
-        let statement = self.statement();
+        let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         let mut builder = QueryBuilder::default()
@@ -251,7 +257,7 @@ pub trait GetStaticInsertRequest<T: Table, K: Bindable + TokenEncoder>: Keyspace
         })
     }
 }
-impl<T: Table, S: Keyspace, K: Bindable + TokenEncoder> GetStaticInsertRequest<T, K> for S {}
+impl<T: Table, K: Bindable + TokenEncoder> GetStaticInsertRequest<K> for T {}
 
 /// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
 

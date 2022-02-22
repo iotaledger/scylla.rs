@@ -94,18 +94,18 @@ use std::collections::HashMap;
 ///     .compute_token(&token_key);
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct BatchCollector<'a, S> {
+pub struct BatchCollector<'a> {
     builder: BatchBuilder,
     map: HashMap<[u8; 16], ModificationStatement>,
-    keyspace: &'a S,
+    keyspace: &'a dyn Keyspace,
 }
 
-impl<'a, S: Keyspace> BatchCollector<'a, S> {
+impl<'a> BatchCollector<'a> {
     /// Construct a new batch collector with a keyspace definition
     /// which should implement access and batch traits that will be used
     /// to build this batch. The keyspace will be cloned here and held by
     /// the collector.
-    pub fn new(keyspace: &S) -> BatchCollector<S> {
+    pub fn new(keyspace: &dyn Keyspace) -> BatchCollector {
         BatchCollector {
             builder: BatchBuilder::default(),
             map: HashMap::new(),
@@ -137,97 +137,90 @@ impl<'a, S: Keyspace> BatchCollector<'a, S> {
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
     pub fn insert<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: Insert<T, K>,
-        T: Table,
+        T: Insert<K>,
         K: Bindable + TokenEncoder,
     {
-        let statement = self.keyspace.statement();
+        let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
         self.builder = self.builder.statement(&statement.to_string());
         // bind_values of Insert<K>
-        self.builder = S::bind_values(self.builder, key)?;
+        self.builder = T::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
     pub fn insert_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: 'static + Insert<T, K> + Debug,
-        T: Table,
-        K: 'static + Bindable + TokenEncoder + Clone + Send + Debug,
+        T: Insert<K>,
+        K: Bindable + TokenEncoder,
     {
-        let statement = self.keyspace.statement();
+        let statement = T::statement(self.keyspace);
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
         self.builder = self.builder.id(&id);
         // bind_values of Insert<K, V>
-        self.builder = S::bind_values(self.builder, key)?;
+        self.builder = T::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
     pub fn update<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: Update<T, K, V>,
-        T: Table,
+        T: Update<K, V>,
         K: TokenEncoder,
     {
-        let statement = self.keyspace.statement();
+        let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
         self.builder = self.builder.statement(&statement.to_string());
         // bind_values of Update<K, V>
-        self.builder = S::bind_values(self.builder, key, values)?;
+        self.builder = T::bind_values(self.builder, key, values)?;
         Ok(self)
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
     pub fn update_prepared<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: 'static + Update<T, K, V> + Debug,
-        T: Table,
-        K: 'static + TokenEncoder + Clone + Send + Debug,
-        V: 'static + Clone + Send + Debug,
+        T: Update<K, V>,
+        K: TokenEncoder,
     {
-        let statement = self.keyspace.statement();
+        let statement = T::statement(self.keyspace);
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
         self.builder = self.builder.id(&id);
         // bind_values of Update<K, V>
-        self.builder = S::bind_values(self.builder, key, values)?;
+        self.builder = T::bind_values(self.builder, key, values)?;
         Ok(self)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
     pub fn delete<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: Delete<T, K>,
-        T: Table,
+        T: Delete<K>,
         K: Bindable + TokenEncoder,
     {
-        let statement = self.keyspace.statement();
+        let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
         self.builder = self.builder.statement(&statement.to_string());
         // bind_values of Delete<K>
-        self.builder = S::bind_values(self.builder, key)?;
+        self.builder = T::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
     pub fn delete_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
     where
-        S: 'static + Delete<T, K> + Debug,
-        T: Table,
-        K: 'static + Bindable + TokenEncoder + Clone + Send + Debug,
+        T: Delete<K>,
+        K: Bindable + TokenEncoder,
     {
-        let statement = self.keyspace.statement();
+        let statement = T::statement(self.keyspace);
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
         self.builder = self.builder.id(&id);
         // bind_values of Delete<K>
-        self.builder = S::bind_values(self.builder, key)?;
+        self.builder = T::bind_values(self.builder, key)?;
         Ok(self)
     }
 

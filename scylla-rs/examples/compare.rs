@@ -121,23 +121,21 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
-    for s in parse_statements!(
-        "DROP TABLE IF EXISTS #0.test;
+    TestTable::drop(&keyspace)
+        .execute()
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
-        CREATE TABLE IF NOT EXISTS #0.test (
-            key text PRIMARY KEY,
-            data blob
-        )",
-        keyspace.name(),
-        replication,
-    ) {
-        s.execute()
-            .consistency(Consistency::All)
-            .build()?
-            .get_local()
-            .await
-            .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
-    }
+    TestTable::create(&keyspace)
+        .execute()
+        .consistency(Consistency::All)
+        .build()?
+        .get_local()
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
     let insert = Arc::new(keyspace.insert_statement::<TestTable, TestTable>());
     let select = Arc::new(keyspace.select_statement::<TestTable, String, i32>());
@@ -392,18 +390,27 @@ impl TestTable {
     }
 }
 
-impl Table for TestTable {
+impl TableMetadata for TestTable {
     const NAME: &'static str = "test";
-    const COLS: &'static [&'static str] = &["key", "data"];
+    const COLS: &'static [(&'static str, NativeType)] = &[("key", NativeType::Text), ("data", NativeType::Int)];
     const PARTITION_KEY: &'static [&'static str] = &["key"];
-    const CLUSTERING_COLS: &'static [&'static str] = &[];
+    const CLUSTERING_COLS: &'static [(&'static str, Order)] = &[];
 
     type PartitionKey = String;
     type PrimaryKey = String;
+
+    fn partition_key(&self) -> &Self::PartitionKey {
+        &self.key
+    }
+
+    fn primary_key(&self) -> &Self::PrimaryKey {
+        &self.key
+    }
 }
+impl Table for TestTable {}
 
 impl TokenEncoder for TestTable {
-    type Error = <<Self as Table>::PartitionKey as TokenEncoder>::Error;
+    type Error = <<Self as TableMetadata>::PartitionKey as TokenEncoder>::Error;
 
     fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
         self.key.encode_token()
@@ -428,8 +435,8 @@ impl Bindable for TestTable {
     }
 }
 
-impl Select<TestTable, String, i32> for MyKeyspace {
-    fn statement(&self) -> SelectStatement {
-        parse_statement!("SELECT data FROM #.test WHERE key = ?", self.name())
+impl Select<String, i32> for TestTable {
+    fn statement(keyspace: &dyn Keyspace) -> SelectStatement {
+        parse_statement!("SELECT data FROM #.test WHERE key = ?", keyspace.name())
     }
 }

@@ -68,17 +68,20 @@ pub use batch::{
 pub use delete::{
     AsDynamicDeleteRequest,
     Delete,
+    DeleteBuilder,
     DeleteRequest,
     GetStaticDeleteRequest,
 };
 pub use execute::{
     AsDynamicExecuteRequest,
+    ExecuteBuilder,
     ExecuteRequest,
 };
 pub use insert::{
     AsDynamicInsertRequest,
     GetStaticInsertRequest,
     Insert,
+    InsertBuilder,
     InsertRequest,
 };
 pub use keyspace::Keyspace;
@@ -93,6 +96,7 @@ pub use select::{
     AsDynamicSelectRequest,
     GetStaticSelectRequest,
     Select,
+    SelectBuilder,
     SelectRequest,
 };
 pub use std::{
@@ -116,16 +120,63 @@ pub use update::{
     AsDynamicUpdateRequest,
     GetStaticUpdateRequest,
     Update,
+    UpdateBuilder,
     UpdateRequest,
 };
 
-pub trait Table: TokenEncoder {
+pub trait TableMetadata {
     const NAME: &'static str;
-    const COLS: &'static [&'static str];
+    const COLS: &'static [(&'static str, NativeType)];
     const PARTITION_KEY: &'static [&'static str];
-    const CLUSTERING_COLS: &'static [&'static str];
-    type PartitionKey;
-    type PrimaryKey;
+    const CLUSTERING_COLS: &'static [(&'static str, Order)];
+    type PartitionKey: TokenEncoder + Bindable;
+    type PrimaryKey: TokenEncoder + Bindable;
+
+    fn partition_key(&self) -> &Self::PartitionKey;
+
+    fn primary_key(&self) -> &Self::PrimaryKey;
+}
+
+pub trait Table: TableMetadata {
+    /// Options defined for this keyspace
+    fn opts() -> Option<TableOpts> {
+        if Self::CLUSTERING_COLS.len() > 0 {
+            Some(
+                TableOptsBuilder::default()
+                    .clustering_order(Self::CLUSTERING_COLS.iter().map(|&(c, o)| (c, o).into()).collect())
+                    .build()
+                    .unwrap(),
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Retrieve a CREATE KEYSPACE statement builder for this keyspace name
+    fn create(keyspace: &dyn Keyspace) -> CreateTableStatement {
+        let mut builder = scylla_parse::CreateTableStatementBuilder::default();
+        builder
+            .if_not_exists()
+            .table(keyspace.name().dot(Self::NAME))
+            .columns(Self::COLS.iter().map(|&c| c.into()).collect())
+            .primary_key(
+                PrimaryKey::partition_key(Self::PARTITION_KEY.to_vec())
+                    .clustering_columns(Self::CLUSTERING_COLS.iter().map(|&(c, _)| c).collect()),
+            );
+        if let Some(opts) = Self::opts() {
+            builder.options(opts);
+        }
+        builder.build().unwrap()
+    }
+
+    /// Retrieve a DROP KEYSPACE statement builder for this keyspace name
+    fn drop(keyspace: &dyn Keyspace) -> DropTableStatement {
+        scylla_parse::DropTableStatementBuilder::default()
+            .table(keyspace.name().dot(Self::NAME))
+            .if_exists()
+            .build()
+            .unwrap()
+    }
 }
 
 pub trait IdExt {
@@ -561,79 +612,76 @@ impl Request for CommonRequest {
 
 /// Defines two helper methods to specify statement / id
 #[allow(missing_docs)]
-pub trait GetStatementIdExt {
+pub trait GetStatementIdExt: Keyspace + Sized {
     fn select_statement<T, K, O>(&self) -> SelectStatement
     where
-        Self: Select<T, K, O>,
+        T: Select<K, O>,
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
-        T: Table,
     {
-        self.statement()
+        T::statement(self)
     }
 
     fn select_id<T, K, O>(&self) -> [u8; 16]
     where
-        Self: Select<T, K, O>,
+        T: Select<K, O>,
         K: Bindable + TokenEncoder,
         O: RowsDecoder,
-        T: Table,
     {
-        self.statement().id()
+        T::statement(self).id()
     }
 
     fn insert_statement<T, K>(&self) -> InsertStatement
     where
-        Self: Insert<T, K>,
+        T: Insert<K>,
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        self.statement()
+        T::statement(self)
     }
 
     fn insert_id<T, K>(&self) -> [u8; 16]
     where
-        Self: Insert<T, K>,
+        T: Insert<K>,
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        self.statement().id()
+        T::statement(self).id()
     }
 
     fn update_statement<T, K, V>(&self) -> UpdateStatement
     where
-        Self: Update<T, K, V>,
+        T: Update<K, V>,
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        self.statement()
+        T::statement(self)
     }
 
     fn update_id<T, K, V>(&self) -> [u8; 16]
     where
-        Self: Update<T, K, V>,
+        T: Update<K, V>,
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        self.statement().id()
+        T::statement(self).id()
     }
 
     fn delete_statement<T, K>(&self) -> DeleteStatement
     where
-        Self: Delete<T, K>,
+        T: Delete<K>,
         K: Bindable + TokenEncoder,
         T: Table,
     {
-        self.statement()
+        T::statement(self)
     }
 
     fn delete_id<T, K>(&self) -> [u8; 16]
     where
-        Self: Delete<T, K>,
+        T: Delete<K>,
         K: Bindable + TokenEncoder,
-        T: Table,
     {
-        self.statement().id()
+        T::statement(self).id()
     }
 }
 
@@ -780,222 +828,6 @@ impl<T> Deref for DecodeResult<T> {
     }
 }
 
-#[cfg(feature = "testy")]
-mod testy {
-    use crate::prelude::{
-        ColumnValue,
-        Row,
-        Rows,
-    };
-
-    use super::{
-        BindableValue,
-        Binder,
-        Consistency,
-        QueryBuilder,
-        QueryValues,
-    };
-    use scylla_parse::*;
-    use scylla_rs_macros::parse_statement;
-
-    pub struct TransactionsTable {
-        transaction_id: String,
-        idx: u16,
-        variant: String,
-        message_id: String,
-        version: u8,
-        data: Vec<u8>,
-        inclusion_state: Option<u8>,
-        milestone_index: Option<u32>,
-    }
-
-    // Derived
-    pub struct TransactionsTableStmtBuilder<B> {
-        builder: B,
-    }
-
-    // Derived
-    impl TransactionsTableStmtBuilder<SelectStatementBuilder> {
-        fn transaction_id(self) -> Self {}
-    }
-
-    pub trait Table {
-        const NAME: &'static str;
-        const COLS: &'static [&'static str];
-        type PartitionKey;
-        type PrimaryKey;
-
-        fn bind_values<B: Binder>(&self, binder: B) -> B;
-
-        fn insert<K: AsRef<str>>(keyspace: K) -> InsertStatementBuilder {
-            let mut stmt = InsertStatementBuilder::default();
-            stmt.table(keyspace.as_ref().dot(Self::NAME));
-            stmt.kind(
-                InsertKind::name_value(
-                    Self::COLS.iter().map(|&c| c.into()).collect(),
-                    Self::COLS.iter().map(|_| BindMarker::Anonymous.into()).collect(),
-                )
-                .unwrap(),
-            );
-            stmt
-        }
-
-        fn select<K: AsRef<str>>(keyspace: K) -> SelectStatementBuilder {
-            let mut stmt = SelectStatementBuilder::default();
-            stmt.from(keyspace.as_ref().dot(Self::NAME));
-            stmt
-        }
-
-        fn id<S: ToString + Into<Statement>>(stmt: S) -> [u8; 16] {
-            md5::compute(stmt.to_string().as_bytes()).into()
-        }
-    }
-
-    // Derived
-    impl Table for TransactionsTable {
-        const NAME: &'static str = "transactions";
-        const COLS: &'static [&'static str] = &[
-            "transaction_id",
-            "idx",
-            "variant",
-            "message_id",
-            "version",
-            "data",
-            "inclusion_state",
-            "milestone_index",
-        ];
-        type PartitionKey = String;
-        type PrimaryKey = (String, u16, String, String);
-
-        fn bind_values<B: Binder>(&self, binder: B) -> B {
-            binder
-                .value(&self.transaction_id)
-                .value(&self.idx)
-                .value(&self.variant)
-                .value(&self.message_id)
-                .value(&self.version)
-                .value(&self.data)
-                .value(&self.inclusion_state)
-                .value(&self.milestone_index)
-        }
-    }
-
-    // Derived
-    impl Row for TransactionsTable {
-        fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-        where
-            Self: Sized,
-        {
-            Ok(Self {
-                transaction_id: todo!(),
-                idx: todo!(),
-                variant: todo!(),
-                message_id: todo!(),
-                version: todo!(),
-                data: todo!(),
-                inclusion_state: todo!(),
-                milestone_index: todo!(),
-            })
-        }
-    }
-
-    async fn potential_select_syntax() {
-        TransactionsTable::select_all("my_keyspace") // select * from my_keyspace.transactions
-            .transaction_id(Operator::Equal, "129386sdgh481hsd262395asfs876") // where transaction_id = '129386sdgh481hsd262395asfs876'
-            .idx(Operator::GreaterThan, 0) // and idx > 0
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-
-        TransactionsTable::select("my_keyspace", &["message_id", "inclusion_state", "milestone_index"])
-            .transaction_id(Operator::Equal, "129386sdgh481hsd262395asfs876")
-            .idx(Operator::GreaterThan, 0)
-            .group_by(&["version", "variant"])
-            .order_by(&["version", "variant"])
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-
-        TransactionsTable::in_keyspace("my_keyspace")
-            .select_all() // select * from my_keyspace.transactions
-            .transaction_id_bind(Operator::Equal) // where transaction_id = ?
-            .idx_bind(Operator::GreaterThan) // and idx > ?
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-
-        TransactionsTable::in_keyspace("my_keyspace")
-            .select(&[
-                // consts generated by Table derive?
-                TransactionsTable::MESSAGE_ID,
-                TransactionsTable::INCLUSION_STATE,
-                TransactionsTable::MILESTONE_INDEX,
-            ]) // select message_id, inclusion_state, milestone_index from my_keyspace.transactions
-            .transaction_id(Operator::Equal, BindMarker::Anonymous) // where transaction_id = ?
-            .idx(Operator::GreaterThan, 0) // and idx > 0
-            .group_by(&[TransactionsTable::VERSION, TransactionsTable::VARIANT]) // group by version, variant
-            .order_by(&[TransactionsTable::VERSION, TransactionsTable::VARIANT]) // order by version, variant
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-
-        TransactionsTable::in_keyspace("my_keyspace")
-            .distinct()
-            .select_message_id()
-            .select_inclusion_state()
-            .select_milestone_index() // select distinct message_id, inclusion_state, milestone_index from my_keyspace.transactions
-            .where_transaction_id(Operator::Equal, "129386sdgh481hsd262395asfs876") // where transaction_id = '129386sdgh481hsd262395asfs876'
-            .where_idx(Operator::GreaterThan, 0) // and idx > 0
-            .group_by_version()
-            .group_by_variant() // group by version, variant
-            .order_by_version()
-            .order_by_variant() // order by version, variant
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-
-        TransactionsTable::in_keyspace("my_keyspace")
-            .select(
-                // Type generated by the Table derive
-                TransactionsTableColumns
-                    .message_id()
-                    .inclusion_state()
-                    .milestone_index(),
-            ) // select message_id, inclusion_state, milestone_index from my_keyspace.transactions
-            .where_clause(
-                TransactionsTableColumns::transaction_id(Operator::Equal, "129386sdgh481hsd262395asfs876")
-                    .and(TransactionsTableColumns::idx(Operator::GreaterThan, 0)),
-            ) // where transaction_id = '129386sdgh481hsd262395asfs876' and idx > 0
-            .group_by(TransactionsTableColumns.version().variant())
-            .order_by(TransactionsTableColumns.version().variant())
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-
-        // Since TransactionsTable is user defined, fns can be defined on it to simply
-        // return a SelectStatement(/Builder) which can be manually created or parsed from
-        // a string using parse_statement!()
-        TransactionsTable::my_pre_defined_select() // Returns built SelectStatement
-            .consistency(Consistency::One)
-            .page_size(100)
-            .build()
-            .get_local()
-            .await?;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use scylla_rs_macros::parse_statement;
@@ -1035,45 +867,64 @@ mod tests {
         pub val2: String,
     }
 
-    impl Table for MyTable {
+    impl TableMetadata for MyTable {
         const NAME: &'static str = "my_table";
-        const COLS: &'static [&'static str] = &["key", "val1", "val2"];
+        const COLS: &'static [(&'static str, NativeType)] = &[
+            ("key", NativeType::Text),
+            ("val1", NativeType::Int),
+            ("val2", NativeType::Float),
+        ];
         const PARTITION_KEY: &'static [&'static str] = &["key"];
-        const CLUSTERING_COLS: &'static [&'static str] = &[];
+        const CLUSTERING_COLS: &'static [(&'static str, Order)] = &[];
 
         type PartitionKey = f32;
         type PrimaryKey = f32;
+
+        fn partition_key(&self) -> &Self::PartitionKey {
+            &self.key
+        }
+
+        fn primary_key(&self) -> &Self::PrimaryKey {
+            &self.key
+        }
     }
+    impl Table for MyTable {}
 
     impl TokenEncoder for MyTable {
-        type Error = <<Self as Table>::PartitionKey as TokenEncoder>::Error;
+        type Error = <<Self as TableMetadata>::PartitionKey as TokenEncoder>::Error;
 
         fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
             self.key.encode_token()
         }
     }
 
-    impl<S: Keyspace> Select<MyTable, u32, f32> for S {
-        fn statement(&self) -> SelectStatement {
-            parse_statement!("SELECT col1 FROM #.my_table WHERE key = ?", self.name())
+    impl Select<u32, f32> for MyTable {
+        fn statement(keyspace: &dyn Keyspace) -> SelectStatement {
+            parse_statement!("SELECT col1 FROM #.my_table WHERE key = ?", keyspace.name())
         }
     }
 
-    impl<S: Keyspace> Select<MyTable, u32, i32> for S {
-        fn statement(&self) -> SelectStatement {
-            parse_statement!("SELECT col2 FROM #.my_table WHERE key = ?", self.name())
+    impl Select<u32, i32> for MyTable {
+        fn statement(keyspace: &dyn Keyspace) -> SelectStatement {
+            parse_statement!("SELECT col2 FROM #.my_table WHERE key = ?", keyspace.name())
         }
     }
 
-    impl<S: Keyspace> Insert<MyTable, (u32, f32, f32)> for S {
-        fn statement(&self) -> InsertStatement {
-            parse_statement!("INSERT INTO #.my_table (key, val1, val2) VALUES (?,?,?)", self.name())
+    impl Insert<(u32, f32, f32)> for MyTable {
+        fn statement(keyspace: &dyn Keyspace) -> InsertStatement {
+            parse_statement!(
+                "INSERT INTO #.my_table (key, val1, val2) VALUES (?,?,?)",
+                keyspace.name()
+            )
         }
     }
 
-    impl<S: Keyspace> Update<MyTable, u32, (f32, f32)> for S {
-        fn statement(&self) -> UpdateStatement {
-            parse_statement!("UPDATE #.my_table SET val1 = ?, val2 = ? WHERE key = ?", self.name())
+    impl Update<u32, (f32, f32)> for MyTable {
+        fn statement(keyspace: &dyn Keyspace) -> UpdateStatement {
+            parse_statement!(
+                "UPDATE #.my_table SET val1 = ?, val2 = ? WHERE key = ?",
+                keyspace.name()
+            )
         }
 
         fn bind_values<B: Binder>(binder: B, key: &u32, values: &(f32, f32)) -> Result<B, B::Error> {
@@ -1081,9 +932,9 @@ mod tests {
         }
     }
 
-    impl<S: Keyspace> Delete<MyTable, u32> for S {
-        fn statement(&self) -> DeleteStatement {
-            parse_statement!("DELETE FROM #.my_table WHERE key = ?", self.name())
+    impl Delete<u32> for MyTable {
+        fn statement(keyspace: &dyn Keyspace) -> DeleteStatement {
+            parse_statement!("DELETE FROM #.my_table WHERE key = ?", keyspace.name())
         }
     }
 
@@ -1108,21 +959,24 @@ mod tests {
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let res = keyspace
-            .select::<f32>(&3)
+        let res = MyTable::select::<f32>(&keyspace, &3)
             .unwrap()
             .build()
             .unwrap()
             .get_local_blocking();
         assert!(res.is_err());
-        let req2 = keyspace.select::<i32>(&3).unwrap().page_size(500).build().unwrap();
+        let req2 = MyTable::select::<i32>(&keyspace, &3)
+            .unwrap()
+            .page_size(500)
+            .build()
+            .unwrap();
         let _res = req2.clone().send_local();
     }
 
     #[allow(dead_code)]
     fn test_insert() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.insert(&(3, 8.0, 7.5)).unwrap().build().unwrap();
+        let req = MyTable::insert(&keyspace, &(3, 8.0, 7.5)).unwrap().build().unwrap();
         let _res = req.send_local();
 
         parse_statement!(
@@ -1153,7 +1007,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_update() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace.update(&3, &(8.0, 5.5)).unwrap().build().unwrap();
+        let req = MyTable::update(&keyspace, &3, &(8.0, 5.5)).unwrap().build().unwrap();
 
         let _res = req.send_local();
     }
@@ -1161,8 +1015,7 @@ mod tests {
     #[allow(dead_code)]
     fn test_delete() {
         let keyspace = MyKeyspace { name: "mainnet".into() };
-        let req = keyspace
-            .delete(&3)
+        let req = MyTable::delete(&keyspace, &3)
             .unwrap()
             .consistency(Consistency::All)
             .build()
