@@ -43,6 +43,6 @@ pub mod prelude {
         self,
         *,
     };
-    pub use scylla_parse;
+    pub use scylla_parse::*;
     pub use scylla_rs_macros::*;
 }

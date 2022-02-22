@@ -43,8 +43,8 @@ use uuid::Uuid;
 mod statements;
 pub use statements::*;
 
-mod keywords;
-pub use keywords::*;
+pub mod keywords;
+use keywords::*;
 
 mod data_types;
 pub use data_types::*;

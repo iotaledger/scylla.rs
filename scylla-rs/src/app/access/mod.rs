@@ -96,8 +96,7 @@ pub use prepare::{
     GetStaticPrepareRequest,
     PrepareRequest,
 };
-pub use scylla_parse::*;
-pub use scylla_rs_macros::parse_statement;
+use scylla_parse::*;
 pub use select::{
     AsDynamicSelectRequest,
     GetDynamicSelectRequest,
