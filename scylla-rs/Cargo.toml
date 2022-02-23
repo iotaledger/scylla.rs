@@ -33,7 +33,6 @@ backstage = { git = "https://github.com/iotaledger/backstage", default-features 
 async-trait = { version = "0.1", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
-tokio-tungstenite = { version = "0.16", optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", optional = true }
 rand = { version = "0.8", optional = true }
@@ -53,7 +52,7 @@ path = "examples/scylla.rs"
 [[example]]
 name = "ws_scylla"
 path = "examples/ws_scylla.rs"
-required-features = ["backstage/backserver"]
+required-features = ["backstage/backserver", "backstage/tungstenite"]
 
 [[example]]
 name = "benchmark"
@@ -72,7 +71,6 @@ app = [
     "async-trait",
     "serde",
     "serde_json",
-    "tokio-tungstenite",
     "futures",
     "futures-util",
     "rand",
