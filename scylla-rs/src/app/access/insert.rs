@@ -862,6 +862,12 @@ impl From<CommonRequest> for InsertRequest {
     }
 }
 
+impl From<InsertRequest> for CommonRequest {
+    fn from(req: InsertRequest) -> Self {
+        req.0
+    }
+}
+
 impl Deref for InsertRequest {
     type Target = CommonRequest;
 

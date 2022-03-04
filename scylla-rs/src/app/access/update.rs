@@ -918,6 +918,12 @@ impl From<CommonRequest> for UpdateRequest {
     }
 }
 
+impl From<UpdateRequest> for CommonRequest {
+    fn from(req: UpdateRequest) -> Self {
+        req.0
+    }
+}
+
 impl Deref for UpdateRequest {
     type Target = CommonRequest;
 

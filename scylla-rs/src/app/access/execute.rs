@@ -174,6 +174,17 @@ impl From<CommonRequest> for ExecuteRequest {
     }
 }
 
+impl TryFrom<ExecuteRequest> for CommonRequest {
+    type Error = <scylla_parse::Statement as std::convert::TryInto<scylla_parse::DataManipulationStatement>>::Error;
+    fn try_from(req: ExecuteRequest) -> Result<Self, Self::Error> {
+        Ok(CommonRequest {
+            token: req.token,
+            payload: req.payload,
+            statement: req.statement.try_into()?,
+        })
+    }
+}
+
 impl Request for ExecuteRequest {
     fn token(&self) -> i64 {
         self.token

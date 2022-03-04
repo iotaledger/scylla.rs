@@ -740,6 +740,12 @@ impl From<CommonRequest> for DeleteRequest {
     }
 }
 
+impl From<DeleteRequest> for CommonRequest {
+    fn from(req: DeleteRequest) -> Self {
+        req.0
+    }
+}
+
 impl Deref for DeleteRequest {
     type Target = CommonRequest;
 

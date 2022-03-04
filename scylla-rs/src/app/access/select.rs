@@ -1093,6 +1093,14 @@ impl<O> From<CommonRequest> for SelectRequest<O> {
     }
 }
 
+impl<O> From<SelectRequest<O>> for CommonRequest {
+    fn from(req: SelectRequest<O>) -> Self {
+        req.inner
+    }
+}
+
+
+
 impl<O> Deref for SelectRequest<O> {
     type Target = CommonRequest;
 
