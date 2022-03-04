@@ -460,6 +460,12 @@ impl_token_encoder!(@tuple (T,TT));
 impl_token_encoder!(@tuple (T, TT, TTT));
 impl_token_encoder!(@tuple (T, TT, TTT, TTTT));
 
+impl TokenEncoder for () {
+    fn encode_token(&self) -> TokenEncodeChain {
+        TokenEncodeChain::default()
+    }
+}
+
 impl<T: TokenEncoder + ?Sized> TokenEncoder for &T {
     fn encode_token(&self) -> TokenEncodeChain {
         T::encode_token(*self)
