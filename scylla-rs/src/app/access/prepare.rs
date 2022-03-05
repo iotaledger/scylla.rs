@@ -3,8 +3,11 @@
 
 use super::*;
 use crate::{
-    cql::prepare::PrepareBuilder,
-    prelude::PrepareWorker,
+    cql::PrepareFrameBuilder,
+    prelude::{
+        PrepareFrame,
+        PrepareWorker,
+    },
 };
 
 /// Specifies helper functions for creating static prepare requests from a keyspace with any access trait definition
@@ -300,11 +303,7 @@ impl Request for PrepareRequest {
     }
 
     fn payload(&self) -> Vec<u8> {
-        PrepareBuilder::default()
-            .statement(&self.statement.to_string())
-            .build()
-            .unwrap()
-            .0
+        RequestFrame::from(PrepareFrame::new(self.statement.clone())).build_payload()
     }
 
     fn keyspace(&self) -> &Option<String> {

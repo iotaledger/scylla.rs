@@ -1,3 +1,5 @@
+use crate::prelude::ErrorCode;
+
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
@@ -19,7 +21,7 @@ impl BasicWorker {
 }
 
 impl Worker for BasicWorker {
-    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -67,9 +69,9 @@ impl<R> BasicRetryWorker<R> {
     }
 }
 
-impl<R, H> IntoRespondingWorker<R, H, Decoder> for BasicRetryWorker<R>
+impl<R, H> IntoRespondingWorker<R, H, ResponseBody> for BasicRetryWorker<R>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync + SendRequestExt,
 {
     type Output = SelectWorker<H, R>;
@@ -98,24 +100,25 @@ impl<R> Worker for BasicRetryWorker<R>
 where
     R: 'static + Debug + Send + Request + Sync,
 {
-    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn handle_error(
-        self: Box<Self>,
-        mut error: WorkerError,
-        reporter_opt: Option<&ReporterHandle>,
-    ) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter_opt) {
-                handle_unprepared_error(self, id, reporter).map_err(|worker| {
-                    error!("Error trying to reprepare query: {}", worker.request().statement());
-                    anyhow::anyhow!("Error trying to reprepare query!")
-                })
-            } else {
-                self.retry().map_err(|_| anyhow::anyhow!("Cannot retry!"))
+            match cql_error.code() {
+                ErrorCode::Unprepared => {
+                    if let Some(reporter) = reporter {
+                        handle_unprepared_error(self, cql_error.unprepared_id().unwrap(), reporter).or_else(|worker| {
+                            error!("Error trying to reprepare query: {}", worker.request().statement());
+                            anyhow::bail!("Error trying to reprepare query!")
+                        })
+                    } else {
+                        self.retry().map_err(|_| anyhow::anyhow!("Cannot retry!"))
+                    }
+                }
+                _ => self.retry().map_err(|_| anyhow::anyhow!("Cannot retry!")),
             }
         } else {
             self.retry().map_err(|_| anyhow::anyhow!("Cannot retry!"))
@@ -192,7 +195,7 @@ where
     }
 }
 
-impl<R, W> SpawnableRespondWorker<R, UnboundedReceiver<Result<Decoder, WorkerError>>, W>
+impl<R, W> SpawnableRespondWorker<R, UnboundedReceiver<Result<ResponseBody, WorkerError>>, W>
 where
     R: 'static + SendRequestExt + Clone + Debug + Send + Sync,
     W: 'static + RetryableWorker<R> + Clone,

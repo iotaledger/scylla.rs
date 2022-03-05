@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::prelude::RowsDecoder;
+use crate::prelude::{
+    ErrorCode,
+    ResultBodyKind,
+    RowsDecoder,
+};
 use std::{
     fmt::Debug,
     marker::PhantomData,
@@ -102,26 +106,43 @@ where
     H: 'static + HandleResponse<Option<V>> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync,
 {
-    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
-        match V::try_decode_rows(decoder) {
-            Ok(res) => self.handle.handle_response(res),
-            Err(e) => self.handle.handle_error(WorkerError::Other(e)),
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
+        match body {
+            ResponseBody::Result(res) => {
+                if let ResultBodyKind::Rows(rows) = res.kind {
+                    match V::try_decode_rows(rows) {
+                        Ok(res) => self.handle.handle_response(res),
+                        Err(e) => self.handle.handle_error(WorkerError::Other(e)),
+                    }
+                } else {
+                    anyhow::bail!("Invalid result kind: {:#?}!", res)
+                }
+            }
+            body => anyhow::bail!("Invalid response: {:#?}!", body),
         }
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(self, id, reporter).or_else(|worker| {
-                    error!("Error trying to reprepare query: {}", worker.request().statement());
-                    worker.handle.handle_error(error)
-                })
-            } else {
-                match self.retry() {
+            match cql_error.code() {
+                ErrorCode::Unprepared => {
+                    if let Some(reporter) = reporter {
+                        handle_unprepared_error(self, cql_error.unprepared_id().unwrap(), reporter).or_else(|worker| {
+                            error!("Error trying to reprepare query: {}", worker.request().statement());
+                            worker.handle.handle_error(error)
+                        })
+                    } else {
+                        match self.retry() {
+                            Ok(_) => Ok(()),
+                            Err(worker) => worker.handle.handle_error(error),
+                        }
+                    }
+                }
+                _ => match self.retry() {
                     Ok(_) => Ok(()),
                     Err(worker) => worker.handle.handle_error(error),
-                }
+                },
             }
         } else {
             match self.retry() {

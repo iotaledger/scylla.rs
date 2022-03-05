@@ -155,7 +155,10 @@ pub trait GetStaticInsertRequest<K: Bindable + TokenEncoder>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert(keyspace: &dyn Keyspace, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
+    fn insert(
+        keyspace: &dyn Keyspace,
+        key: &K,
+    ) -> Result<InsertBuilder<StaticRequest, QueryFrameBuilder>, <QueryFrameBuilder as Binder>::Error>
     where
         Self: Insert<K>,
         K: Bindable + TokenEncoder,
@@ -163,12 +166,12 @@ pub trait GetStaticInsertRequest<K: Bindable + TokenEncoder>: Table {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        let mut builder = QueryBuilder::default()
+        let mut builder = QueryFrameBuilder::default()
             .consistency(Consistency::Quorum)
-            .statement(&statement);
+            .statement(statement.clone());
         builder = Self::bind_values(builder, key)?;
         Ok(InsertBuilder {
-            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
+            token: Some(key.token()),
             builder,
             keyspace,
             statement,
@@ -236,7 +239,10 @@ pub trait GetStaticInsertRequest<K: Bindable + TokenEncoder>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn insert_prepared(keyspace: &dyn Keyspace, key: &K) -> Result<InsertBuilder<StaticRequest>, TokenBindError<K>>
+    fn insert_prepared(
+        keyspace: &dyn Keyspace,
+        key: &K,
+    ) -> Result<InsertBuilder<StaticRequest, ExecuteFrameBuilder>, <ExecuteFrameBuilder as Binder>::Error>
     where
         Self: Insert<K>,
         K: Bindable + TokenEncoder,
@@ -244,12 +250,12 @@ pub trait GetStaticInsertRequest<K: Bindable + TokenEncoder>: Table {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        let mut builder = QueryBuilder::default()
+        let mut builder = ExecuteFrameBuilder::default()
             .consistency(Consistency::Quorum)
-            .id(&statement.id());
+            .id(statement.id());
         builder = Self::bind_values(builder, key)?;
         Ok(InsertBuilder {
-            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
+            token: Some(key.token()),
             builder,
             keyspace,
             statement,
@@ -275,7 +281,7 @@ pub trait AsDynamicInsertRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query(&self) -> InsertBuilder<DynamicRequest>;
+    fn query(&self) -> InsertBuilder<DynamicRequest, QueryFrameBuilder>;
 
     /// Create a dynamic insert prepared request from a statement and variables.
     ///
@@ -289,16 +295,16 @@ pub trait AsDynamicInsertRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query_prepared(&self) -> InsertBuilder<DynamicRequest>;
+    fn query_prepared(&self) -> InsertBuilder<DynamicRequest, ExecuteFrameBuilder>;
 }
 impl AsDynamicInsertRequest for InsertStatement {
-    fn query(&self) -> InsertBuilder<DynamicRequest> {
+    fn query(&self) -> InsertBuilder<DynamicRequest, QueryFrameBuilder> {
         let keyspace = self.get_keyspace();
         let statement = self.to_string();
         InsertBuilder {
-            builder: QueryBuilder::default()
+            builder: QueryFrameBuilder::default()
                 .consistency(Consistency::Quorum)
-                .statement(&statement),
+                .statement(statement.clone()),
             keyspace,
             statement,
             token: None,
@@ -306,13 +312,13 @@ impl AsDynamicInsertRequest for InsertStatement {
         }
     }
 
-    fn query_prepared(&self) -> InsertBuilder<DynamicRequest> {
+    fn query_prepared(&self) -> InsertBuilder<DynamicRequest, ExecuteFrameBuilder> {
         let keyspace = self.get_keyspace();
         let statement = self.to_string();
         InsertBuilder {
-            builder: QueryBuilder::default()
+            builder: ExecuteFrameBuilder::default()
                 .consistency(Consistency::Quorum)
-                .id(&statement.id()),
+                .id(statement.id()),
             keyspace,
             statement,
             token: None,
@@ -321,15 +327,15 @@ impl AsDynamicInsertRequest for InsertStatement {
     }
 }
 #[derive(Debug)]
-pub struct InsertBuilder<R> {
+pub struct InsertBuilder<R, B> {
     keyspace: Option<String>,
     statement: String,
-    builder: QueryBuilder,
+    builder: B,
     token: Option<i64>,
     _marker: PhantomData<fn(R) -> R>,
 }
 
-impl<R> InsertBuilder<R> {
+impl<R> InsertBuilder<R, QueryFrameBuilder> {
     pub fn consistency(mut self, consistency: Consistency) -> Self {
         self.builder = self.builder.consistency(consistency);
         self
@@ -343,7 +349,7 @@ impl<R> InsertBuilder<R> {
     pub fn build(self) -> anyhow::Result<InsertRequest> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
-            payload: self.builder.build()?.into(),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
             keyspace: self.keyspace,
             statement: self.statement,
         }
@@ -351,20 +357,41 @@ impl<R> InsertBuilder<R> {
     }
 }
 
-impl InsertBuilder<DynamicRequest> {
-    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Result<Self, V::Error> {
-        self.token.replace(value.token()?);
-        Ok(self)
+impl<R> InsertBuilder<R, ExecuteFrameBuilder> {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
+        self
     }
 
-    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<InsertRequest> {
+        Ok(CommonRequest {
+            token: self.token.unwrap_or_else(|| rand::random()),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
+            keyspace: self.keyspace,
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+
+impl<B: Binder> InsertBuilder<DynamicRequest, B> {
+    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Self {
+        self.token.replace(value.token());
+        self
+    }
+
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, B::Error> {
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }
 
-    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, TokenBindError<V>> {
-        self.token
-            .replace(value.token().map_err(TokenBindError::TokenEncodeError)?);
+    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, B::Error> {
+        self.token.replace(value.token());
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }

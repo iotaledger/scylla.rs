@@ -5,216 +5,222 @@
 
 use super::{
     ColumnDecoder,
-    Frame,
+    RowsResult,
 };
 use anyhow::ensure;
-use log::error;
-use std::convert::TryInto;
+use std::{
+    convert::TryInto,
+    marker::PhantomData,
+};
 
-/// The column count type.
-pub type ColumnsCount = i32;
-#[derive(Debug, Clone, Copy)]
-/// The flags for row decoder.
-pub struct Flags {
-    global_table_spec: bool,
-    has_more_pages: bool,
-    no_metadata: bool,
+pub struct ResultRow<'a> {
+    idx: &'a mut usize,
+    remaining_cols: usize,
+    buffer: &'a [u8],
 }
 
-impl Flags {
-    /// Decode i32 to flags of row decoder.
-    pub fn from_i32(flags: i32) -> Self {
-        Flags {
-            global_table_spec: (flags & 1) == 1,
-            has_more_pages: (flags & 2) == 2,
-            no_metadata: (flags & 4) == 4,
+impl<'a> ResultRow<'a> {
+    pub fn new(idx: &'a mut usize, rows: &'a RowsResult) -> Self {
+        Self {
+            buffer: &rows.rows()[*idx..],
+            remaining_cols: rows.metadata().columns_count() as usize,
+            idx,
         }
     }
-    /// Check if are there more pages to decode.
-    pub fn has_more_pages(&self) -> bool {
-        self.has_more_pages
-    }
-}
-#[derive(Debug, Clone)]
-/// The pageing state of the response.
-pub struct PagingState {
-    paging_state: Option<Vec<u8>>,
-    end: usize,
-}
-impl PagingState {
-    /// Create a new paing state.
-    pub fn new(paging_state: Option<Vec<u8>>, end: usize) -> Self {
-        PagingState { paging_state, end }
-    }
-}
-#[derive(Debug, Clone)]
-/// The meta structure of the row.
-pub struct Metadata {
-    flags: Flags,
-    columns_count: ColumnsCount,
-    paging_state: PagingState,
-}
 
-impl Metadata {
-    /// Create a new meta data.
-    pub fn new(flags: Flags, columns_count: ColumnsCount, paging_state: PagingState) -> Self {
-        Metadata {
-            flags,
-            columns_count,
-            paging_state,
-        }
+    pub fn decode_column<C: ColumnDecoder>(&mut self) -> anyhow::Result<C> {
+        ensure!(self.remaining_cols > 0, "No more columns to decode");
+        ensure!(
+            self.buffer.len() >= *self.idx + 4,
+            "Buffer is too small for value length bytes!"
+        );
+        let length = i32::from_be_bytes(self.buffer[*self.idx..][..4].try_into()?) as usize;
+        *self.idx += 4;
+        let res = if length > 0 {
+            ensure!(
+                self.buffer.len() >= *self.idx + length,
+                "Buffer is too small for value bytes!"
+            );
+            let col_slice = &self.buffer[*self.idx..][..length];
+            *self.idx += length;
+            C::try_decode_column(col_slice)
+        } else {
+            C::try_decode_column(&[])
+        }?;
+        self.remaining_cols -= 1;
+        Ok(res)
     }
-    /// Get the starting rows.
-    pub fn rows_start(&self) -> usize {
-        self.paging_state.end
-    }
-    /// Take the paging state of the metadata.
-    pub fn take_paging_state(&mut self) -> Option<Vec<u8>> {
-        self.paging_state.paging_state.take()
-    }
-    /// Get reference to the paging state of the metadata.
-    pub fn get_paging_state(&self) -> Option<&Vec<u8>> {
-        self.paging_state.paging_state.as_ref()
-    }
-    /// Check if it has more pages to request
-    pub fn has_more_pages(&self) -> bool {
-        self.flags.has_more_pages()
-    }
-}
-
-/// Rows trait to decode the final result from scylla
-pub trait Rows: Iterator {
-    /// create new rows decoder struct
-    fn new(decoder: super::decoder::Decoder) -> anyhow::Result<Self>
-    where
-        Self: Sized;
-    /// Take the paging_state from the Rows result
-    fn take_paging_state(&mut self) -> Option<Vec<u8>>;
 }
 
 /// Defines a result-set row
-pub trait Row: Sized {
-    /// Get the rows iterator
-    fn rows_iter(decoder: super::Decoder) -> anyhow::Result<Iter<Self>> {
-        Iter::new(decoder)
-    }
+pub trait RowDecoder: Sized {
     /// Define how to decode the row
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized;
+    fn try_decode_row(row: ResultRow) -> anyhow::Result<Self>;
 }
 
-impl<T> Row for T
+impl<T> RowDecoder for T
 where
     T: ColumnDecoder,
 {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        rows.column_value()
+    fn try_decode_row(mut row: ResultRow) -> anyhow::Result<Self> {
+        Ok(row.decode_column()?)
     }
-}
-
-/// Defines a result-set column value
-pub trait ColumnValue {
-    /// Decode the column value of C type;
-    fn column_value<C: ColumnDecoder>(&mut self) -> anyhow::Result<C>;
 }
 
 /// An iterator over the rows of a result-set
-#[allow(unused)]
-#[derive(Clone, Debug)]
-pub struct Iter<T: Row> {
-    decoder: super::Decoder,
-    rows_count: usize,
-    column_start: usize,
-    remaining_rows_count: usize,
-    metadata: Metadata,
-    _marker: std::marker::PhantomData<T>,
+#[derive(Clone)]
+pub struct Iter<'a, T: RowDecoder> {
+    rows: &'a RowsResult,
+    idx: usize,
+    remaining_rows: usize,
+    _marker: PhantomData<T>,
 }
-impl<T: Row> Iter<T> {
+impl<'a, T: RowDecoder> std::fmt::Debug for Iter<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Iter")
+            .field("rows", &self.rows)
+            .field("idx", &self.idx)
+            .field("remaining_rows", &self.remaining_rows)
+            .finish()
+    }
+}
+impl<'a, T: RowDecoder> Iter<'a, T> {
+    pub fn new(result: &'a RowsResult) -> Self {
+        Self {
+            remaining_rows: result.rows_count() as usize,
+            idx: 0,
+            rows: result,
+            _marker: PhantomData,
+        }
+    }
+
     /// Check if the iterator doesn't have any row
     pub fn is_empty(&self) -> bool {
-        self.rows_count == 0
+        self.rows.rows_count() == 0
     }
     /// Get the iterator rows count
     pub fn rows_count(&self) -> usize {
-        self.rows_count
+        self.rows.rows_count() as usize
     }
     /// Get the iterator remaining rows count
-    pub fn remaining_rows_count(&self) -> usize {
-        self.remaining_rows_count
+    pub fn remaining_rows(&self) -> usize {
+        self.remaining_rows
     }
     /// Check if it has more pages to request
     pub fn has_more_pages(&self) -> bool {
-        self.metadata.has_more_pages()
+        self.rows.metadata().flags().has_more_pages()
     }
-}
-impl<T: Row> Rows for Iter<T> {
-    fn new(decoder: super::Decoder) -> anyhow::Result<Self> {
-        let metadata = decoder.metadata()?;
-        let rows_start = metadata.rows_start();
-        let column_start = rows_start + 4;
-        ensure!(decoder.buffer_as_ref().len() >= column_start, "Buffer is too small!");
-        let rows_count = i32::from_be_bytes(decoder.buffer_as_ref()[rows_start..column_start].try_into()?);
-        Ok(Self {
-            decoder,
-            metadata,
-            rows_count: rows_count as usize,
-            remaining_rows_count: rows_count as usize,
-            column_start,
-            _marker: std::marker::PhantomData,
-        })
+
+    pub fn columns_count(&self) -> usize {
+        self.rows.metadata().columns_count() as usize
     }
-    fn take_paging_state(&mut self) -> Option<Vec<u8>> {
-        self.metadata.take_paging_state()
+
+    pub fn paging_state(&self) -> &Option<Vec<u8>> {
+        self.rows.metadata().paging_state()
     }
 }
 
-impl<T: Row> Iterator for Iter<T> {
+impl<'a, T: RowDecoder> Iterator for Iter<'a, T> {
     type Item = T;
     /// Note the row decoder is implemented in this `next` method of HardCodedSpecs.
     fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-        if self.remaining_rows_count > 0 {
-            self.remaining_rows_count -= 1;
-            T::try_decode_row(self).map_err(|e| error!("{}", e)).ok()
+        if self.remaining_rows > 0 {
+            let res = match T::try_decode_row(ResultRow::new(&mut self.idx, self.rows)) {
+                Ok(res) => Some(res),
+                Err(e) => {
+                    log::error!("Error decoding row: {}", e);
+                    None
+                }
+            };
+            self.remaining_rows -= 1;
+            res
         } else {
             None
         }
     }
 }
 
-impl<T: Row> ColumnValue for Iter<T> {
-    fn column_value<C: ColumnDecoder>(&mut self) -> anyhow::Result<C> {
-        ensure!(
-            self.decoder.buffer_as_ref().len() >= self.column_start + 4,
-            "Buffer is too small!"
-        );
-        let length = i32::from_be_bytes(self.decoder.buffer_as_ref()[self.column_start..][..4].try_into()?);
-        self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
-        if length > 0 {
-            ensure!(
-                self.decoder.buffer_as_ref().len() >= self.column_start + length as usize,
-                "Buffer is too small!"
-            );
-            let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
-            // update the next column_start to start from next column
-            self.column_start += length as usize;
-            C::try_decode_column(col_slice)
+#[derive(Clone)]
+pub struct IntoIter<T: RowDecoder> {
+    rows: RowsResult,
+    idx: usize,
+    remaining_rows: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T: RowDecoder> std::fmt::Debug for IntoIter<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Iter")
+            .field("rows", &self.rows)
+            .field("idx", &self.idx)
+            .field("remaining_rows", &self.remaining_rows)
+            .finish()
+    }
+}
+
+impl<T: RowDecoder> IntoIter<T> {
+    pub fn new(result: RowsResult) -> Self {
+        Self {
+            remaining_rows: result.rows_count() as usize,
+            idx: 0,
+            rows: result,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Check if the iterator doesn't have any row
+    pub fn is_empty(&self) -> bool {
+        self.rows.rows_count() == 0
+    }
+    /// Get the iterator rows count
+    pub fn rows_count(&self) -> usize {
+        self.rows.rows_count() as usize
+    }
+    /// Get the iterator remaining rows count
+    pub fn remaining_rows(&self) -> usize {
+        self.remaining_rows
+    }
+    /// Check if it has more pages to request
+    pub fn has_more_pages(&self) -> bool {
+        self.rows.metadata().flags().has_more_pages()
+    }
+
+    pub fn columns_count(&self) -> usize {
+        self.rows.metadata().columns_count() as usize
+    }
+
+    pub fn paging_state(&self) -> &Option<Vec<u8>> {
+        self.rows.metadata().paging_state()
+    }
+}
+
+impl<T: RowDecoder> Iterator for IntoIter<T> {
+    type Item = T;
+    /// Note the row decoder is implemented in this `next` method of HardCodedSpecs.
+    fn next(&mut self) -> Option<<Self as Iterator>::Item> {
+        if self.remaining_rows > 0 {
+            let res = match T::try_decode_row(ResultRow::new(&mut self.idx, &self.rows)) {
+                Ok(res) => Some(res),
+                Err(e) => {
+                    log::error!("Error decoding row: {}", e);
+                    None
+                }
+            };
+            self.remaining_rows -= 1;
+            res
         } else {
-            C::try_decode_column(&[])
+            None
         }
     }
 }
 
 macro_rules! row {
-    (@tuple ($($t:tt),*)) => {
-        impl<$($t: ColumnDecoder),*> Row for ($($t,)*) {
-            fn try_decode_row<R: ColumnValue>(rows: &mut R) -> anyhow::Result<Self> {
+    ($($t:tt),*) => {
+        impl<$($t: ColumnDecoder),*> RowDecoder for ($($t,)*) {
+            fn try_decode_row(mut row: ResultRow) -> anyhow::Result<Self> {
                 Ok((
                     $(
-                        rows.column_value::<$t>()?,
+                        row.decode_column::<$t>()?,
                     )*
                 ))
             }
@@ -222,172 +228,31 @@ macro_rules! row {
     };
 }
 
-// HardCoded Specs,
-row!(@tuple (T));
-row!(@tuple (T,TT));
-row!(@tuple (T, TT, TTT));
-row!(@tuple (T, TT, TTT, TTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT, TTTTTTTTTTTTTT));
-row!(@tuple (T, TT, TTT, TTTT, TTTTT, TTTTTT, TTTTTTT, TTTTTTTT, TTTTTTTTT, TTTTTTTTTT, TTTTTTTTTTT, TTTTTTTTTTTT, TTTTTTTTTTTTT, TTTTTTTTTTTTTT, TTTTTTTTTTTTTTT));
-
-#[macro_export]
-/// The rows macro implements the row decoder.
-macro_rules! rows {
-    (@common_rows $rows:ident$(<$($t:ident),+>)?) => {
-        #[allow(dead_code)]
-        #[allow(unused_parens)]
-        /// The `rows` struct for processing each received row in ScyllaDB.
-        pub struct $rows$(<$($t),+>)? {
-            decoder: Decoder,
-            rows_count: usize,
-            remaining_rows_count: usize,
-            metadata: Metadata,
-            column_start: usize,
-            $(_marker: PhantomData<($($t),+)>,)?
-        }
-
-        impl$(<$($t),+>)? $rows$(<$($t),+>)? {
-            #[allow(dead_code)]
-            pub fn rows_count(&self) -> usize {
-                self.rows_count
-            }
-
-            #[allow(dead_code)]
-            pub fn remaining_rows_count(&self) -> usize {
-                self.remaining_rows_count
-            }
-        }
-
-        #[allow(unused_parens)]
-        impl$(<$($t),+>)? Rows for $rows$(<$($t),+>)? {
-            /// Create a new rows structure.
-            fn new(decoder: Decoder) -> anyhow::Result<Self> {
-                let metadata = decoder.metadata()?;
-                let rows_start = metadata.rows_start();
-                let column_start = rows_start + 4;
-                anyhow::ensure!(decoder.buffer_as_ref().len() >= column_start, "Buffer is too small!");
-                let rows_count = i32::from_be_bytes(
-                    decoder.buffer_as_ref()[rows_start..column_start]
-                        .try_into()?,
-                );
-                Ok(Self {
-                    decoder,
-                    metadata,
-                    rows_count: rows_count as usize,
-                    remaining_rows_count: rows_count as usize,
-                    column_start,
-                    $(_marker: PhantomData::<($($t),+)>,)?
-                })
-            }
-            fn take_paging_state(&mut self) -> Option<Vec<u8>> {
-                self.metadata.take_paging_state()
-            }
-        }
-    };
-    (@common_row $row:ident {$( $col_field:ident: $col_type:ty),*}) => {
-        /// It's the `row` struct
-        pub struct $row {
-            $(
-                pub $col_field: $col_type,
-            )*
-        }
-    };
-    (@common_iter $rows:ident$(<$($t:ident),+>)?, $row:ident {$( $col_field:ident: $col_type:ty),*}, $row_into:ty) => {
-        impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
-            type Item = $row_into;
-            /// Note the row decoder is implemented in this `next` method.
-            fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-                if self.remaining_rows_count > 0 {
-                    self.remaining_rows_count -= 1;
-                    let row_struct = $row {
-                        $(
-                            $col_field: {
-                                if self.decoder.buffer_as_ref().len() < self.column_start + 4 {
-                                    log::error!("Buffer is too small!");
-                                    return None;
-                                }
-                                let length = i32::from_be_bytes(
-                                    self.decoder.buffer_as_ref()[self.column_start..][..4].try_into().unwrap()
-                                );
-                                self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
-                                if length > 0 {
-                                    let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
-                                    // update the next column_start to start from next column
-                                    self.column_start += (length as usize);
-                                    <$col_type>::try_decode_column(col_slice).map_err(|e| log::error!("{}", e)).ok()?
-                                } else {
-                                    <$col_type>::try_decode_column(&[]).map_err(|e| log::error!("{}", e)).ok()?
-                                }
-                            },
-                        )*
-                    };
-                    Some(row_struct.into())
-                } else {
-                    None
-                }
-            }
-        }
-    };
-    (single_row: $rows:ident$(<$($t:ident),+>)?, row: $row:ident {$( $col_field:ident: $col_type:ty),* $(,)?}, row_into: $row_into:ty $(,)? ) => {
-        rows!(@common_rows $rows$(<$($t),+>)?);
-
-        rows!(@common_row $row {$( $col_field: $col_type),*});
-
-        rows!(@common_iter $rows$(<$($t),+>)?, $row {$( $col_field: $col_type),*}, $row_into);
-
-        impl $rows {
-            pub fn get(&mut self) -> Option<$row_into> {
-                self.next()
-            }
-        }
-    };
-    (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ty, row_into: $row_into:ty $(,)? ) => {
-        rows!(@common_rows $rows$(<$($t),+>)?);
-
-        impl$(<$($t),+>)? Iterator for $rows$(<$($t),+>)? {
-            type Item = $row_into;
-            /// Note the row decoder is implemented in this `next` method.
-            fn next(&mut self) -> Option<<Self as Iterator>::Item> {
-                if self.remaining_rows_count > 0 {
-                    self.remaining_rows_count -= 1;
-                    if self.decoder.buffer_as_ref().len() < self.column_start + 4 {
-                        log::error!("Buffer is too small!");
-                        return None;
-                    }
-                    let length = i32::from_be_bytes(
-                        self.decoder.buffer_as_ref()[self.column_start..][..4]
-                            .try_into()
-                            .unwrap(),
-                    );
-                    self.column_start += 4; // now it become the column_value start, or next column_start if length < 0
-                    if length > 0 {
-                        let col_slice = self.decoder.buffer_as_ref()[self.column_start..][..(length as usize)].into();
-                        // update the next column_start to start from next column
-                        self.column_start += (length as usize);
-                        <$row>::try_decode(col_slice).map_err(|e| log::error!("{}", e)).ok().into()
-                    } else {
-                        <$row>::try_decode(&[]).map_err(|e| log::error!("{}", e)).ok().into()
-                    }
-                } else {
-                    None
-                }
-            }
-        }
-    };
-    (rows: $rows:ident$(<$($t:ident),+>)?, row: $row:ident {$( $col_field:ident: $col_type:ty),* $(,)?}, row_into: $row_into:ty $(,)? ) => {
-        rows!(@common_rows $rows$(<$($t),+>)?);
-
-        rows!(@common_row $row {$( $col_field: $col_type),*});
-
-        rows!(@common_iter $rows$(<$($t),+>)?, $row {$( $col_field: $col_type),*}, $row_into);
-    };
-}
+// make a pretty staircase
+row!(T1);
+row!(T1, T2);
+row!(T1, T2, T3);
+row!(T1, T2, T3, T4);
+row!(T1, T2, T3, T4, T5);
+row!(T1, T2, T3, T4, T5, T6);
+row!(T1, T2, T3, T4, T5, T6, T7);
+row!(T1, T2, T3, T4, T5, T6, T7, T8);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23);
+row!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24);
+row!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24, T25
+);

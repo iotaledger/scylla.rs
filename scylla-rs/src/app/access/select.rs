@@ -134,7 +134,10 @@ pub trait GetStaticSelectRequest<K: Bindable + TokenEncoder>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn select<O>(keyspace: &dyn Keyspace, key: &K) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
+    fn select<O>(
+        keyspace: &dyn Keyspace,
+        key: &K,
+    ) -> Result<SelectBuilder<StaticRequest, O, QueryFrameBuilder>, <QueryFrameBuilder as Binder>::Error>
     where
         Self: Select<K, O>,
         O: RowsDecoder,
@@ -142,12 +145,12 @@ pub trait GetStaticSelectRequest<K: Bindable + TokenEncoder>: Table {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        let mut builder = QueryBuilder::default()
+        let mut builder = QueryFrameBuilder::default()
             .consistency(Consistency::One)
-            .statement(&statement);
+            .statement(statement.clone());
         builder = Self::bind_values(builder, key)?;
         Ok(SelectBuilder {
-            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
+            token: Some(key.token()),
             builder,
             statement,
             keyspace,
@@ -209,7 +212,7 @@ pub trait GetStaticSelectRequest<K: Bindable + TokenEncoder>: Table {
     fn select_prepared<O>(
         keyspace: &dyn Keyspace,
         key: &K,
-    ) -> Result<SelectBuilder<StaticRequest, O>, TokenBindError<K>>
+    ) -> Result<SelectBuilder<StaticRequest, O, ExecuteFrameBuilder>, <ExecuteFrameBuilder as Binder>::Error>
     where
         Self: Select<K, O>,
         O: RowsDecoder,
@@ -217,12 +220,12 @@ pub trait GetStaticSelectRequest<K: Bindable + TokenEncoder>: Table {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        let mut builder = QueryBuilder::default()
+        let mut builder = ExecuteFrameBuilder::default()
             .consistency(Consistency::One)
-            .id(&statement.id());
+            .id(statement.id());
         builder = Self::bind_values(builder, key)?;
         Ok(SelectBuilder {
-            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
+            token: Some(key.token()),
             builder,
             statement,
             keyspace,
@@ -247,7 +250,7 @@ pub trait AsDynamicSelectRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O>;
+    fn query<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O, QueryFrameBuilder>;
 
     /// Create a dynamic select prepared request from a statement and variables.
     ///
@@ -261,16 +264,16 @@ pub trait AsDynamicSelectRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query_prepared<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O>;
+    fn query_prepared<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O, ExecuteFrameBuilder>;
 }
 impl AsDynamicSelectRequest for SelectStatement {
-    fn query<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O> {
+    fn query<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O, QueryFrameBuilder> {
         let keyspace = self.get_keyspace();
         let statement = self.to_string();
         SelectBuilder {
-            builder: QueryBuilder::default()
+            builder: QueryFrameBuilder::default()
                 .consistency(Consistency::One)
-                .statement(&statement),
+                .statement(statement.clone()),
             statement,
             keyspace,
             token: None,
@@ -278,13 +281,13 @@ impl AsDynamicSelectRequest for SelectStatement {
         }
     }
 
-    fn query_prepared<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O> {
+    fn query_prepared<O: RowsDecoder>(&self) -> SelectBuilder<DynamicRequest, O, ExecuteFrameBuilder> {
         let keyspace = self.get_keyspace();
         let statement = self.to_string();
         SelectBuilder {
-            builder: QueryBuilder::default()
+            builder: ExecuteFrameBuilder::default()
                 .consistency(Consistency::One)
-                .id(&statement.id()),
+                .id(statement.id()),
             statement,
             keyspace,
             token: None,
@@ -293,15 +296,15 @@ impl AsDynamicSelectRequest for SelectStatement {
     }
 }
 
-pub struct SelectBuilder<R, O: RowsDecoder> {
+pub struct SelectBuilder<R, O: RowsDecoder, B> {
     keyspace: Option<String>,
     statement: String,
-    builder: QueryBuilder,
+    builder: B,
     token: Option<i64>,
-    _marker: PhantomData<fn(R, O) -> (R, O)>,
+    _marker: PhantomData<fn(R, O, B) -> (R, O, B)>,
 }
 
-impl<R, O: RowsDecoder> SelectBuilder<R, O> {
+impl<R, O: RowsDecoder> SelectBuilder<R, O, QueryFrameBuilder> {
     pub fn consistency(mut self, consistency: Consistency) -> Self {
         self.builder = self.builder.consistency(consistency);
         self
@@ -324,7 +327,7 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O> {
     pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
-            payload: self.builder.build()?.into(),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
             keyspace: self.keyspace,
             statement: self.statement,
         }
@@ -332,20 +335,50 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O> {
     }
 }
 
-impl<O: RowsDecoder> SelectBuilder<DynamicRequest, O> {
-    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Result<Self, V::Error> {
-        self.token.replace(value.token()?);
-        Ok(self)
+impl<R, O: RowsDecoder> SelectBuilder<R, O, ExecuteFrameBuilder> {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
+        self
     }
 
-    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+    pub fn page_size(mut self, page_size: i32) -> Self {
+        self.builder = self.builder.page_size(page_size);
+        self
+    }
+    /// Set the paging state.
+    pub fn paging_state(mut self, paging_state: Vec<u8>) -> Self {
+        self.builder = self.builder.paging_state(paging_state);
+        self
+    }
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
+        Ok(CommonRequest {
+            token: self.token.unwrap_or_else(|| rand::random()),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
+            keyspace: self.keyspace,
+            statement: self.statement,
+        }
+        .into())
+    }
+}
+
+impl<O: RowsDecoder, B: Binder> SelectBuilder<DynamicRequest, O, B> {
+    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Self {
+        self.token.replace(value.token());
+        self
+    }
+
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, B::Error> {
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }
 
-    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, TokenBindError<V>> {
-        self.token
-            .replace(value.token().map_err(TokenBindError::TokenEncodeError)?);
+    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, B::Error> {
+        self.token.replace(value.token());
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }

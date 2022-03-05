@@ -119,19 +119,22 @@ pub trait GetStaticDeleteRequest<K: Bindable + TokenEncoder>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn delete(keyspace: &dyn Keyspace, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
+    fn delete(
+        keyspace: &dyn Keyspace,
+        key: &K,
+    ) -> Result<DeleteBuilder<StaticRequest, QueryFrameBuilder>, <QueryFrameBuilder as Binder>::Error>
     where
         Self: Delete<K>,
     {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        let mut builder = QueryBuilder::default()
+        let mut builder = QueryFrameBuilder::default()
             .consistency(Consistency::Quorum)
-            .statement(&statement);
+            .statement(statement.clone());
         builder = Self::bind_values(builder, key)?;
         Ok(DeleteBuilder {
-            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
+            token: Some(key.token()),
             builder,
             statement,
             keyspace,
@@ -190,19 +193,22 @@ pub trait GetStaticDeleteRequest<K: Bindable + TokenEncoder>: Table {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn delete_prepared(keyspace: &dyn Keyspace, key: &K) -> Result<DeleteBuilder<StaticRequest>, TokenBindError<K>>
+    fn delete_prepared(
+        keyspace: &dyn Keyspace,
+        key: &K,
+    ) -> Result<DeleteBuilder<StaticRequest, ExecuteFrameBuilder>, <ExecuteFrameBuilder as Binder>::Error>
     where
         Self: Delete<K>,
     {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        let mut builder = QueryBuilder::default()
+        let mut builder = ExecuteFrameBuilder::default()
             .consistency(Consistency::Quorum)
-            .id(&statement.id());
+            .id(statement.id());
         builder = Self::bind_values(builder, key)?;
         Ok(DeleteBuilder {
-            token: Some(key.token().map_err(TokenBindError::TokenEncodeError)?),
+            token: Some(key.token()),
             builder,
             statement,
             keyspace,
@@ -226,7 +232,7 @@ pub trait AsDynamicDeleteRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query(&self) -> DeleteBuilder<DynamicRequest>;
+    fn query(&self) -> DeleteBuilder<DynamicRequest, QueryFrameBuilder>;
 
     /// Create a dynamic prepared delete request from a statement and variables.
     ///
@@ -240,16 +246,16 @@ pub trait AsDynamicDeleteRequest: Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn query_prepared(&self) -> DeleteBuilder<DynamicRequest>;
+    fn query_prepared(&self) -> DeleteBuilder<DynamicRequest, ExecuteFrameBuilder>;
 }
 impl AsDynamicDeleteRequest for DeleteStatement {
-    fn query(&self) -> DeleteBuilder<DynamicRequest> {
+    fn query(&self) -> DeleteBuilder<DynamicRequest, QueryFrameBuilder> {
         let keyspace = self.get_keyspace();
         let statement = self.to_string();
         DeleteBuilder {
-            builder: QueryBuilder::default()
+            builder: QueryFrameBuilder::default()
                 .consistency(Consistency::Quorum)
-                .statement(&statement),
+                .statement(statement.clone()),
             statement,
             keyspace,
             token: None,
@@ -257,13 +263,13 @@ impl AsDynamicDeleteRequest for DeleteStatement {
         }
     }
 
-    fn query_prepared(&self) -> DeleteBuilder<DynamicRequest> {
+    fn query_prepared(&self) -> DeleteBuilder<DynamicRequest, ExecuteFrameBuilder> {
         let keyspace = self.get_keyspace();
         let statement = self.to_string();
         DeleteBuilder {
-            builder: QueryBuilder::default()
+            builder: ExecuteFrameBuilder::default()
                 .consistency(Consistency::Quorum)
-                .id(&statement.id()),
+                .id(statement.id()),
             statement,
             keyspace,
             token: None,
@@ -272,15 +278,15 @@ impl AsDynamicDeleteRequest for DeleteStatement {
     }
 }
 
-pub struct DeleteBuilder<R> {
+pub struct DeleteBuilder<R, B> {
     keyspace: Option<String>,
     statement: String,
-    builder: QueryBuilder,
+    builder: B,
     token: Option<i64>,
     _marker: PhantomData<fn(R) -> R>,
 }
 
-impl<R> DeleteBuilder<R> {
+impl<R> DeleteBuilder<R, QueryFrameBuilder> {
     pub fn consistency(mut self, consistency: Consistency) -> Self {
         self.builder = self.builder.consistency(consistency);
         self
@@ -294,7 +300,7 @@ impl<R> DeleteBuilder<R> {
     pub fn build(self) -> anyhow::Result<DeleteRequest> {
         Ok(CommonRequest {
             token: self.token.unwrap_or_else(|| rand::random()),
-            payload: self.builder.build()?.into(),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
             keyspace: self.keyspace,
             statement: self.statement.clone().into(),
         }
@@ -302,20 +308,41 @@ impl<R> DeleteBuilder<R> {
     }
 }
 
-impl DeleteBuilder<DynamicRequest> {
-    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Result<Self, V::Error> {
-        self.token.replace(value.token()?);
-        Ok(self)
+impl<R> DeleteBuilder<R, ExecuteFrameBuilder> {
+    pub fn consistency(mut self, consistency: Consistency) -> Self {
+        self.builder = self.builder.consistency(consistency);
+        self
     }
 
-    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+    pub fn timestamp(mut self, timestamp: i64) -> Self {
+        self.builder = self.builder.timestamp(timestamp);
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<DeleteRequest> {
+        Ok(CommonRequest {
+            token: self.token.unwrap_or_else(|| rand::random()),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
+            keyspace: self.keyspace,
+            statement: self.statement.clone().into(),
+        }
+        .into())
+    }
+}
+
+impl<B: Binder> DeleteBuilder<DynamicRequest, B> {
+    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Self {
+        self.token.replace(value.token());
+        self
+    }
+
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, B::Error> {
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }
 
-    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, TokenBindError<V>> {
-        self.token
-            .replace(value.token().map_err(TokenBindError::TokenEncodeError)?);
+    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, B::Error> {
+        self.token.replace(value.token());
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }

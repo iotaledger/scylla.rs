@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::cql::{
-    BatchBuilder,
+    BatchFrameBuilder,
     BatchType,
     Consistency,
 };
@@ -95,7 +95,7 @@ use std::collections::HashMap;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct BatchCollector<'a> {
-    builder: BatchBuilder,
+    builder: BatchFrameBuilder,
     map: HashMap<[u8; 16], ModificationStatement>,
     keyspace: &'a dyn Keyspace,
 }
@@ -107,7 +107,7 @@ impl<'a> BatchCollector<'a> {
     /// the collector.
     pub fn new(keyspace: &dyn Keyspace) -> BatchCollector {
         BatchCollector {
-            builder: BatchBuilder::default(),
+            builder: BatchFrameBuilder::default(),
             map: HashMap::new(),
             keyspace,
         }
@@ -135,7 +135,7 @@ impl<'a> BatchCollector<'a> {
     }
 
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
+    pub fn insert<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Insert<K>,
         K: Bindable + TokenEncoder,
@@ -149,7 +149,7 @@ impl<'a> BatchCollector<'a> {
     }
 
     /// Append a prepared insert query using the statement defined in the `Insert` impl.
-    pub fn insert_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
+    pub fn insert_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Insert<K>,
         K: Bindable + TokenEncoder,
@@ -158,14 +158,14 @@ impl<'a> BatchCollector<'a> {
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
-        self.builder = self.builder.id(&id);
+        self.builder = self.builder.id(id);
         // bind_values of Insert<K, V>
         self.builder = T::bind_values(self.builder, key)?;
         Ok(self)
     }
 
     /// Append an unprepared update query using the statement defined in the `Update` impl.
-    pub fn update<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchBuilder as Binder>::Error>
+    pub fn update<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Update<K, V>,
         K: TokenEncoder,
@@ -179,7 +179,7 @@ impl<'a> BatchCollector<'a> {
     }
 
     /// Append a prepared update query using the statement defined in the `Update` impl.
-    pub fn update_prepared<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchBuilder as Binder>::Error>
+    pub fn update_prepared<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Update<K, V>,
         K: TokenEncoder,
@@ -188,14 +188,14 @@ impl<'a> BatchCollector<'a> {
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
-        self.builder = self.builder.id(&id);
+        self.builder = self.builder.id(id);
         // bind_values of Update<K, V>
         self.builder = T::bind_values(self.builder, key, values)?;
         Ok(self)
     }
 
     /// Append an unprepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
+    pub fn delete<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Delete<K>,
         K: Bindable + TokenEncoder,
@@ -209,7 +209,7 @@ impl<'a> BatchCollector<'a> {
     }
 
     /// Append a prepared delete query using the statement defined in the `Delete` impl.
-    pub fn delete_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchBuilder as Binder>::Error>
+    pub fn delete_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Delete<K>,
         K: Bindable + TokenEncoder,
@@ -218,7 +218,7 @@ impl<'a> BatchCollector<'a> {
         let id = statement.id();
         self.map.insert(id, statement.into());
         // this will advance the builder with QueryStatement
-        self.builder = self.builder.id(&id);
+        self.builder = self.builder.id(id);
         // bind_values of Delete<K>
         self.builder = T::bind_values(self.builder, key)?;
         Ok(self)
@@ -245,7 +245,7 @@ impl<'a> BatchCollector<'a> {
         Ok(BatchRequest {
             token: rand::random(),
             map: self.map.into_iter().map(|(k, v)| (k, v.to_string())).collect(),
-            payload: self.builder.build()?.0,
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
             keyspace: self.keyspace.name().to_owned().into(),
         })
     }
@@ -292,12 +292,12 @@ impl SendRequestExt for BatchRequest {
 
 impl BatchRequest {
     /// Compute the murmur3 token from the provided K
-    pub fn compute_token<K>(mut self, key: &K) -> Result<Self, K::Error>
+    pub fn compute_token<K>(mut self, key: &K) -> Self
     where
         K: TokenEncoder,
     {
-        self.token = key.token()?;
-        Ok(self)
+        self.token = key.token();
+        self
     }
 
     /// Clone the cql map

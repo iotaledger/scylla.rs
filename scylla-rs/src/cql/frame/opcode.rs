@@ -3,7 +3,6 @@
 
 //! This module defines the opcode.
 
-#![allow(unused)]
 pub const ERROR: u8 = 0x00;
 pub const STARTUP: u8 = 0x01;
 pub const READY: u8 = 0x02;

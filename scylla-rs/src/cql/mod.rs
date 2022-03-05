@@ -7,12 +7,11 @@
 #![warn(missing_docs)]
 pub mod compression;
 mod connection;
-mod frame;
+pub mod frame;
 mod murmur3;
 mod tests;
 
+pub use compression::*;
 pub use connection::*;
-/// This is the public API of this module
 pub use frame::*;
-
 pub use murmur3::murmur3_cassandra_x64_128;

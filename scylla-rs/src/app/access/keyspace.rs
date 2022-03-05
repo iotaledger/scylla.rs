@@ -1,18 +1,12 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::cql::{
-    Decoder,
-    RowsDecoder,
-    VoidDecoder,
-};
+use super::BatchCollector;
 use scylla_parse::{
     CreateKeyspaceStatement,
     DropKeyspaceStatement,
     KeyspaceOpts,
 };
-
-use super::BatchCollector;
 
 /// Represents a Scylla Keyspace which holds a set of tables and
 /// queries on those tables.
@@ -38,22 +32,6 @@ pub trait Keyspace: Send + Sync {
         Self: Sized,
     {
         BatchCollector::new(self)
-    }
-
-    /// Decode void result
-    fn decode_void(decoder: Decoder) -> anyhow::Result<()>
-    where
-        Self: Sized,
-    {
-        VoidDecoder::try_decode_void(decoder)
-    }
-    /// Decode rows result
-    fn decode_rows<V>(decoder: Decoder) -> anyhow::Result<Option<V>>
-    where
-        Self: Sized,
-        V: RowsDecoder,
-    {
-        V::try_decode_rows(decoder)
     }
 
     /// Retrieve a CREATE KEYSPACE statement builder for this keyspace name

@@ -6,7 +6,7 @@ use super::{
     Scylla,
 };
 use crate::cql::{
-    compression::Compression,
+    Compression,
     CqlBuilder,
 };
 use async_trait::async_trait;

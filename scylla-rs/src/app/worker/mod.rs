@@ -11,10 +11,12 @@ use crate::{
         ring::RingSendError,
     },
     cql::{
-        compression::CompressionError,
-        CqlError,
-        Decoder,
+        ErrorFrame,
         RowsDecoder,
+    },
+    prelude::{
+        FrameError,
+        ResponseBody,
     },
 };
 use anyhow::anyhow;
@@ -38,7 +40,7 @@ mod value;
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
     /// Reporter will invoke this method to Send the cql response to worker
-    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()>;
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
     fn handle_error(self: Box<Self>, error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()>;
 }
@@ -47,8 +49,8 @@ pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
 /// The CQL worker error.
 pub enum WorkerError {
     /// The CQL Error reported from ScyllaDB.
-    #[error("CqlError: {0}")]
-    Cql(CqlError),
+    #[error(transparent)]
+    Cql(ErrorFrame),
     /// The overload when we do not have any more streams.
     #[error("Overloaded Worker")]
     Overload,
@@ -58,8 +60,8 @@ pub enum WorkerError {
     /// There is no ring initialized.
     #[error("No Ring Available")]
     NoRing,
-    #[error("Compression Error: {0}")]
-    CompressionError(#[from] CompressionError),
+    #[error(transparent)]
+    FrameError(#[from] FrameError),
     /// Misc errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -163,7 +165,8 @@ pub trait RetryableWorker<R>: Worker {
     async fn get_local(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
-        Self: 'static + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self: 'static
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
         R::Marker: Send + Sync,
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
@@ -179,7 +182,8 @@ pub trait RetryableWorker<R>: Worker {
     fn get_local_blocking(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
-        Self: 'static + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self: 'static
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_local()?;
@@ -192,7 +196,8 @@ pub trait RetryableWorker<R>: Worker {
     async fn get_global(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
-        Self: 'static + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self: 'static
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
         R::Marker: Send + Sync,
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
@@ -208,7 +213,8 @@ pub trait RetryableWorker<R>: Worker {
     fn get_global_blocking(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R: SendRequestExt,
-        Self: 'static + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self: 'static
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_global()?;

@@ -33,8 +33,8 @@ where
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
         ExecuteBuilder {
-            builder: QueryBuilder::default()
-                .statement(&statement.to_string())
+            builder: QueryFrameBuilder::default()
+                .statement(statement.to_string())
                 .consistency(Consistency::Quorum),
             keyspace,
             statement,
@@ -46,7 +46,7 @@ impl<T: Into<Statement>> AsDynamicExecuteRequest for T {}
 pub struct ExecuteBuilder {
     keyspace: Option<String>,
     statement: String,
-    builder: QueryBuilder,
+    builder: QueryFrameBuilder,
 }
 
 impl ExecuteBuilder {
@@ -60,7 +60,7 @@ impl ExecuteBuilder {
         self
     }
 
-    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryBuilder as Binder>::Error> {
+    pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, <QueryFrameBuilder as Binder>::Error> {
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }
@@ -68,7 +68,7 @@ impl ExecuteBuilder {
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
         Ok(CommonRequest {
             token: rand::random(),
-            payload: self.builder.build()?.into(),
+            payload: RequestFrame::from(self.builder.build()?).build_payload(),
             keyspace: self.keyspace,
             statement: self.statement,
         }

@@ -1,65 +1,94 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This crate implements decoder/encoder for a Cassandra frame and the associated protocol.
+//! This crate implements decoder/encoder for a Cassandra _ and the associated protocol.
 //! See `https://github.com/apache/cassandra/blob/trunk/doc/native_protocol_v4.spec` for more details.
 
-pub(crate) mod auth_challenge;
-pub(crate) mod auth_response;
-pub(crate) mod auth_success;
-pub(crate) mod authenticate;
-pub(crate) mod batch;
-pub(crate) mod batchflags;
-pub(crate) mod consistency;
-pub(crate) mod decoder;
-pub(crate) mod encoder;
-pub(crate) mod error;
-pub(crate) mod header;
-pub(crate) mod opcode;
-pub(crate) mod options;
-pub(crate) mod prepare;
-pub(crate) mod query;
-pub(crate) mod queryflags;
-pub(crate) mod result;
-pub(crate) mod rows;
-pub(crate) mod startup;
-pub(crate) mod supported;
+pub mod bind;
+pub mod consistency;
+pub mod decoder;
+pub mod encoder;
+pub mod header;
+pub mod opcode;
+pub mod requests;
+pub mod responses;
+pub mod rows;
 
-pub use auth_response::{
-    AllowAllAuth,
-    PasswordAuth,
+pub use self::{
+    requests::{
+        auth_response::*,
+        batch::*,
+        batch_flags::*,
+        execute::*,
+        options::*,
+        prepare::*,
+        query::*,
+        query_flags::*,
+        register::*,
+        startup::*,
+        *,
+    },
+    responses::{
+        auth_challenge::*,
+        auth_success::*,
+        authenticate::*,
+        error::*,
+        event::*,
+        ready::*,
+        result::*,
+        supported::*,
+        *,
+    },
 };
-pub use auth_success::AuthSuccess;
-pub use batch::*;
+use crate::prelude::CompressionError;
+pub use bind::*;
 pub use consistency::Consistency;
 use core::fmt::Debug;
 pub use decoder::{
     ColumnDecoder,
-    Decoder,
-    Frame,
     RowsDecoder,
-    VoidDecoder,
+};
+use derive_more::{
+    From,
+    TryInto,
 };
 pub use encoder::{
     ColumnEncoder,
     TokenEncodeChain,
     TokenEncoder,
 };
-pub use error::{
-    CqlError,
-    ErrorCodes,
-};
-pub use prepare::Prepare;
-pub use query::{
-    Query,
-    QueryBuilder,
-};
+pub use header::Header;
 pub use rows::*;
 pub use std::convert::TryInto;
-use std::ops::{
-    Deref,
-    DerefMut,
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    net::{
+        IpAddr,
+        SocketAddr,
+    },
+    ops::{
+        Deref,
+        DerefMut,
+    },
 };
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum FrameError {
+    #[error("Invalid frame opcode. Expected {0:x}, got {1:x}")]
+    WrongHeaderOpcode(u8, u8),
+    #[error("Invalid frame header: {0}")]
+    InvalidHeader(anyhow::Error),
+    #[error("Invalid frame body: {0}")]
+    InvalidBody(anyhow::Error),
+    #[error("Invalid frame: {0}")]
+    InvalidFrame(anyhow::Error),
+    #[error("Payload is too small")]
+    TooSmall,
+    #[error(transparent)]
+    CompressionError(CompressionError),
+}
 
 #[derive(Debug, Clone)]
 pub struct Blob(pub Vec<u8>);
@@ -95,72 +124,270 @@ impl From<Vec<u8>> for Blob {
 }
 
 /// Big Endian 16-length, used for MD5 ID
-const MD5_BE_LENGTH: [u8; 2] = [0, 16];
+pub const MD5_BE_LENGTH: [u8; 2] = [0, 16];
 
-/// Defines how values are bound to the frame
-pub trait Binder {
-    type Error: Debug;
-    /// Add a single value
-    fn value<V: ColumnEncoder>(self, value: &V) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-    /// Add a single named value
-    fn named_value<V: ColumnEncoder>(self, name: &str, value: &V) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-    /// Add a slice of values
-    fn bind<V: Bindable>(self, values: &V) -> Result<Self, Self::Error>
-    where
-        Self: Sized,
-    {
-        values.bind(self)
+/// Get the `String` from a u8 slice.
+pub fn read_string(start: &mut usize, payload: &[u8]) -> anyhow::Result<String> {
+    anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes for string length");
+    let length = read_short(start, payload)? as usize;
+    anyhow::ensure!(payload.len() >= *start + length, "Not enough bytes for string");
+    let res = String::try_decode_column(&payload[*start..][..length])?;
+    *start += length;
+    Ok(res)
+}
+
+/// Get the `String` from a u8 slice.
+pub fn read_long_string(start: &mut usize, payload: &[u8]) -> anyhow::Result<String> {
+    anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for string length");
+    let length = read_int(start, payload)? as usize;
+    anyhow::ensure!(payload.len() >= *start + length, "Not enough bytes for string");
+    let res = String::try_decode_column(&payload[*start..][..length])?;
+    *start += length;
+    Ok(res)
+}
+
+/// Get the `&str` from a u8 payload.
+pub fn read_str<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a str> {
+    anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes for string length");
+    let length = read_short(start, payload)? as usize;
+    anyhow::ensure!(payload.len() >= *start + length, "Not enough bytes for string");
+    let res = std::str::from_utf8(&payload[*start..][..length])?;
+    *start += length;
+    Ok(res)
+}
+
+pub fn write_string(s: &str, payload: &mut Vec<u8>) {
+    payload.extend((s.len() as i16).to_be_bytes());
+    payload.extend(s.as_bytes());
+}
+
+/// Get the `&str` from a u8 payload.
+pub fn read_long_str<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a str> {
+    anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for string length");
+    let length = read_int(start, payload)? as usize;
+    anyhow::ensure!(payload.len() >= *start + length, "Not enough bytes for string");
+    let res = std::str::from_utf8(&payload[*start..][..length])?;
+    *start += length;
+    Ok(res)
+}
+
+pub fn write_long_string(s: &str, payload: &mut Vec<u8>) {
+    payload.extend((s.len() as i32).to_be_bytes());
+    payload.extend(s.as_bytes());
+}
+
+pub fn read_short(start: &mut usize, payload: &[u8]) -> anyhow::Result<i16> {
+    anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes for short");
+    let res = i16::from_be_bytes(payload[*start..][..2].try_into()?);
+    *start += 2;
+    Ok(res)
+}
+
+pub fn write_short(v: i16, payload: &mut Vec<u8>) {
+    payload.extend(v.to_be_bytes());
+}
+
+pub fn read_int(start: &mut usize, payload: &[u8]) -> anyhow::Result<i32> {
+    anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for int");
+    let res = i32::from_be_bytes(payload[*start..][..4].try_into()?);
+    *start += 4;
+    Ok(res)
+}
+
+pub fn write_int(v: i32, payload: &mut Vec<u8>) {
+    payload.extend(v.to_be_bytes());
+}
+
+pub fn read_long(start: &mut usize, payload: &[u8]) -> anyhow::Result<i64> {
+    anyhow::ensure!(payload.len() >= *start + 8, "Not enough bytes for long");
+    let res = i64::from_be_bytes(payload[*start..][..8].try_into()?);
+    *start += 8;
+    Ok(res)
+}
+
+pub fn write_long(v: i64, payload: &mut Vec<u8>) {
+    payload.extend(v.to_be_bytes());
+}
+
+/// Get the vector from byte payload.
+pub fn read_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a [u8]> {
+    anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for length");
+    let length = read_int(start, payload)?;
+    if length >= 0 {
+        anyhow::ensure!(payload.len() >= *start + length as usize, "Not enough bytes");
+        let res = &payload[*start..][..length as usize];
+        *start += length as usize;
+        Ok(res)
+    } else {
+        Ok(&[])
     }
-    /// Unset value
-    fn unset_value(self) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-    /// Set Null value, note: for write queries this will create tombstone for V;
-    fn null_value(self) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
 }
 
-/// Defines a query bindable value
-pub trait Bindable {
-    /// Bind the value using the provided binder
-    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error>;
+pub fn write_bytes(b: &[u8], payload: &mut Vec<u8>) {
+    payload.extend((b.len() as i32).to_be_bytes());
+    payload.extend(b);
 }
 
-impl<T: ColumnEncoder> Bindable for T {
-    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error> {
-        binder.value(self)
+/// Get the `short_bytes` from a u8 payload.
+pub fn read_short_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a [u8]> {
+    anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes");
+    let length = read_short(start, payload)?;
+    if length >= 0 {
+        anyhow::ensure!(payload.len() >= *start + length as usize, "Not enough bytes");
+        let res = &payload[*start..][..length as usize];
+        *start += length as usize;
+        Ok(res)
+    } else {
+        Ok(&[])
     }
 }
 
-impl Bindable for () {
-    fn bind<B: Binder>(&self, binder: B) -> Result<B, B::Error> {
-        Ok(binder)
+pub fn write_short_bytes(b: &[u8], payload: &mut Vec<u8>) {
+    payload.extend((b.len() as i16).to_be_bytes());
+    payload.extend(b);
+}
+
+/// Get the `prepared_id` from a u8 payload.
+pub fn read_prepared_id(start: &mut usize, payload: &[u8]) -> anyhow::Result<[u8; 16]> {
+    anyhow::ensure!(payload.len() >= *start + 18, "Not enough bytes for prepared id");
+    Ok(read_short_bytes(start, payload)?.try_into()?)
+}
+
+pub fn write_prepared_id(id: [u8; 16], payload: &mut Vec<u8>) {
+    payload.extend((id.len() as i16).to_be_bytes());
+    payload.extend(id);
+}
+
+// helper types frame functions
+/// Get the string list from a u8 payload.
+pub fn read_string_list(start: &mut usize, payload: &[u8]) -> anyhow::Result<Vec<String>> {
+    let list_len = read_short(start, payload)? as usize;
+    let mut list = Vec::with_capacity(list_len);
+    for _ in 0..list_len {
+        list.push(read_string(start, payload)?);
+    }
+    Ok(list)
+}
+
+pub fn write_string_list(l: &[String], payload: &mut Vec<u8>) {
+    payload.extend((l.len() as i16).to_be_bytes());
+    for s in l {
+        write_string(s, payload);
     }
 }
 
-impl<T: Bindable> Bindable for [T] {
-    fn bind<B: Binder>(&self, mut binder: B) -> Result<B, B::Error> {
-        for v in self.iter() {
-            binder = v.bind(binder)?;
+pub fn read_list<T: FromPayload>(start: &mut usize, payload: &[u8]) -> anyhow::Result<Vec<T>> {
+    let list_len = read_short(start, payload)? as usize;
+    let mut list = Vec::with_capacity(list_len);
+    for _ in 0..list_len {
+        list.push(T::from_payload(start, payload)?);
+    }
+    Ok(list)
+}
+
+pub fn write_list<T: ToPayload>(l: Vec<T>, payload: &mut Vec<u8>) {
+    payload.extend((l.len() as i16).to_be_bytes());
+    for v in l {
+        T::to_payload(v, payload);
+    }
+}
+
+pub fn read_string_map(start: &mut usize, payload: &[u8]) -> anyhow::Result<HashMap<String, String>> {
+    let length = read_short(start, payload)? as usize;
+    let mut multimap = HashMap::with_capacity(length);
+    for _ in 0..length {
+        multimap.insert(read_string(start, payload)?, read_string(start, payload)?);
+    }
+    Ok(multimap)
+}
+
+pub fn write_string_map(m: &HashMap<String, String>, payload: &mut Vec<u8>) {
+    payload.extend((m.len() as i16).to_be_bytes());
+    for (k, v) in m {
+        write_string(k, payload);
+        write_string(v, payload);
+    }
+}
+
+/// Get hashmap of string to string vector from payload.
+pub fn read_string_multimap(start: &mut usize, payload: &[u8]) -> anyhow::Result<HashMap<String, Vec<String>>> {
+    let length = read_short(start, payload)? as usize;
+    let mut multimap = HashMap::with_capacity(length);
+    for _ in 0..length {
+        multimap.insert(read_string(start, payload)?, read_string_list(start, payload)?);
+    }
+    Ok(multimap)
+}
+
+pub fn write_string_multimap(m: &HashMap<String, Vec<String>>, payload: &mut Vec<u8>) {
+    payload.extend((m.len() as i16).to_be_bytes());
+    for (k, v) in m {
+        write_string(k, payload);
+        write_string_list(v, payload);
+    }
+}
+
+pub fn read_inet(start: &mut usize, payload: &[u8]) -> anyhow::Result<SocketAddr> {
+    anyhow::ensure!(payload.len() > *start, "Not enough bytes for inet");
+    let address_len = payload[0] as usize;
+    *start += address_len + 5;
+    Ok(if address_len == 4 {
+        anyhow::ensure!(payload.len() >= *start + 8, "Not enough bytes for ipv4 inet");
+        SocketAddr::new(
+            IpAddr::V4(u32::from_be_bytes(payload[1..][..4].try_into()?).into()),
+            i32::from_be_bytes(payload[5..][..4].try_into()?) as u16,
+        )
+    } else {
+        anyhow::ensure!(payload.len() >= *start + 24, "Not enough bytes for ipv6 inet");
+        SocketAddr::new(
+            IpAddr::V6(u128::from_be_bytes(payload[1..][..16].try_into()?).into()),
+            i32::from_be_bytes(payload[16..][..4].try_into()?) as u16,
+        )
+    })
+}
+
+pub fn write_inet(a: SocketAddr, payload: &mut Vec<u8>) {
+    match a {
+        SocketAddr::V4(addr) => {
+            payload.push(4u8);
+            payload.extend(addr.ip().octets());
+            payload.extend((addr.port() as i32).to_be_bytes());
         }
-        Ok(binder)
+        SocketAddr::V6(addr) => {
+            payload.push(16u8);
+            payload.extend(addr.ip().octets());
+            payload.extend((addr.port() as i32).to_be_bytes());
+        }
     }
 }
 
-pub struct FrameBuilder;
+pub fn read_byte(start: &mut usize, payload: &[u8]) -> anyhow::Result<u8> {
+    anyhow::ensure!(payload.len() > *start, "Not enough bytes");
+    let res = payload[*start];
+    *start += 1;
+    Ok(res)
+}
 
-impl FrameBuilder {
-    pub fn build(header: [u8; 5], mut body: Vec<u8>) -> Vec<u8> {
-        let len = body.len() as i32;
-        body.reserve(9);
-        body.extend(header);
-        body.extend(i32::to_be_bytes(len));
-        body.rotate_right(9);
-        body
+pub fn write_byte(b: u8, payload: &mut Vec<u8>) {
+    payload.push(b);
+}
+
+pub trait FromPayload: Sized {
+    fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self>;
+}
+
+impl FromPayload for String {
+    fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
+        read_string(start, payload)
     }
+}
+
+impl FromPayload for SocketAddr {
+    fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
+        read_inet(start, payload)
+    }
+}
+
+pub trait ToPayload {
+    fn to_payload(self, payload: &mut Vec<u8>);
 }

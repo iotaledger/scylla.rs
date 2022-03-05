@@ -218,21 +218,16 @@ impl TableMetadata for TestTable {
 impl Table for TestTable {}
 
 impl TokenEncoder for TestTable {
-    type Error = <<Self as TableMetadata>::PartitionKey as TokenEncoder>::Error;
-
-    fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
+    fn encode_token(&self) -> TokenEncodeChain {
         self.key.encode_token()
     }
 }
 
-impl Row for TestTable {
-    fn try_decode_row<R: Rows + ColumnValue>(rows: &mut R) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
+impl RowDecoder for TestTable {
+    fn try_decode_row(mut row: ResultRow) -> anyhow::Result<Self> {
         Ok(Self {
-            key: rows.column_value()?,
-            data: rows.column_value()?,
+            key: row.decode_column()?,
+            data: row.decode_column()?,
         })
     }
 }

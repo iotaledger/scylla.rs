@@ -27,6 +27,8 @@ scylla-parse = { path = "../scylla-parse" }
 arc-swap = "1.5"
 maplit = "1.0"
 chrono = "0.4"
+derive_builder = "0.10"
+derive_more = "0.99"
 # App
 #backstage = { version = "0.1", optional = true }
 backstage = { git = "https://github.com/iotaledger/backstage", default-features = false, branch = "stable", optional = true, features = ["backserver"] }

@@ -37,7 +37,7 @@ impl From<PrepareRequest> for PrepareWorker {
     }
 }
 impl Worker for PrepareWorker {
-    fn handle_response(self: Box<Self>, _decoder: Decoder) -> anyhow::Result<()> {
+    fn handle_response(self: Box<Self>, _body: ResponseBody) -> anyhow::Result<()> {
         info!(
             "Successfully prepared statement: '{}'",
             Request::statement(&self.request)
@@ -69,9 +69,9 @@ impl RetryableWorker<PrepareRequest> for PrepareWorker {
     }
 }
 
-impl<H> IntoRespondingWorker<PrepareRequest, H, Decoder> for PrepareWorker
+impl<H> IntoRespondingWorker<PrepareRequest, H, ResponseBody> for PrepareWorker
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
 {
     type Output = RespondingPrepareWorker<H>;
 
@@ -97,10 +97,10 @@ pub struct RespondingPrepareWorker<H> {
 
 impl<H> Worker for RespondingPrepareWorker<H>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
 {
-    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
-        self.handle.handle_response(decoder)
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
+        self.handle.handle_response(body)
     }
     fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
@@ -113,7 +113,7 @@ where
 
 impl<H> RetryableWorker<PrepareRequest> for RespondingPrepareWorker<H>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
 {
     fn retries(&self) -> usize {
         self.retries
@@ -128,9 +128,9 @@ where
     }
 }
 
-impl<H> RespondingWorker<PrepareRequest, H, Decoder> for RespondingPrepareWorker<H>
+impl<H> RespondingWorker<PrepareRequest, H, ResponseBody> for RespondingPrepareWorker<H>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
 {
     fn handle(&self) -> &H {
         &self.handle

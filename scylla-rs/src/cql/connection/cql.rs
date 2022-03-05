@@ -1,48 +1,12 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use super::tokens::{
-    Info,
-    Row,
-};
-use crate::{
-    cql::{
-        auth_response::{
-            AuthResponse,
-            AuthResponseBuilder,
-        },
-        compression::{
-            Compression,
-            Uncompressed,
-        },
-        frame::{
-            auth_challenge::AuthChallenge,
-            auth_response::{
-                AllowAllAuth,
-                Authenticator,
-                PasswordAuth,
-            },
-            authenticate::Authenticate,
-            consistency::Consistency,
-            decoder::{
-                Decoder,
-                Frame,
-            },
-            options::Options,
-            query::Query,
-            rows::Rows,
-            startup::Startup,
-            supported::Supported,
-        },
-        startup::StartupBuilder,
-    },
-    prelude::QueryBuilder,
-};
+use crate::cql::*;
 use anyhow::{
     anyhow,
     bail,
-    ensure,
 };
+use compression::Compression;
 use port_scanner::{
     local_port_available,
     request_open_port,
@@ -193,100 +157,105 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
             .connect(self.address.ok_or_else(|| anyhow!("Address does not exist!"))?)
             .await?;
         // create options frame
-        let Options(opt_buf) = Options::new();
+        let opts_frame = RequestFrame::from(OptionsFrame);
         // write_all options frame to stream
-        stream.write_all(&opt_buf).await?;
+        stream.write_all(&opts_frame.build_payload()).await?;
         // collect_frame_response
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer. OPTIONS cannot be compressed as
         // the client and protocol didn't yet settle on compression algo (if any)
-        let decoder = Decoder::new::<Uncompressed>(buffer)?;
+        let response_frame = ResponseFrame::decode::<C>(buffer)?;
         // make sure the frame response is not error
-        if decoder.is_error()? {
-            // check if response is_error.
-            bail!("CQL connection not supported due to CqlError: {}", decoder.get_error()?);
-        }
-        ensure!(decoder.is_supported()?, "CQL connection not supported!");
-        // decode supported options from decoder
-        let supported = Supported::new(&decoder)?;
-        // create empty hashmap options;
-        let mut options: HashMap<String, String> = HashMap::new();
-        // get the supported_cql_version option;
-        let cql_version = supported
-            .get_options()
-            .get("CQL_VERSION")
-            .ok_or_else(|| anyhow!("Cannot read supported CQL versions!"))?
-            .first()
-            .ok_or_else(|| anyhow!("Cannot read supported CQL version!"))?;
-        // insert the supported_cql_version option into the options;
-        options.insert("CQL_VERSION".to_owned(), cql_version.to_owned());
-        // insert the supported_compression option into the options if it was set.;
-        if let Some(compression) = C::KIND {
-            options.insert("COMPRESSION".to_owned(), compression.to_string());
-        }
-        // create startup frame using the selected options;
-        let Startup(startup_buf) = StartupBuilder::default().options(&options).build()?;
-        // write_all startup frame to stream;
-        stream.write_all(&startup_buf).await?;
-        let buffer = collect_frame_response(&mut stream).await?;
-        // Create Decoder from buffer.
-        let decoder = Decoder::new::<C>(buffer)?;
-        if decoder.is_authenticate()? {
-            if self.authenticator.is_none() {
-                Authenticate::new(&decoder)?;
-                bail!("CQL connection not ready due to authenticator is not provided");
+        let supported = match response_frame.body() {
+            ResponseBody::Supported(sup_frame) => {
+                // create empty hashmap options;
+                let mut options: HashMap<String, String> = HashMap::new();
+                // get the supported_cql_version option;
+                let cql_version = sup_frame
+                    .options()
+                    .get("CQL_VERSION")
+                    .ok_or_else(|| anyhow!("Cannot read supported CQL versions!"))?
+                    .first()
+                    .ok_or_else(|| anyhow!("Cannot read supported CQL version!"))?;
+                // insert the supported_cql_version option into the options;
+                options.insert("CQL_VERSION".to_owned(), cql_version.to_owned());
+                // insert the supported_compression option into the options if it was set.;
+                if let Some(compression) = C::KIND {
+                    options.insert("COMPRESSION".to_owned(), compression.to_string());
+                }
+                // create startup frame using the selected options;
+                let startup_frame = RequestFrame::from(StartupFrameBuilder::default().options(options).build()?);
+                // write_all startup frame to stream;
+                stream.write_all(&startup_frame.build_payload()).await?;
+                let buffer = collect_frame_response(&mut stream).await?;
+                // Create Decoder from buffer.
+                let response_frame = ResponseFrame::decode::<C>(buffer)?;
+                match response_frame.body() {
+                    ResponseBody::Authenticate(auth_frame) => {
+                        if self.authenticator.is_none() {
+                            bail!("CQL connection not ready due to authenticator is not provided");
+                        }
+                        let auth_response_frame = RequestFrame::from(
+                            AuthResponseFrameBuilder::default()
+                                .auth_token(
+                                    self.authenticator
+                                        .as_ref()
+                                        .ok_or_else(|| anyhow!("Failed to read Auth Response!"))?,
+                                )
+                                .build()?,
+                        );
+                        // write_all auth_response frame to stream;
+                        stream.write_all(&auth_response_frame.build_payload()).await?;
+                        // collect_frame_response
+                        let buffer = collect_frame_response(&mut stream).await?;
+                        // Create Decoder from buffer.
+                        let response_frame = ResponseFrame::decode::<C>(buffer)?;
+                        match response_frame.body() {
+                            ResponseBody::AuthSuccess(_) => (),
+                            ResponseBody::AuthChallenge(auth_chal) => {
+                                todo!("Support auth challenges")
+                            }
+                            ResponseBody::Error(err) => {
+                                bail!("CQL connection not ready due to CqlError: {}", err);
+                            }
+                            _ => bail!("Invalid response from server!"),
+                        }
+                    }
+                    ResponseBody::Ready(_) => (),
+                    ResponseBody::Error(err) => {
+                        bail!("CQL connection not ready due to CqlError: {}", err);
+                    }
+                    _ => bail!("Invalid response from server!"),
+                }
+                sup_frame.options()
             }
-            let AuthResponse(auth_response) = AuthResponseBuilder::default()
-                .token(
-                    self.authenticator
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("Failed to read Auth Response!"))?,
-                )
-                .build()?;
-            // let auth_response = C::compress(&auth_response)?;
-            // write_all auth_response frame to stream;
-            stream.write_all(&auth_response).await?;
-            // collect_frame_response
-            let buffer = collect_frame_response(&mut stream).await?;
-            // Create Decoder from buffer.
-            let decoder = Decoder::new::<C>(buffer)?;
-            if decoder.is_error()? {
-                bail!("CQL connection not ready due to CqlError: {}", decoder.get_error()?);
+            ResponseBody::Error(err) => {
+                bail!("CQL connection not supported due to CqlError: {}", err);
             }
-            if decoder.is_auth_challenge()? {
-                AuthChallenge::new(&decoder)?;
-                bail!("CQL connection not ready due to Unsupported Auth Challenge");
+            _ => {
+                return Err(anyhow!("Unexpected response from server!"));
             }
-            ensure!(decoder.is_auth_success()?, "Authorization unsuccessful!");
-        } else if decoder.is_error()? {
-            bail!("CQL connection not ready due to CqlError: {}", decoder.get_error()?);
-        } else {
-            ensure!(decoder.is_ready()?, "Decoder is not ready!");
-        }
-        // copy usefull options
+        };
+        // copy useful options
         let shard: u16 = supported
-            .get_options()
             .get("SCYLLA_SHARD")
             .ok_or_else(|| anyhow!("Cannot read supported scylla shards!"))?
             .first()
             .ok_or_else(|| anyhow!("Cannot read scylla shard!"))?
             .parse()?;
         let nr_shard: u16 = supported
-            .get_options()
             .get("SCYLLA_NR_SHARDS")
             .ok_or_else(|| anyhow!("Cannot read supported scylla NR shards!"))?
             .first()
             .ok_or_else(|| anyhow!("Cannot read scylla NR shard!"))?
             .parse()?;
         let ignore_msb: u8 = supported
-            .get_options()
             .get("SCYLLA_SHARDING_IGNORE_MSB")
             .ok_or_else(|| anyhow!("Cannot read supported scylla ignore MSBs!"))?
             .first()
             .ok_or_else(|| anyhow!("Cannot read scylla scylla ignore MSB!"))?
             .parse()?;
         let shard_aware_port: u16 = supported
-            .get_options()
             .get("SCYLLA_SHARD_AWARE_PORT")
             .ok_or_else(|| {
                 anyhow!("Cannot read supported scylla shard aware ports! Try upgrading your Scylla to latest release!")
@@ -439,25 +408,33 @@ impl<C: Compression> Cql<C> {
         // create query to fetch tokens and info from system.local;
         let query = fetch_tokens_query::<C>()?;
         // write_all query to the stream
-        self.stream.write_all(query.as_slice()).await?;
+        self.stream.write_all(&query).await?;
         // collect_frame_response
         let buffer = collect_frame_response(&mut self.stream).await?;
         // Create Decoder from buffer.
-        let decoder = Decoder::new::<C>(buffer)?;
-
-        if decoder.is_rows()? {
-            let Row { data_center, tokens } = Info::new(decoder)?.next().ok_or(anyhow!("No info found!"))?;
-            self.dc.replace(data_center);
-            self.tokens.replace(
-                tokens
-                    .iter()
-                    .map(|x| Ok(x.parse()?))
-                    .filter_map(|r: anyhow::Result<i64>| r.ok())
-                    .collect(),
-            );
-        } else {
-            let error = decoder.get_error()?;
-            bail!("CQL connection didn't return rows due to CqlError: {error}");
+        let frame = ResponseFrame::decode::<C>(buffer)?;
+        match frame.body() {
+            ResponseBody::Result(res) => match res.kind() {
+                ResultBodyKind::Rows(r) => {
+                    let (data_center, tokens) = r
+                        .iter::<(String, Vec<String>)>()
+                        .next()
+                        .ok_or(anyhow!("No info found!"))?;
+                    self.dc.replace(data_center);
+                    self.tokens.replace(
+                        tokens
+                            .iter()
+                            .map(|x| Ok(x.parse()?))
+                            .filter_map(|r: anyhow::Result<i64>| r.ok())
+                            .collect(),
+                    );
+                }
+                _ => bail!("Unexpected result kind"),
+            },
+            ResponseBody::Error(err) => {
+                bail!("CQL connection didn't return rows due to CqlError: {}", err);
+            }
+            _ => bail!("Unexpected body kind"),
         }
         Ok(())
     }
@@ -510,9 +487,12 @@ async fn collect_frame_response(stream: &mut TcpStream) -> anyhow::Result<Vec<u8
 
 /// Query the data center, and tokens from the ScyllaDB.
 fn fetch_tokens_query<C: Compression>() -> anyhow::Result<Vec<u8>> {
-    let Query(payload) = QueryBuilder::default()
-        .statement("SELECT data_center, tokens FROM system.local")
-        .consistency(Consistency::One)
-        .build()?;
+    let frame = RequestFrame::from(
+        QueryFrameBuilder::default()
+            .statement("SELECT data_center, tokens FROM system.local".to_owned())
+            .consistency(Consistency::One)
+            .build()?,
+    );
+    let payload = C::compress(frame.build_payload())?;
     Ok(payload)
 }

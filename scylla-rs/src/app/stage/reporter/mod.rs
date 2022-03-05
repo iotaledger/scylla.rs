@@ -10,12 +10,11 @@ use crate::{
         Worker,
         WorkerError,
     },
-    cql::{
-        compression::Compression,
-        CqlError,
-        Decoder,
+    cql::compression::Compression,
+    prelude::{
+        ResponseBody,
+        ResponseFrame,
     },
-    prelude::Frame,
 };
 use async_trait::async_trait;
 use backstage::core::{
@@ -32,6 +31,7 @@ use backstage::core::{
 };
 use std::{
     collections::HashMap,
+    convert::TryFrom,
     marker::PhantomData,
 };
 
@@ -163,21 +163,18 @@ impl<C: 'static + Compression> Reporter<C> {
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = payloads[stream as usize].as_mut().take() {
-                match Decoder::new::<C>(payload) {
-                    Ok(decoder) => {
-                        if decoder.is_error().unwrap_or(true) {
-                            worker.handle_error(
-                                CqlError::new(&decoder)
-                                    .map(|e| WorkerError::Cql(e))
-                                    .unwrap_or_else(|e| WorkerError::Other(e)),
-                                Some(handle),
-                            )?;
-                        } else {
-                            worker.handle_response(decoder)?;
+                match ResponseFrame::decode::<C>(payload).map_err(WorkerError::FrameError)
+                {
+                    Ok(frame) => match frame.into_body() {
+                        ResponseBody::Error(err) => {
+                            worker.handle_error(WorkerError::Cql(err), Some(handle))?;
                         }
-                    }
+                        body => {
+                            worker.handle_response(body)?;
+                        }
+                    },
                     Err(e) => {
-                        worker.handle_error(WorkerError::Other(e), Some(handle))?;
+                        worker.handle_error(e, Some(handle))?;
                     }
                 }
             } else {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::prelude::ErrorCode;
 use std::fmt::Debug;
 
 /// A select worker
@@ -22,6 +23,7 @@ pub struct SelectWorker<H, R> {
 impl<H, R> SelectWorker<H, R>
 where
     H: 'static,
+    R: Request,
 {
     /// Create a new value selecting worker with a number of retries and a response handle
     pub fn new(request: R, handle: H) -> Box<Self> {
@@ -36,7 +38,7 @@ where
 
     pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Box<Self>
     where
-        H: HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+        H: HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
         R: 'static + Request + Debug + Send + Sync,
     {
         Self::new(request, handle).with_retries(retries)
@@ -52,26 +54,34 @@ where
 
 impl<H, R> Worker for SelectWorker<H, R>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync,
 {
-    fn handle_response(self: Box<Self>, decoder: Decoder) -> anyhow::Result<()> {
-        self.handle.handle_response(decoder)
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
+        self.handle.handle_response(body)
     }
 
     fn handle_error(self: Box<Self>, mut error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
         error!("{}", error);
         if let WorkerError::Cql(ref mut cql_error) = error {
-            if let (Some(id), Some(reporter)) = (cql_error.take_unprepared_id(), reporter) {
-                handle_unprepared_error(self, id, reporter).or_else(|worker| {
-                    error!("Error trying to reprepare query: {}", worker.request().statement());
-                    worker.handle.handle_error(error)
-                })
-            } else {
-                match self.retry() {
+            match cql_error.code() {
+                ErrorCode::Unprepared => {
+                    if let Some(reporter) = reporter {
+                        handle_unprepared_error(self, cql_error.unprepared_id().unwrap(), reporter).or_else(|worker| {
+                            error!("Error trying to reprepare query: {}", worker.request().statement());
+                            worker.handle.handle_error(error)
+                        })
+                    } else {
+                        match self.retry() {
+                            Ok(_) => Ok(()),
+                            Err(worker) => worker.handle.handle_error(error),
+                        }
+                    }
+                }
+                _ => match self.retry() {
                     Ok(_) => Ok(()),
                     Err(worker) => worker.handle.handle_error(error),
-                }
+                },
             }
         } else {
             match self.retry() {
@@ -84,7 +94,7 @@ where
 
 impl<H, R> RetryableWorker<R> for SelectWorker<H, R>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync,
 {
     fn retries(&self) -> usize {
@@ -100,9 +110,9 @@ where
     }
 }
 
-impl<R, H> RespondingWorker<R, H, Decoder> for SelectWorker<H, R>
+impl<R, H> RespondingWorker<R, H, ResponseBody> for SelectWorker<H, R>
 where
-    H: 'static + HandleResponse<Decoder> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Request + Sync,
 {
     fn handle(&self) -> &H {

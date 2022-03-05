@@ -6,6 +6,7 @@ pub(crate) mod batch;
 /// define delete queries for Key / Value pairs and how
 /// they are decoded
 pub(crate) mod delete;
+pub(crate) mod execute;
 /// Provides the `Insert` trait which can be implemented to
 /// define insert queries for Key / Value pairs and how
 /// they are decoded
@@ -14,6 +15,7 @@ pub(crate) mod insert;
 /// keyspace. Structs that impl this trait should also impl
 /// required query and decoder traits.
 pub(crate) mod keyspace;
+pub(crate) mod prepare;
 /// Provides the `Select` trait which can be implemented to
 /// define select queries for Key / Value pairs and how
 /// they are decoded
@@ -23,14 +25,15 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-pub(crate) mod execute;
-
-pub(crate) mod prepare;
-
 use super::{
     worker::BasicRetryWorker,
     Worker,
     WorkerError,
+};
+use crate::prelude::{
+    RequestFrame,
+    ResponseBody,
+    ResponseFrame,
 };
 pub use crate::{
     app::{
@@ -48,11 +51,9 @@ pub use crate::{
         Bindable,
         Binder,
         Consistency,
-        Decoder,
-        Query,
-        QueryBuilder,
+        ExecuteFrameBuilder,
+        QueryFrameBuilder,
         RowsDecoder,
-        VoidDecoder,
     },
     prelude::{
         IntoRespondingWorker,
@@ -494,7 +495,8 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
-        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self::Worker:
+            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         self.worker().get_local().await
     }
@@ -506,7 +508,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     ) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         worker.get_local().await
     }
@@ -514,7 +516,8 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     /// Send this request to the local datacenter and await the response synchronously
     fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self::Worker:
+            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         self.worker().get_local_blocking()
     }
@@ -525,7 +528,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         worker: Box<W>,
     ) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         worker.get_local_blocking()
     }
@@ -534,7 +537,8 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     async fn get_global(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
-        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self::Worker:
+            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         self.worker().get_global().await
     }
@@ -546,7 +550,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     ) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         worker.get_global().await
     }
@@ -554,7 +558,8 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     /// Send this request to a global datacenter and await the response synchronously
     fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        Self::Worker: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        Self::Worker:
+            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         self.worker().get_global_blocking()
     }
@@ -565,7 +570,7 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         worker: Box<W>,
     ) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<Decoder, WorkerError>>, Decoder>,
+        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         worker.get_global_blocking()
     }
@@ -687,14 +692,6 @@ pub trait GetStatementIdExt: Keyspace + Sized {
 
 impl<S: Keyspace> GetStatementIdExt for S {}
 
-#[derive(Debug, Error)]
-pub enum TokenBindError<T: TokenEncoder> {
-    #[error("Error binding values {0}")]
-    BindError(#[from] <QueryBuilder as Binder>::Error),
-    #[error("Error encoding token {0:?}")]
-    TokenEncodeError(T::Error),
-}
-
 /// A marker struct which holds types used for a query
 /// so that it may be decoded via `RowsDecoder` later
 #[derive(Clone, Copy, Default, Debug)]
@@ -711,21 +708,22 @@ impl<V> DecodeRows<V> {
 impl<V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
     pub fn decode<C: Compression>(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
-        V::try_decode_rows(Decoder::new::<C>(bytes)?)
+        V::try_decode_rows(ResponseFrame::decode::<C>(bytes)?.try_into()?)
     }
 }
 
 /// A marker struct which holds the keyspace type
 /// so that it may be decoded (checked for errors)
-/// via `VoidDecoder` later
+/// via `VoidFrame` later
 #[derive(Copy, Clone, Debug)]
 pub struct DecodeVoid;
 
 impl DecodeVoid {
-    /// Decode a result payload using the `VoidDecoder` impl
+    /// Decode a result payload using the `VoidFrame` impl
     #[inline]
     pub fn decode<C: Compression>(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        VoidDecoder::try_decode_void(Decoder::new::<C>(bytes)?)
+        ResponseFrame::decode::<C>(bytes)?;
+        Ok(())
     }
 }
 
@@ -738,12 +736,12 @@ pub trait Marker {
     fn new() -> Self;
 
     /// Try to decode the response payload using this marker
-    fn try_decode(&self, d: Decoder) -> anyhow::Result<Self::Output> {
+    fn try_decode(&self, d: ResponseBody) -> anyhow::Result<Self::Output> {
         Self::internal_try_decode(d)
     }
 
     #[allow(missing_docs)]
-    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output>;
+    fn internal_try_decode(d: ResponseBody) -> anyhow::Result<Self::Output>;
 }
 
 impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
@@ -753,8 +751,8 @@ impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
         DecodeRows::new()
     }
 
-    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
-        T::try_decode_rows(d)
+    fn internal_try_decode(d: ResponseBody) -> anyhow::Result<Self::Output> {
+        T::try_decode_rows(d.try_into()?)
     }
 }
 
@@ -765,8 +763,8 @@ impl Marker for DecodeVoid {
         Self
     }
 
-    fn internal_try_decode(d: Decoder) -> anyhow::Result<Self::Output> {
-        VoidDecoder::try_decode_void(d)
+    fn internal_try_decode(d: ResponseBody) -> anyhow::Result<Self::Output> {
+        Ok(())
     }
 }
 
@@ -891,9 +889,7 @@ mod tests {
     impl Table for MyTable {}
 
     impl TokenEncoder for MyTable {
-        type Error = <<Self as TableMetadata>::PartitionKey as TokenEncoder>::Error;
-
-        fn encode_token(&self) -> Result<TokenEncodeChain, Self::Error> {
+        fn encode_token(&self) -> TokenEncodeChain{
             self.key.encode_token()
         }
     }

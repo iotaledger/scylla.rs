@@ -16,26 +16,7 @@ pub mod prelude {
             ScyllaHandleExt,
             *,
         },
-        cql::{
-            compression::CompressionType,
-            Batch,
-            Binder,
-            ColumnDecoder,
-            ColumnEncoder,
-            ColumnValue,
-            Consistency,
-            Decoder,
-            Frame,
-            Iter,
-            Prepare,
-            Query,
-            Row,
-            Rows,
-            RowsDecoder,
-            TokenEncodeChain,
-            TokenEncoder,
-            VoidDecoder,
-        },
+        cql::*,
     };
     pub use backstage::core::*;
     pub use maplit::{

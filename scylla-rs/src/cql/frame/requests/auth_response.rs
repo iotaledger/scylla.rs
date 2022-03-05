@@ -3,15 +3,44 @@
 
 //! This module implements the response part of the challenge–response authentication.
 
-use super::{
-    opcode::AUTH_RESPONSE,
-    FrameBuilder,
-};
-use std::convert::TryInto;
-use thiserror::Error;
+use super::*;
 
-/// Blanket cql frame header for AUTH_RESPONSE frame.
-const AUTH_RESPONSE_HEADER: [u8; 5] = [4, 0, 0, 0, AUTH_RESPONSE];
+/// The authentication response frame.
+#[derive(Debug, Clone, Builder)]
+#[builder(derive(Clone, Debug))]
+#[builder(pattern = "owned", setter(strip_option))]
+pub struct AuthResponseFrame {
+    pub(crate) token: Vec<u8>,
+}
+
+impl AuthResponseFrame {
+    /// Get the authentication token.
+    pub fn token(&self) -> &[u8] {
+        &self.token
+    }
+}
+
+impl FromPayload for AuthResponseFrame {
+    fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
+        Ok(Self {
+            token: read_bytes(start, payload)?.to_vec(),
+        })
+    }
+}
+
+impl ToPayload for AuthResponseFrame {
+    fn to_payload(self, payload: &mut Vec<u8>) {
+        write_bytes(&self.token, payload);
+    }
+}
+
+impl AuthResponseFrameBuilder {
+    pub fn auth_token(mut self, authenticator: &impl Authenticator) -> Self {
+        let token = authenticator.token();
+        self.token.replace(token);
+        self
+    }
+}
 
 /// The Authenticator structure with the token field.
 pub trait Authenticator: Clone + Default {
@@ -31,7 +60,7 @@ impl Authenticator for AllowAllAuth {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
-/// The password autentication structure with the user and password fields.
+/// The password authentication structure with the user and password fields.
 pub struct PasswordAuth {
     user: String,
     pass: String,
@@ -60,36 +89,5 @@ impl Authenticator for PasswordAuth {
         token.push(0);
         token.extend_from_slice(self.pass.as_bytes());
         token
-    }
-}
-
-/// The autentication response frame.
-pub struct AuthResponse(pub Vec<u8>);
-
-#[derive(Debug, Clone, Default)]
-pub struct AuthResponseBuilder {
-    token: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Error)]
-pub enum AuthResponseBuildError {
-    #[error("No token provided")]
-    NoToken,
-}
-
-impl AuthResponseBuilder {
-    /// Update the response token to be the token from autenticator.
-    pub fn token(mut self, authenticator: &impl Authenticator) -> Self {
-        let token = authenticator.token();
-        self.token.replace(token);
-        self
-    }
-
-    /// Build the prepare frame with an assigned compression type.
-    pub fn build(mut self) -> Result<AuthResponse, AuthResponseBuildError> {
-        Ok(AuthResponse(FrameBuilder::build(
-            AUTH_RESPONSE_HEADER,
-            self.token.take().ok_or_else(|| AuthResponseBuildError::NoToken)?,
-        )))
     }
 }
