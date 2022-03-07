@@ -17,11 +17,11 @@ use std::{
 /// The CQL error structure.
 pub struct ErrorFrame {
     /// The Error code.
-    pub(crate) code: ErrorCode,
+    pub code: ErrorCode,
     /// The message string.
-    pub(crate) message: String,
+    pub message: String,
     /// The additional Error information.
-    pub(crate) additional: Option<Additional>,
+    pub additional: Option<Additional>,
 }
 
 impl Display for ErrorFrame {

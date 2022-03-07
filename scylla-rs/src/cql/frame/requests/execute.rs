@@ -14,7 +14,7 @@ pub struct ExecuteFrame {
     #[builder(default)]
     pub(crate) flags: QueryFlags,
     #[builder(private, default)]
-    pub(crate) values: Vec<(Option<String>, Value)>,
+    pub(crate) values: Values,
     #[builder(default)]
     pub(crate) page_size: Option<i32>,
     #[builder(default)]
@@ -38,7 +38,7 @@ impl ExecuteFrame {
         self.flags
     }
 
-    pub fn values(&self) -> &Vec<(Option<String>, Value)> {
+    pub fn values(&self) -> &Values {
         &self.values
     }
 
@@ -65,12 +65,12 @@ impl FromPayload for ExecuteFrame {
         let consistency = Consistency::try_from(read_short(start, payload)?)?;
         let flags = QueryFlags(read_byte(start, payload)?);
         let value_count = read_short(start, payload)?;
-        let mut values = Vec::new();
+        let mut values = Values::default();
         for _ in 0..value_count {
             if flags.named_values() {
-                values.push((Some(read_string(start, payload)?), Value::from_payload(start, payload)?));
+                values.push(Some(read_str(start, payload)?), read_bytes(start, payload)?);
             } else {
-                values.push((None, Value::from_payload(start, payload)?));
+                values.push(None, read_bytes(start, payload)?);
             }
         }
         let page_size = if flags.page_size() {
@@ -108,20 +108,15 @@ impl FromPayload for ExecuteFrame {
 
 impl ToPayload for ExecuteFrame {
     fn to_payload(self, payload: &mut Vec<u8>) {
-        payload.reserve(self.values.len() + self.paging_state.as_ref().map(|s| s.len()).unwrap_or_default() + 41);
+        payload.reserve(
+            self.values.payload().len() + self.paging_state.as_ref().map(|s| s.len()).unwrap_or_default() + 41,
+        );
         write_prepared_id(self.id, payload);
         write_short(self.consistency as i16, payload);
         write_byte(self.flags.0, payload);
         if self.flags.values() {
             write_short(self.values.len() as i16, payload);
-            for (n, v) in self.values {
-                if let Some(name) = n {
-                    if self.flags.named_values() {
-                        write_string(&name, payload);
-                    }
-                }
-                v.to_payload(payload);
-            }
+            payload.extend(self.values.payload());
         }
         if let Some(page_size) = self.page_size {
             if self.flags.page_size() {
@@ -169,7 +164,7 @@ pub enum ExecuteBindError {
 
 impl Binder for ExecuteFrameBuilder {
     type Error = ExecuteBindError;
-    /// Set the next value in the query frame.
+    /// Set the next value in the execute frame.
     fn value<V: ColumnEncoder>(mut self, value: &V) -> Result<Self, Self::Error> {
         if let Some(flags) = &mut self.flags {
             flags.set_values(true);
@@ -180,34 +175,33 @@ impl Binder for ExecuteFrameBuilder {
             self.flags.replace(flags);
         }
         // apply value
-        let mut value_buf = Vec::new();
-        value.encode(&mut value_buf);
+        let value_buf = value.encode_new();
         if self.values.is_none() {
-            self.values = Some(Vec::new());
+            self.values = Some(Values::default());
         }
         let values = self.values.as_mut().unwrap();
-        values.push((None, Value::Set(value_buf)));
+        values.push(None, value_buf.as_slice());
         Ok(self)
     }
-    /// Set the value to be unset in the query frame.
+    /// Set the value to be unset in the execute frame.
     fn unset_value(mut self) -> Result<Self, Self::Error> {
         // apply value
         if self.values.is_none() {
-            self.values = Some(Vec::new());
+            self.values = Some(Values::default());
         }
         let values = self.values.as_mut().unwrap();
-        values.push((None, Value::Unset));
+        values.push_unset(None);
         Ok(self)
     }
 
-    /// Set the value to be null in the query frame.
+    /// Set the value to be null in the execute frame.
     fn null_value(mut self) -> Result<Self, Self::Error> {
         // apply value
         if self.values.is_none() {
-            self.values = Some(Vec::new());
+            self.values = Some(Values::default());
         }
         let values = self.values.as_mut().unwrap();
-        values.push((None, Value::Null));
+        values.push_null(None);
         Ok(self)
     }
 }

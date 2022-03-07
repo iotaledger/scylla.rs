@@ -4,13 +4,12 @@
 //! This module implements the Supported frame.
 
 use super::*;
-use crate::cql::read_string_multimap;
 use std::collections::HashMap;
 
 /// The supported frame with options field.
 #[derive(Clone, Debug)]
 pub struct SupportedFrame {
-    pub(crate) options: HashMap<String, Vec<String>>,
+    pub options: HashMap<String, Vec<String>>,
 }
 
 impl SupportedFrame {

@@ -66,7 +66,7 @@ use super::*;
 /// let worker = request.worker();
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub trait Update<K: TokenEncoder, V>: Table {
+pub trait Update<K: Bindable, V>: Table {
     /// Create your update statement here.
     fn statement(keyspace: &dyn Keyspace) -> UpdateStatement;
 
@@ -75,7 +75,7 @@ pub trait Update<K: TokenEncoder, V>: Table {
 }
 
 /// Specifies helper functions for creating static update requests from a keyspace with a `Delete<K, V>` definition
-pub trait GetStaticUpdateRequest<K: Bindable + TokenEncoder, V>: Table {
+pub trait GetStaticUpdateRequest<K: Bindable, V>: Table {
     /// Create a static update request from a keyspace with a `Update<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
     ///
@@ -147,13 +147,14 @@ pub trait GetStaticUpdateRequest<K: Bindable + TokenEncoder, V>: Table {
     {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
+        let token_indexes = statement.token_indexes::<Self>();
         let statement = statement.to_string();
         let mut builder = QueryFrameBuilder::default()
             .consistency(Consistency::Quorum)
             .statement(statement.clone());
         builder = Self::bind_values(builder, key, values)?;
         Ok(UpdateBuilder {
-            token: Some(key.token()),
+            token_indexes,
             builder,
             statement,
             keyspace,
@@ -231,13 +232,14 @@ pub trait GetStaticUpdateRequest<K: Bindable + TokenEncoder, V>: Table {
     {
         let statement = Self::statement(keyspace);
         let keyspace = statement.get_keyspace();
+        let token_indexes = statement.token_indexes::<Self>();
         let statement = statement.to_string();
         let mut builder = ExecuteFrameBuilder::default()
             .consistency(Consistency::Quorum)
             .id(statement.id());
         builder = Self::bind_values(builder, key, values)?;
         Ok(UpdateBuilder {
-            token: Some(key.token()),
+            token_indexes,
             builder,
             statement,
             keyspace,
@@ -245,7 +247,7 @@ pub trait GetStaticUpdateRequest<K: Bindable + TokenEncoder, V>: Table {
         })
     }
 }
-impl<T: Table, K: Bindable + TokenEncoder, V> GetStaticUpdateRequest<K, V> for T {}
+impl<T: Table, K: Bindable, V> GetStaticUpdateRequest<K, V> for T {}
 
 /// Specifies helper functions for creating dynamic insert requests from anything that can be interpreted as a statement
 
@@ -289,7 +291,7 @@ impl AsDynamicUpdateRequest for UpdateStatement {
                 .statement(statement.clone()),
             statement,
             keyspace,
-            token: None,
+            token_indexes: Default::default(),
             _marker: PhantomData,
         }
     }
@@ -303,18 +305,17 @@ impl AsDynamicUpdateRequest for UpdateStatement {
                 .id(statement.id()),
             statement,
             keyspace,
-            token: None,
+            token_indexes: Default::default(),
             _marker: PhantomData,
         }
     }
 }
 
-#[derive(Debug)]
 pub struct UpdateBuilder<R, B> {
     keyspace: Option<String>,
     statement: String,
     builder: B,
-    token: Option<i64>,
+    token_indexes: Vec<usize>,
     _marker: PhantomData<fn(R) -> R>,
 }
 
@@ -330,11 +331,19 @@ impl<R> UpdateBuilder<R, QueryFrameBuilder> {
     }
 
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let frame = self.builder.build()?;
+        let mut token = TokenEncodeChain::default();
+        for idx in self.token_indexes {
+            if frame.values.len() <= idx {
+                anyhow::bail!("No value bound at index {}", idx);
+            }
+            token.append(&frame.values[idx]);
+        }
         Ok(CommonRequest {
-            token: self.token.unwrap_or_else(|| rand::random()),
-            payload: RequestFrame::from(self.builder.build()?).build_payload(),
+            token: token.finish(),
+            statement: frame.statement().clone(),
+            payload: RequestFrame::from(frame).build_payload(),
             keyspace: self.keyspace,
-            statement: self.statement,
         }
         .into())
     }
@@ -352,33 +361,84 @@ impl<R> UpdateBuilder<R, ExecuteFrameBuilder> {
     }
 
     pub fn build(self) -> anyhow::Result<UpdateRequest> {
+        let frame = self.builder.build()?;
+        let mut token = TokenEncodeChain::default();
+        for idx in self.token_indexes {
+            if frame.values.len() <= idx {
+                anyhow::bail!("No value bound at index {}", idx);
+            }
+            token.append(&frame.values[idx]);
+        }
         Ok(CommonRequest {
-            token: self.token.unwrap_or_else(|| rand::random()),
-            payload: RequestFrame::from(self.builder.build()?).build_payload(),
-            keyspace: self.keyspace,
+            token: token.finish(),
             statement: self.statement,
+            payload: RequestFrame::from(frame).build_payload(),
+            keyspace: self.keyspace,
         }
         .into())
     }
 }
 
 impl<B: Binder> UpdateBuilder<DynamicRequest, B> {
-    pub fn token<V: TokenEncoder>(mut self, value: &V) -> Self {
-        self.token.replace(value.token());
-        self
-    }
-
     pub fn bind<V: Bindable>(mut self, value: &V) -> Result<Self, B::Error> {
         self.builder = self.builder.bind(value)?;
         Ok(self)
     }
+}
 
-    pub fn bind_token<V: Bindable + TokenEncoder>(mut self, value: &V) -> Result<Self, B::Error> {
-        self.token.replace(value.token());
-        self.builder = self.builder.bind(value)?;
-        Ok(self)
+impl<R> From<PreparedQuery> for UpdateBuilder<R, ExecuteFrameBuilder> {
+    fn from(res: PreparedQuery) -> Self {
+        Self {
+            keyspace: res.keyspace,
+            statement: res.statement,
+            builder: ExecuteFrameBuilder::default()
+                .id(res.result.id)
+                .consistency(Consistency::Quorum),
+            token_indexes: res.result.metadata().pk_indexes().iter().map(|v| *v as usize).collect(),
+            _marker: PhantomData,
+        }
     }
 }
+
+impl<R, B: std::fmt::Debug> std::fmt::Debug for UpdateBuilder<R, B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateBuilder")
+            .field("keyspace", &self.keyspace)
+            .field("statement", &self.statement)
+            .field("builder", &self.builder)
+            .field("token_indexes", &self.token_indexes)
+            .finish()
+    }
+}
+
+impl<R, B: Clone> Clone for UpdateBuilder<R, B> {
+    fn clone(&self) -> Self {
+        Self {
+            keyspace: self.keyspace.clone(),
+            statement: self.statement.clone(),
+            builder: self.builder.clone(),
+            token_indexes: self.token_indexes.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<R> TryInto<UpdateRequest> for UpdateBuilder<R, QueryFrameBuilder> {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<UpdateRequest, Self::Error> {
+        self.build()
+    }
+}
+impl<R> TryInto<UpdateRequest> for UpdateBuilder<R, ExecuteFrameBuilder> {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<UpdateRequest, Self::Error> {
+        self.build()
+    }
+}
+impl<R> SendAsRequestExt<UpdateRequest> for UpdateBuilder<R, QueryFrameBuilder> {}
+impl<R> SendAsRequestExt<UpdateRequest> for UpdateBuilder<R, ExecuteFrameBuilder> {}
 
 /// A request to update a record which can be sent to the ring
 #[derive(Debug, Clone)]
@@ -416,7 +476,7 @@ impl Request for UpdateRequest {
     fn payload(&self) -> Vec<u8> {
         self.0.payload()
     }
-    fn keyspace(&self) -> &Option<String> {
+    fn keyspace(&self) -> Option<&String> {
         self.0.keyspace()
     }
 }
@@ -428,5 +488,9 @@ impl SendRequestExt for UpdateRequest {
 
     fn worker(self) -> Box<Self::Worker> {
         BasicRetryWorker::new(self)
+    }
+
+    fn marker(&self) -> Self::Marker {
+        DecodeVoid
     }
 }

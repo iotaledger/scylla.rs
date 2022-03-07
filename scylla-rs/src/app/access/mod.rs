@@ -31,9 +31,11 @@ use super::{
     WorkerError,
 };
 use crate::prelude::{
+    PreparedResult,
     RequestFrame,
     ResponseBody,
     ResponseFrame,
+    ResultBodyKind,
 };
 pub use crate::{
     app::{
@@ -56,9 +58,11 @@ pub use crate::{
         RowsDecoder,
     },
     prelude::{
+        ColumnEncoder,
         IntoRespondingWorker,
         ReporterHandle,
         RetryableWorker,
+        TokenEncodeChain,
         TokenEncoder,
     },
 };
@@ -88,6 +92,7 @@ pub use insert::{
 pub use keyspace::Keyspace;
 pub use prepare::{
     AsDynamicPrepareRequest,
+    AsDynamicPrepareSelectRequest,
     GetStaticPrepareRequest,
     PrepareRequest,
 };
@@ -130,8 +135,8 @@ pub trait TableMetadata {
     const COLS: &'static [(&'static str, NativeType)];
     const PARTITION_KEY: &'static [&'static str];
     const CLUSTERING_COLS: &'static [(&'static str, Order)];
-    type PartitionKey: TokenEncoder + Bindable;
-    type PrimaryKey: TokenEncoder + Bindable;
+    type PartitionKey: Bindable;
+    type PrimaryKey: Bindable;
 
     fn partition_key(&self) -> &Self::PartitionKey;
 
@@ -190,32 +195,31 @@ impl<T: ToString> IdExt for T {
     }
 }
 
-pub trait TokenIndices: Table {
-    fn select_indices(stmt: &SelectStatement) -> Vec<usize>;
+pub trait TokenIndices {
+    fn token_indexes<T: TableMetadata + ?Sized>(&self) -> Vec<usize>;
 
-    fn insert_indices(stmt: &InsertStatement) -> Vec<usize>;
-
-    fn update_indices(stmt: &UpdateStatement) -> Vec<usize>;
-
-    fn delete_indices(stmt: &DeleteStatement) -> Vec<usize>;
-
-    fn check_term(term: &Term, col: Option<&String>, idx: &mut usize, map: &mut BTreeMap<usize, usize>) {
+    fn check_term<T: TableMetadata + ?Sized>(
+        term: &Term,
+        col: Option<&String>,
+        idx: &mut usize,
+        map: &mut BTreeMap<usize, usize>,
+    ) {
         match term {
             Term::FunctionCall(f) => {
                 for t in f.args.iter() {
-                    Self::check_term(t, col, idx, map)
+                    Self::check_term::<T>(t, col, idx, map)
                 }
             }
             Term::ArithmeticOp { lhs, op: _, rhs } => {
                 match lhs {
-                    Some(t) => Self::check_term(&**t, col, idx, map),
+                    Some(t) => Self::check_term::<T>(&**t, col, idx, map),
                     _ => (),
                 }
-                Self::check_term(&**rhs, col, idx, map)
+                Self::check_term::<T>(&**rhs, col, idx, map)
             }
             Term::BindMarker(_) => {
                 if let Some(col) = col {
-                    if let Some(key_idx) = Self::PARTITION_KEY.iter().position(|&c| c == col.as_str()) {
+                    if let Some(key_idx) = T::PARTITION_KEY.iter().position(|&c| c == col.as_str()) {
                         map.insert(key_idx, *idx);
                     }
                 }
@@ -225,20 +229,29 @@ pub trait TokenIndices: Table {
         }
     }
 
-    fn check_selector(selector: &Selector, col: Option<&String>, idx: &mut usize, map: &mut BTreeMap<usize, usize>) {
+    fn check_selector<T: TableMetadata + ?Sized>(
+        selector: &Selector,
+        col: Option<&String>,
+        idx: &mut usize,
+        map: &mut BTreeMap<usize, usize>,
+    ) {
         match &selector.kind {
-            SelectorKind::Term(t) => Self::check_term(t, col, idx, map),
-            SelectorKind::Cast(s, _) => Self::check_selector(&**s, col, idx, map),
+            SelectorKind::Term(t) => Self::check_term::<T>(t, col, idx, map),
+            SelectorKind::Cast(s, _) => Self::check_selector::<T>(&**s, col, idx, map),
             SelectorKind::Function(f) => {
                 for s in f.args.iter() {
-                    Self::check_selector(s, col, idx, map)
+                    Self::check_selector::<T>(s, col, idx, map)
                 }
             }
             _ => (),
         }
     }
 
-    fn check_where(where_clause: &WhereClause, idx: &mut usize, map: &mut BTreeMap<usize, usize>) {
+    fn check_where<T: TableMetadata + ?Sized>(
+        where_clause: &WhereClause,
+        idx: &mut usize,
+        map: &mut BTreeMap<usize, usize>,
+    ) {
         for r in where_clause.relations.iter() {
             match r {
                 Relation::Normal {
@@ -246,7 +259,7 @@ pub trait TokenIndices: Table {
                     operator: _,
                     term,
                 } => {
-                    Self::check_term(
+                    Self::check_term::<T>(
                         term,
                         Some(match column {
                             Name::Quoted(s) | Name::Unquoted(s) => s,
@@ -259,14 +272,14 @@ pub trait TokenIndices: Table {
                     columns: _,
                     operator: _,
                     term,
-                } => Self::check_term(term, None, idx, map),
+                } => Self::check_term::<T>(term, None, idx, map),
                 Relation::Tuple {
                     columns: _,
                     operator: _,
                     tuple_literal,
                 } => {
                     for t in tuple_literal.elements.iter() {
-                        Self::check_term(t, None, idx, map);
+                        Self::check_term::<T>(t, None, idx, map);
                     }
                 }
                 _ => (),
@@ -275,33 +288,35 @@ pub trait TokenIndices: Table {
     }
 }
 
-impl<T: Table> TokenIndices for T {
-    fn select_indices(stmt: &SelectStatement) -> Vec<usize> {
+impl TokenIndices for SelectStatement {
+    fn token_indexes<T: TableMetadata + ?Sized>(&self) -> Vec<usize> {
         let mut idx = 0;
         let mut map = BTreeMap::new();
         // Check select clause for bind markers
-        match &stmt.select_clause {
+        match &self.select_clause {
             SelectClause::Selectors(selectors) => {
                 for s in selectors.iter() {
-                    Self::check_selector(s, None, &mut idx, &mut map);
+                    Self::check_selector::<T>(s, None, &mut idx, &mut map);
                 }
             }
             SelectClause::All => (),
         }
         // Check where clause for bind markers
-        if let Some(where_clause) = &stmt.where_clause {
-            Self::check_where(where_clause, &mut idx, &mut map);
+        if let Some(where_clause) = &self.where_clause {
+            Self::check_where::<T>(where_clause, &mut idx, &mut map);
         }
         map.into_values().collect()
     }
+}
 
-    fn insert_indices(stmt: &InsertStatement) -> Vec<usize> {
+impl TokenIndices for InsertStatement {
+    fn token_indexes<T: TableMetadata + ?Sized>(&self) -> Vec<usize> {
         let mut idx = 0;
         let mut map = BTreeMap::new();
-        match &stmt.kind {
+        match &self.kind {
             InsertKind::NameValue { names, values } => {
                 for (name, value) in names.iter().zip(values.elements.iter()) {
-                    Self::check_term(
+                    Self::check_term::<T>(
                         value,
                         Some(match name {
                             Name::Quoted(s) | Name::Unquoted(s) => s,
@@ -315,19 +330,21 @@ impl<T: Table> TokenIndices for T {
         }
         map.into_values().collect()
     }
+}
 
-    fn update_indices(stmt: &UpdateStatement) -> Vec<usize> {
+impl TokenIndices for UpdateStatement {
+    fn token_indexes<T: TableMetadata + ?Sized>(&self) -> Vec<usize> {
         let mut idx = 0;
         let mut map = BTreeMap::new();
         // Check set clause for bind markers
-        for a in stmt.set_clause.iter() {
+        for a in self.set_clause.iter() {
             match a {
                 Assignment::Simple { selection, term } => {
                     match selection {
-                        SimpleSelection::Term(_, t) => Self::check_term(t, None, &mut idx, &mut map),
+                        SimpleSelection::Term(_, t) => Self::check_term::<T>(t, None, &mut idx, &mut map),
                         _ => (),
                     }
-                    Self::check_term(term, None, &mut idx, &mut map);
+                    Self::check_term::<T>(term, None, &mut idx, &mut map);
                 }
                 Assignment::Arithmetic {
                     assignee: _,
@@ -335,7 +352,7 @@ impl<T: Table> TokenIndices for T {
                     op: _,
                     rhs,
                 } => {
-                    Self::check_term(rhs, None, &mut idx, &mut map);
+                    Self::check_term::<T>(rhs, None, &mut idx, &mut map);
                 }
                 Assignment::Append {
                     assignee: _,
@@ -343,35 +360,39 @@ impl<T: Table> TokenIndices for T {
                     item: _,
                 } => {
                     for t in list.elements.iter() {
-                        Self::check_term(t, None, &mut idx, &mut map);
+                        Self::check_term::<T>(t, None, &mut idx, &mut map);
                     }
                 }
             }
         }
         // Check where clause for bind markers
-        Self::check_where(&stmt.where_clause, &mut idx, &mut map);
+        Self::check_where::<T>(&self.where_clause, &mut idx, &mut map);
         map.into_values().collect()
     }
+}
 
-    fn delete_indices(stmt: &DeleteStatement) -> Vec<usize> {
+impl TokenIndices for DeleteStatement {
+    fn token_indexes<T: TableMetadata + ?Sized>(&self) -> Vec<usize> {
         let mut idx = 0;
         let mut map = BTreeMap::new();
         // Check select clause for bind markers
-        if let Some(selections) = &stmt.selections {
+        if let Some(selections) = &self.selections {
             for selection in selections.iter() {
                 match selection {
-                    SimpleSelection::Term(_, t) => Self::check_term(t, None, &mut idx, &mut map),
+                    SimpleSelection::Term(_, t) => Self::check_term::<T>(t, None, &mut idx, &mut map),
                     _ => (),
                 }
             }
         }
         // Check where clause for bind markers
-        Self::check_where(&stmt.where_clause, &mut idx, &mut map);
+        Self::check_where::<T>(&self.where_clause, &mut idx, &mut map);
         map.into_values().collect()
     }
 }
 
+#[derive(Debug)]
 pub struct StaticRequest;
+#[derive(Debug)]
 pub struct DynamicRequest;
 
 /// The possible request types
@@ -411,7 +432,7 @@ pub trait Request {
     fn payload(&self) -> Vec<u8>;
 
     /// get the keyspace of the request
-    fn keyspace(&self) -> &Option<String>;
+    fn keyspace(&self) -> Option<&String>;
 }
 
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
@@ -424,13 +445,16 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     /// The request type
     const TYPE: RequestType;
 
+    fn marker(&self) -> Self::Marker;
+
     /// Create a worker containing this request
     fn worker(self) -> Box<Self::Worker>;
 
     /// Send this request to a specific reporter, without waiting for a response
     fn send_to_reporter(self, reporter: &ReporterHandle) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        let marker = self.marker();
         self.worker().send_to_reporter(reporter)?;
-        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+        Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request and worker to a specific reporter, without waiting for a response
@@ -439,19 +463,16 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         reporter: &ReporterHandle,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        let marker = self.marker();
         worker.send_to_reporter(reporter)?;
-        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+        Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request to the local datacenter, without waiting for a response
     fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_local(
-            self.keyspace().clone().as_ref().map(|s| s.as_str()),
-            self.token(),
-            self.payload(),
-            self.worker(),
-        )?;
-        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+        let marker = self.marker();
+        self.worker().send_local()?;
+        Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request and worker to the local datacenter, without waiting for a response
@@ -459,23 +480,20 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        let marker = self.marker();
         send_local(
             self.keyspace().clone().as_ref().map(|s| s.as_str()),
             self.token(),
             self.payload(),
             worker,
         )?;
-        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+        Ok(DecodeResult::new(marker, Self::TYPE))
     }
     /// Send this request to a global datacenter, without waiting for a response
     fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
-        send_global(
-            self.keyspace().clone().as_ref().map(|s| s.as_str()),
-            self.token(),
-            self.payload(),
-            self.worker(),
-        )?;
-        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+        let marker = self.marker();
+        self.worker().send_global()?;
+        Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request and worker to a global datacenter, without waiting for a response
@@ -483,13 +501,14 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
         self,
         worker: Box<W>,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+        let marker = self.marker();
         send_global(
-            self.keyspace().as_ref().map(|s| s.as_str()),
+            self.keyspace().clone().as_ref().map(|s| s.as_str()),
             self.token(),
             self.payload(),
             worker,
         )?;
-        Ok(DecodeResult::new(Self::Marker::new(), Self::TYPE))
+        Ok(DecodeResult::new(marker, Self::TYPE))
     }
     /// Send this request to the local datacenter and await the response asynchronously
     async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
@@ -576,6 +595,157 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     }
 }
 
+/// Extension trait which provides helper functions for sending requests and retrieving their responses
+#[async_trait::async_trait]
+pub trait SendAsRequestExt<R>
+where
+    Self: TryInto<R>,
+    R: SendRequestExt,
+    Self::Error: Debug,
+{
+    /// Send this request to a specific reporter, without waiting for a response
+    fn send_to_reporter(self, reporter: &ReporterHandle) -> Result<DecodeResult<R::Marker>, RequestError> {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .send_to_reporter(reporter)
+    }
+
+    /// Send this request and worker to a specific reporter, without waiting for a response
+    fn send_to_reporter_with_worker<W: 'static + RetryableWorker<R>>(
+        self,
+        reporter: &ReporterHandle,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<R::Marker>, RequestError> {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .send_to_reporter_with_worker(reporter, worker)
+    }
+
+    /// Send this request to the local datacenter, without waiting for a response
+    fn send_local(self) -> Result<DecodeResult<R::Marker>, RequestError> {
+        self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?.send_local()
+    }
+
+    /// Send this request and worker to the local datacenter, without waiting for a response
+    fn send_local_with_worker<W: 'static + Worker>(
+        self,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<R::Marker>, RequestError> {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .send_local_with_worker(worker)
+    }
+    /// Send this request to a global datacenter, without waiting for a response
+    fn send_global(self) -> Result<DecodeResult<R::Marker>, RequestError> {
+        self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?.send_global()
+    }
+
+    /// Send this request and worker to a global datacenter, without waiting for a response
+    fn send_global_with_worker<W: 'static + Worker>(
+        self,
+        worker: Box<W>,
+    ) -> Result<DecodeResult<R::Marker>, RequestError> {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .send_global_with_worker(worker)
+    }
+    /// Send this request to the local datacenter and await the response asynchronously
+    async fn get_local(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
+        R::Worker:
+            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        req.get_local().await
+    }
+
+    /// Send this request to the local datacenter and await the response asynchronously
+    async fn get_local_with_worker<W: 'static + RetryableWorker<R>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
+        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        req.get_local_with_worker(worker).await
+    }
+
+    /// Send this request to the local datacenter and await the response synchronously
+    fn get_local_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Worker:
+            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .get_local_blocking()
+    }
+
+    /// Send this request to the local datacenter and await the response synchronously
+    fn get_local_blocking_with_worker<W: 'static + RetryableWorker<R>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .get_local_blocking_with_worker(worker)
+    }
+
+    /// Send this request to a global datacenter and await the response asynchronously
+    async fn get_global(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
+        R::Worker:
+            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        req.get_global().await
+    }
+
+    /// Send this request to a global datacenter and await the response asynchronously
+    async fn get_global_with_worker<W: 'static + RetryableWorker<R>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
+        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        req.get_global_with_worker(worker).await
+    }
+
+    /// Send this request to a global datacenter and await the response synchronously
+    fn get_global_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Worker:
+            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .get_global_blocking()
+    }
+
+    /// Send this request to a global datacenter and await the response synchronously
+    fn get_global_blocking_with_worker<W: 'static + RetryableWorker<R>>(
+        self,
+        worker: Box<W>,
+    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+    {
+        self.try_into()
+            .map_err(|e| anyhow::anyhow!("{:?}", e))?
+            .get_global_blocking_with_worker(worker)
+    }
+}
+
 /// A common request type which contains only the bare minimum information needed
 #[derive(Debug, Clone)]
 pub struct CommonRequest {
@@ -610,8 +780,8 @@ impl Request for CommonRequest {
         self.payload.clone()
     }
 
-    fn keyspace(&self) -> &Option<String> {
-        &self.keyspace
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
     }
 }
 
@@ -621,7 +791,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn select_statement<T, K, O>(&self) -> SelectStatement
     where
         T: Select<K, O>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         O: RowsDecoder,
     {
         T::statement(self)
@@ -630,7 +800,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn select_id<T, K, O>(&self) -> [u8; 16]
     where
         T: Select<K, O>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         O: RowsDecoder,
     {
         T::statement(self).id()
@@ -639,7 +809,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn insert_statement<T, K>(&self) -> InsertStatement
     where
         T: Insert<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         T: Table,
     {
         T::statement(self)
@@ -648,7 +818,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn insert_id<T, K>(&self) -> [u8; 16]
     where
         T: Insert<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         T: Table,
     {
         T::statement(self).id()
@@ -657,7 +827,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn update_statement<T, K, V>(&self) -> UpdateStatement
     where
         T: Update<K, V>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         T: Table,
     {
         T::statement(self)
@@ -666,7 +836,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn update_id<T, K, V>(&self) -> [u8; 16]
     where
         T: Update<K, V>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         T: Table,
     {
         T::statement(self).id()
@@ -675,7 +845,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn delete_statement<T, K>(&self) -> DeleteStatement
     where
         T: Delete<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         T: Table,
     {
         T::statement(self)
@@ -684,7 +854,7 @@ pub trait GetStatementIdExt: Keyspace + Sized {
     fn delete_id<T, K>(&self) -> [u8; 16]
     where
         T: Delete<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
     {
         T::statement(self).id()
     }
@@ -707,8 +877,64 @@ impl<V> DecodeRows<V> {
 
 impl<V: RowsDecoder> DecodeRows<V> {
     /// Decode a result payload using the `RowsDecoder` impl
-    pub fn decode<C: Compression>(&self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
+    pub fn decode<C: Compression>(self, bytes: Vec<u8>) -> anyhow::Result<Option<V>> {
         V::try_decode_rows(ResponseFrame::decode::<C>(bytes)?.try_into()?)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedQuery {
+    pub keyspace: Option<String>,
+    pub statement: String,
+    pub result: PreparedResult,
+}
+
+impl PreparedQuery {
+    pub(crate) fn new(keyspace: Option<String>, statement: String, result: PreparedResult) -> Self {
+        Self {
+            keyspace,
+            statement,
+            result,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DecodePrepared<V> {
+    pub keyspace: Option<String>,
+    pub statement: String,
+    _marker: PhantomData<fn(V) -> V>,
+}
+
+impl<V> DecodePrepared<V> {
+    fn new(keyspace: Option<String>, statement: String) -> Self {
+        Self {
+            keyspace,
+            statement,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<B: From<PreparedQuery> + Send + Sync> DecodePrepared<B> {
+    /// Decode a result payload using the `RowsDecoder` impl
+    pub fn decode<C: Compression>(self, bytes: Vec<u8>) -> anyhow::Result<B> {
+        let res = ResponseFrame::decode::<C>(bytes)?;
+        self.internal_try_decode(res.into_body())
+    }
+}
+
+impl<B: From<PreparedQuery> + Send + Sync> Marker for DecodePrepared<B> {
+    type Output = B;
+
+    fn internal_try_decode(self, body: ResponseBody) -> anyhow::Result<Self::Output> {
+        match body {
+            ResponseBody::Result(res) => match res.kind {
+                ResultBodyKind::Prepared(res) => Ok(PreparedQuery::new(self.keyspace, self.statement, res).into()),
+                _ => anyhow::bail!("Unexpected result kind"),
+            },
+            _ => anyhow::bail!("Expected a result"),
+        }
     }
 }
 
@@ -721,49 +947,38 @@ pub struct DecodeVoid;
 impl DecodeVoid {
     /// Decode a result payload using the `VoidFrame` impl
     #[inline]
-    pub fn decode<C: Compression>(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
+    pub fn decode<C: Compression>(self, bytes: Vec<u8>) -> anyhow::Result<()> {
         ResponseFrame::decode::<C>(bytes)?;
         Ok(())
     }
 }
 
 /// A marker returned by a request to allow for later decoding of the response
-pub trait Marker {
+pub trait Marker: Sized {
     /// The marker's output
     type Output: Send;
 
-    #[allow(missing_docs)]
-    fn new() -> Self;
-
     /// Try to decode the response payload using this marker
-    fn try_decode(&self, d: ResponseBody) -> anyhow::Result<Self::Output> {
-        Self::internal_try_decode(d)
+    fn try_decode(self, body: ResponseBody) -> anyhow::Result<Self::Output> {
+        self.internal_try_decode(body)
     }
 
     #[allow(missing_docs)]
-    fn internal_try_decode(d: ResponseBody) -> anyhow::Result<Self::Output>;
+    fn internal_try_decode(self, body: ResponseBody) -> anyhow::Result<Self::Output>;
 }
 
 impl<T: RowsDecoder + Send> Marker for DecodeRows<T> {
     type Output = Option<T>;
 
-    fn new() -> Self {
-        DecodeRows::new()
-    }
-
-    fn internal_try_decode(d: ResponseBody) -> anyhow::Result<Self::Output> {
-        T::try_decode_rows(d.try_into()?)
+    fn internal_try_decode(self, body: ResponseBody) -> anyhow::Result<Self::Output> {
+        T::try_decode_rows(body.try_into()?)
     }
 }
 
 impl Marker for DecodeVoid {
     type Output = ();
 
-    fn new() -> Self {
-        Self
-    }
-
-    fn internal_try_decode(d: ResponseBody) -> anyhow::Result<Self::Output> {
+    fn internal_try_decode(self, _body: ResponseBody) -> anyhow::Result<Self::Output> {
         Ok(())
     }
 }
@@ -774,7 +989,7 @@ impl Marker for DecodeVoid {
 /// once the response is received.
 #[derive(Debug, Clone)]
 pub struct DecodeResult<T> {
-    inner: T,
+    pub(crate) inner: T,
     /// Identify the type of request
     pub request_type: RequestType,
 }
@@ -828,13 +1043,9 @@ impl<T> Deref for DecodeResult<T> {
 
 #[cfg(test)]
 mod tests {
-    use scylla_rs_macros::parse_statement;
-
     use super::*;
-    use crate::{
-        cql::TokenEncodeChain,
-        prelude::select::AsDynamicSelectRequest,
-    };
+    use crate::prelude::select::AsDynamicSelectRequest;
+    use scylla_rs_macros::parse_statement;
 
     #[derive(Default, Clone, Debug)]
     pub struct MyKeyspace {
@@ -887,12 +1098,6 @@ mod tests {
         }
     }
     impl Table for MyTable {}
-
-    impl TokenEncoder for MyTable {
-        fn encode_token(&self) -> TokenEncodeChain{
-            self.key.encode_token()
-        }
-    }
 
     impl Select<u32, f32> for MyTable {
         fn statement(keyspace: &dyn Keyspace) -> SelectStatement {

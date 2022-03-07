@@ -8,7 +8,7 @@ use super::*;
 /// The structure for successful authentication.
 #[derive(Clone, Debug)]
 pub struct AuthSuccessFrame {
-    pub(crate) token: Vec<u8>,
+    pub token: Vec<u8>,
 }
 
 impl AuthSuccessFrame {

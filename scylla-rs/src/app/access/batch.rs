@@ -138,7 +138,7 @@ impl<'a> BatchCollector<'a> {
     pub fn insert<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Insert<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable + ColumnEncoder,
     {
         let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
@@ -152,7 +152,7 @@ impl<'a> BatchCollector<'a> {
     pub fn insert_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Insert<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable + ColumnEncoder,
     {
         let statement = T::statement(self.keyspace);
         let id = statement.id();
@@ -168,7 +168,7 @@ impl<'a> BatchCollector<'a> {
     pub fn update<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Update<K, V>,
-        K: TokenEncoder,
+        K: ColumnEncoder,
     {
         let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
@@ -182,7 +182,7 @@ impl<'a> BatchCollector<'a> {
     pub fn update_prepared<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Update<K, V>,
-        K: TokenEncoder,
+        K: ColumnEncoder,
     {
         let statement = T::statement(self.keyspace);
         let id = statement.id();
@@ -198,7 +198,7 @@ impl<'a> BatchCollector<'a> {
     pub fn delete<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Delete<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable + ColumnEncoder,
     {
         let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
@@ -212,7 +212,7 @@ impl<'a> BatchCollector<'a> {
     pub fn delete_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Delete<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable + ColumnEncoder,
     {
         let statement = T::statement(self.keyspace);
         let id = statement.id();
@@ -275,8 +275,8 @@ impl Request for BatchRequest {
         self.payload.clone()
     }
 
-    fn keyspace(&self) -> &Option<String> {
-        &self.keyspace
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
     }
 }
 
@@ -288,18 +288,13 @@ impl SendRequestExt for BatchRequest {
     fn worker(self) -> Box<Self::Worker> {
         BasicRetryWorker::new(self)
     }
+
+    fn marker(&self) -> Self::Marker {
+        DecodeVoid
+    }
 }
 
 impl BatchRequest {
-    /// Compute the murmur3 token from the provided K
-    pub fn compute_token<K>(mut self, key: &K) -> Self
-    where
-        K: TokenEncoder,
-    {
-        self.token = key.token();
-        self
-    }
-
     /// Clone the cql map
     pub fn clone_map(&self) -> HashMap<[u8; 16], String> {
         self.map.clone()

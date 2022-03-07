@@ -9,7 +9,13 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub struct EventFrame {
-    pub(crate) event_type: EventType,
+    pub event_type: EventType,
+}
+
+impl EventFrame {
+    pub fn event_type(&self) -> &EventType {
+        &self.event_type
+    }
 }
 
 impl FromPayload for EventFrame {

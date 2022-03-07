@@ -256,11 +256,11 @@ impl ColumnEncoder for SocketAddrV6 {
 }
 
 impl ColumnEncoder for Unset {
-    fn encode(&self, buffer: &mut Vec<u8>) {}
+    fn encode(&self, _buffer: &mut Vec<u8>) {}
 }
 
 impl ColumnEncoder for Null {
-    fn encode(&self, buffer: &mut Vec<u8>) {}
+    fn encode(&self, _buffer: &mut Vec<u8>) {}
 }
 
 impl ColumnEncoder for NaiveDate {
@@ -294,22 +294,7 @@ pub struct TokenEncodeChain {
     buffer: Option<Vec<u8>>,
 }
 
-impl<T: ColumnEncoder + ?Sized> From<&T> for TokenEncodeChain {
-    fn from(t: &T) -> Self {
-        TokenEncodeChain {
-            len: 1,
-            buffer: Some(t.encode_new()[2..].into()),
-        }
-    }
-}
-
 impl TokenEncodeChain {
-    fn try_from<E: ColumnEncoder + ?Sized>(e: &E) -> Self {
-        TokenEncodeChain {
-            len: 1,
-            buffer: Some(e.encode_new()[2..].into()),
-        }
-    }
     /// Chain a new value
     pub fn chain<E: TokenEncoder + ?Sized>(mut self, other: &E) -> Self
     where
@@ -372,9 +357,12 @@ impl TokenEncoder for TokenEncodeChain {
     }
 }
 
-impl<E: ColumnEncoder> TokenEncoder for E {
+impl TokenEncoder for [u8] {
     fn encode_token(&self) -> TokenEncodeChain {
-        TokenEncodeChain::from(self)
+        TokenEncodeChain {
+            len: 1,
+            buffer: Some(self.to_vec()),
+        }
     }
 }
 

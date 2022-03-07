@@ -34,10 +34,9 @@ where
         let statement = statement.to_string();
         ExecuteBuilder {
             builder: QueryFrameBuilder::default()
-                .statement(statement.to_string())
+                .statement(statement)
                 .consistency(Consistency::Quorum),
             keyspace,
-            statement,
         }
     }
 }
@@ -45,7 +44,6 @@ impl<T: Into<Statement>> AsDynamicExecuteRequest for T {}
 
 pub struct ExecuteBuilder {
     keyspace: Option<String>,
-    statement: String,
     builder: QueryFrameBuilder,
 }
 
@@ -66,11 +64,12 @@ impl ExecuteBuilder {
     }
 
     pub fn build(self) -> anyhow::Result<ExecuteRequest> {
+        let frame = self.builder.build()?;
         Ok(CommonRequest {
             token: rand::random(),
-            payload: RequestFrame::from(self.builder.build()?).build_payload(),
+            statement: frame.statement().clone(),
+            payload: RequestFrame::from(frame).build_payload(),
             keyspace: self.keyspace,
-            statement: self.statement,
         }
         .into())
     }
@@ -99,7 +98,7 @@ impl Request for ExecuteRequest {
         self.0.payload()
     }
 
-    fn keyspace(&self) -> &Option<String> {
+    fn keyspace(&self) -> Option<&String> {
         self.0.keyspace()
     }
 }
@@ -111,5 +110,9 @@ impl SendRequestExt for ExecuteRequest {
 
     fn worker(self) -> Box<Self::Worker> {
         BasicRetryWorker::new(self)
+    }
+
+    fn marker(&self) -> Self::Marker {
+        DecodeVoid
     }
 }

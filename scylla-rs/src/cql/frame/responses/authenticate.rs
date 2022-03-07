@@ -9,7 +9,7 @@ use super::*;
 #[derive(Clone, Debug)]
 pub struct AuthenticateFrame {
     /// The autenticator name.
-    pub(crate) authenticator: String,
+    pub authenticator: String,
 }
 
 impl AuthenticateFrame {

@@ -8,7 +8,7 @@ use super::*;
 /// The authentication Challenge structure with the token field.
 #[derive(Clone, Debug)]
 pub struct AuthChallengeFrame {
-    pub(crate) token: Vec<u8>,
+    pub token: Vec<u8>,
 }
 
 impl AuthChallengeFrame {

@@ -98,32 +98,28 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     .await
     .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    let insert = keyspace.insert_statement::<TestTable, TestTable>();
-    let select = keyspace.select_statement::<TestTable, String, i32>();
-    insert.prepare().get_local().await?;
-    select.prepare().get_local().await?;
+    let insert = keyspace
+        .insert_statement::<TestTable, TestTable>()
+        .prepare()
+        .get_local()
+        .await?;
+    let select = keyspace.prepare_select::<TestTable, String, i32>().get_local().await?;
 
     let start = SystemTime::now();
     for i in 0..n {
         let key = format!("Key {}", i);
-        insert
-            .query_prepared()
-            .bind_token(&key)?
-            .bind(&i)?
-            .build()?
-            .send_local()
-            .map_err(|e| {
-                error!("{}", e);
-                anyhow::anyhow!(e.to_string())
-            })?;
+        insert.clone().bind(&key)?.bind(&i)?.send_local().map_err(|e| {
+            error!("{}", e);
+            anyhow::anyhow!(e.to_string())
+        })?;
     }
 
     let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
     for i in 0..n {
         let key = format!("Key {}", i);
         select
-            .query_prepared::<i32>()
-            .bind_token(&key)?
+            .clone()
+            .bind(&key)?
             .build()?
             .worker()
             .with_handle(sender.clone())
@@ -216,12 +212,6 @@ impl TableMetadata for TestTable {
     }
 }
 impl Table for TestTable {}
-
-impl TokenEncoder for TestTable {
-    fn encode_token(&self) -> TokenEncodeChain {
-        self.key.encode_token()
-    }
-}
 
 impl RowDecoder for TestTable {
     fn try_decode_row(mut row: ResultRow) -> anyhow::Result<Self> {

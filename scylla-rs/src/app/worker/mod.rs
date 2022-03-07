@@ -60,6 +60,7 @@ pub enum WorkerError {
     /// There is no ring initialized.
     #[error("No Ring Available")]
     NoRing,
+    /// An error with the response frame
     #[error(transparent)]
     FrameError(#[from] FrameError),
     /// Misc errors
@@ -105,7 +106,7 @@ pub trait RetryableWorker<R>: Worker {
             *self.retries_mut() -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
             send_global(
-                self.request().keyspace().clone().as_ref().map(|s| s.as_str()),
+                self.request().keyspace().cloned().as_ref().map(|s| s.as_str()),
                 self.request().token(),
                 self.request().payload(),
                 self,
@@ -123,12 +124,13 @@ pub trait RetryableWorker<R>: Worker {
         Self: 'static + Sized,
         R: SendRequestExt,
     {
+        let marker = self.request().marker();
         let request = ReporterEvent::Request {
             payload: self.request().payload(),
             worker: self,
         };
         reporter.send(request).map_err(|e| RingSendError::SendError(e))?;
-        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+        Ok(DecodeResult::new(marker, R::TYPE))
     }
 
     /// Send the worker to the local datacenter, without waiting for a response
@@ -137,13 +139,14 @@ pub trait RetryableWorker<R>: Worker {
         Self: 'static + Sized,
         R: SendRequestExt,
     {
+        let marker = self.request().marker();
         send_local(
-            self.request().keyspace().clone().as_ref().map(|s| s.as_str()),
+            self.request().keyspace().cloned().as_ref().map(|s| s.as_str()),
             self.request().token(),
             self.request().payload(),
             self,
         )?;
-        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+        Ok(DecodeResult::new(marker, R::TYPE))
     }
 
     /// Send the worker to a global datacenter, without waiting for a response
@@ -152,13 +155,14 @@ pub trait RetryableWorker<R>: Worker {
         Self: 'static + Sized,
         R: SendRequestExt,
     {
+        let marker = self.request().marker();
         send_global(
-            self.request().keyspace().clone().as_ref().map(|s| s.as_str()),
+            self.request().keyspace().cloned().as_ref().map(|s| s.as_str()),
             self.request().token(),
             self.request().payload(),
             self,
         )?;
-        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+        Ok(DecodeResult::new(marker, R::TYPE))
     }
 
     /// Send the worker to the local datacenter and await a response asynchronously
@@ -171,7 +175,7 @@ pub trait RetryableWorker<R>: Worker {
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_local()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             inbox
                 .await
                 .map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
@@ -187,7 +191,7 @@ pub trait RetryableWorker<R>: Worker {
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_local()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             futures::executor::block_on(inbox).map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
         )?)
     }
@@ -202,7 +206,7 @@ pub trait RetryableWorker<R>: Worker {
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_global()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             inbox
                 .await
                 .map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
@@ -218,7 +222,7 @@ pub trait RetryableWorker<R>: Worker {
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_global()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             futures::executor::block_on(inbox).map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
         )?)
     }
@@ -282,7 +286,7 @@ where
     let statement = worker.request().statement();
     let keyspace = worker.request().keyspace();
     info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    PrepareWorker::new(keyspace.clone(), id, statement.to_owned())
+    PrepareWorker::<PreparedQuery>::new(keyspace.cloned(), id, statement.to_owned())
         .send_to_reporter(reporter)
         .ok();
     let payload = worker.request().payload();

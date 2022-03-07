@@ -137,10 +137,8 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    let insert = Arc::new(keyspace.insert_statement::<TestTable, TestTable>());
-    let select = Arc::new(keyspace.select_statement::<TestTable, String, i32>());
-    insert.prepare().get_local().await?;
-    select.prepare().get_local().await?;
+    let insert = keyspace.prepare_insert::<TestTable, TestTable>().get_local().await?;
+    let select = keyspace.prepare_select::<TestTable, String, i32>().get_local().await?;
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
@@ -149,15 +147,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         let insert = insert.clone();
         tokio::task::spawn(async move {
             let key = format!("Key {}", i);
-            handle.send(
-                insert
-                    .query_prepared()
-                    .bind_token(&key)?
-                    .bind(&i)?
-                    .build()?
-                    .get_local()
-                    .await,
-            )?;
+            handle.send(insert.bind(&key)?.bind(&i)?.get_local().await)?;
             Result::<_, anyhow::Error>::Ok(())
         });
     }
@@ -179,15 +169,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         let select = select.clone();
         tokio::task::spawn(async move {
             let key = format!("Key {}", i);
-            handle.send((
-                i,
-                select
-                    .query_prepared::<i32>()
-                    .bind_token(&key)?
-                    .build()?
-                    .get_local()
-                    .await,
-            ))?;
+            handle.send((i, select.bind(&key)?.get_local().await))?;
             Result::<_, anyhow::Error>::Ok(())
         });
     }
@@ -408,12 +390,6 @@ impl TableMetadata for TestTable {
     }
 }
 impl Table for TestTable {}
-
-impl TokenEncoder for TestTable {
-    fn encode_token(&self) -> TokenEncodeChain {
-        self.key.encode_token()
-    }
-}
 
 impl RowDecoder for TestTable {
     fn try_decode_row(mut row: ResultRow) -> anyhow::Result<Self> {

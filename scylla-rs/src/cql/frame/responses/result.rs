@@ -110,8 +110,18 @@ impl ResultFlags {
 
 #[derive(Clone, Debug)]
 pub struct GlobalTableSpec {
-    keyspace: String,
-    table: String,
+    pub keyspace: String,
+    pub table: String,
+}
+
+impl GlobalTableSpec {
+    pub fn keyspace(&self) -> &String {
+        &self.keyspace
+    }
+
+    pub fn table(&self) -> &String {
+        &self.table
+    }
 }
 
 impl FromPayload for GlobalTableSpec {
@@ -125,19 +135,37 @@ impl FromPayload for GlobalTableSpec {
 
 #[derive(Clone, Debug)]
 pub struct ColumnSpec {
-    keyspace: Option<String>,
-    table: Option<String>,
-    name: String,
-    kind: CqlType,
+    pub keyspace: Option<String>,
+    pub table: Option<String>,
+    pub name: String,
+    pub kind: CqlType,
+}
+
+impl ColumnSpec {
+    pub fn keyspace(&self) -> &Option<String> {
+        &self.keyspace
+    }
+
+    pub fn table(&self) -> &Option<String> {
+        &self.table
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> &CqlType {
+        &self.kind
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct RowsResultMetadata {
-    flags: ResultFlags,
-    columns_count: i32,
-    paging_state: Option<Vec<u8>>,
-    global_table_spec: Option<GlobalTableSpec>,
-    column_specs: Option<Vec<ColumnSpec>>,
+    pub flags: ResultFlags,
+    pub columns_count: i32,
+    pub paging_state: Option<Vec<u8>>,
+    pub global_table_spec: Option<GlobalTableSpec>,
+    pub column_specs: Option<Vec<ColumnSpec>>,
 }
 
 impl RowsResultMetadata {
@@ -261,9 +289,9 @@ fn read_cql_type(start: &mut usize, payload: &[u8]) -> anyhow::Result<CqlType> {
 
 #[derive(Clone)]
 pub struct RowsResult {
-    metadata: RowsResultMetadata,
-    rows_count: i32,
-    rows: Vec<u8>,
+    pub metadata: RowsResultMetadata,
+    pub rows_count: i32,
+    pub rows: Vec<u8>,
 }
 
 impl std::fmt::Debug for RowsResult {
@@ -313,12 +341,33 @@ impl FromPayload for RowsResult {
 
 #[derive(Clone, Debug)]
 pub struct PreparedResultMetadata {
-    flags: ResultFlags,
-    columns_count: i32,
-    pk_count: i32,
-    pk_indexes: Option<Vec<i16>>,
-    global_table_spec: Option<GlobalTableSpec>,
-    column_specs: Option<Vec<ColumnSpec>>,
+    pub flags: ResultFlags,
+    pub columns_count: i32,
+    pub pk_indexes: Vec<i16>,
+    pub global_table_spec: Option<GlobalTableSpec>,
+    pub column_specs: Option<Vec<ColumnSpec>>,
+}
+
+impl PreparedResultMetadata {
+    pub fn flags(&self) -> &ResultFlags {
+        &self.flags
+    }
+
+    pub fn columns_count(&self) -> i32 {
+        self.columns_count
+    }
+
+    pub fn pk_indexes(&self) -> &Vec<i16> {
+        &self.pk_indexes
+    }
+
+    pub fn global_table_spec(&self) -> &Option<GlobalTableSpec> {
+        &self.global_table_spec
+    }
+
+    pub fn column_specs(&self) -> &Option<Vec<ColumnSpec>> {
+        &self.column_specs
+    }
 }
 
 impl FromPayload for PreparedResultMetadata {
@@ -326,15 +375,10 @@ impl FromPayload for PreparedResultMetadata {
         let flags = ResultFlags(read_int(start, payload)?);
         let columns_count = read_int(start, payload)?;
         let pk_count = read_int(start, payload)?;
-        let pk_indixes = if pk_count > 0 {
-            let mut pk_indixes = Vec::with_capacity(pk_count as usize);
-            for _ in 0..pk_count {
-                pk_indixes.push(read_short(start, payload)?);
-            }
-            Some(pk_indixes)
-        } else {
-            None
-        };
+        let mut pk_indexes = Vec::with_capacity(pk_count as usize);
+        for _ in 0..pk_count {
+            pk_indexes.push(read_short(start, payload)?);
+        }
         let global_table_spec = if flags.global_tables_spec() {
             Some(GlobalTableSpec {
                 keyspace: read_string(start, payload)?,
@@ -367,8 +411,7 @@ impl FromPayload for PreparedResultMetadata {
         Ok(Self {
             flags,
             columns_count,
-            pk_count,
-            pk_indexes: pk_indixes,
+            pk_indexes,
             global_table_spec,
             column_specs,
         })
@@ -377,9 +420,23 @@ impl FromPayload for PreparedResultMetadata {
 
 #[derive(Clone, Debug)]
 pub struct PreparedResult {
-    id: [u8; 16],
-    metadata: PreparedResultMetadata,
-    result_metadata: Option<RowsResultMetadata>,
+    pub id: [u8; 16],
+    pub metadata: PreparedResultMetadata,
+    pub result_metadata: Option<RowsResultMetadata>,
+}
+
+impl PreparedResult {
+    pub fn id(&self) -> &[u8; 16] {
+        &self.id
+    }
+
+    pub fn metadata(&self) -> &PreparedResultMetadata {
+        &self.metadata
+    }
+
+    pub fn result_metadata(&self) -> &Option<RowsResultMetadata> {
+        &self.result_metadata
+    }
 }
 
 impl FromPayload for PreparedResult {
@@ -401,8 +458,18 @@ impl FromPayload for PreparedResult {
 
 #[derive(Clone, Debug)]
 pub struct SchemaChangeResult {
-    change_type: SchemaChangeType,
-    target: SchemaChangeTarget,
+    pub change_type: SchemaChangeType,
+    pub target: SchemaChangeTarget,
+}
+
+impl SchemaChangeResult {
+    pub fn change_type(&self) -> &SchemaChangeType {
+        &self.change_type
+    }
+
+    pub fn target(&self) -> &SchemaChangeTarget {
+        &self.target
+    }
 }
 
 impl FromPayload for SchemaChangeResult {

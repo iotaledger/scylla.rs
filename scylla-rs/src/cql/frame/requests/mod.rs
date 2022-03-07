@@ -211,3 +211,195 @@ impl ToPayload for Value {
         }
     }
 }
+
+#[derive(Default)]
+pub struct Values {
+    buffer: Vec<u8>,
+    view: Vec<(*const [u8], *const [u8])>,
+}
+
+impl Values {
+    pub fn payload(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    pub fn get<'a>(&'a self, idx: usize) -> Option<(Option<&'a str>, &'a [u8])> {
+        let rec = self.view.get(idx).map(|r| *r);
+        match rec {
+            Some((name, value)) => unsafe {
+                let (name, value) = (&*name, &*value);
+                let name = (!name.is_empty()).then(|| std::str::from_utf8(name).ok()).flatten();
+                Some((name, value))
+            },
+            None => None,
+        }
+    }
+
+    pub fn get_unchecked<'a>(&'a self, idx: usize) -> (Option<&'a str>, &'a [u8]) {
+        let (name, value) = self.view[idx];
+        unsafe {
+            let (name, value) = (&*name, &*value);
+            let name = (!name.is_empty()).then(|| std::str::from_utf8(name).ok()).flatten();
+            (name, value)
+        }
+    }
+
+    pub fn get_value<'a>(&'a self, idx: usize) -> Option<Option<&'a str>> {
+        let rec = self.view.get(idx).map(|r| *r);
+        match rec {
+            Some((name, _)) => unsafe {
+                let name = &*name;
+                let name = (!name.is_empty()).then(|| std::str::from_utf8(name).ok()).flatten();
+                Some(name)
+            },
+            None => None,
+        }
+    }
+
+    pub fn get_value_unchecked<'a>(&'a self, idx: usize) -> &'a [u8] {
+        let (_, value) = self.view[idx];
+        unsafe {
+            let value = &*value;
+            value
+        }
+    }
+
+    pub fn get_name<'a>(&'a self, idx: usize) -> Option<&'a [u8]> {
+        let rec = self.view.get(idx).map(|r| *r);
+        match rec {
+            Some((_, value)) => unsafe { Some(&*value) },
+            None => None,
+        }
+    }
+
+    pub fn get_name_unchecked<'a>(&'a self, idx: usize) -> Option<&'a str> {
+        let (name, _) = self.view[idx];
+        unsafe {
+            let name = &*name;
+            let name = (!name.is_empty()).then(|| std::str::from_utf8(name).ok()).flatten();
+            name
+        }
+    }
+
+    pub fn push(&mut self, name: Option<&str>, value: &[u8]) {
+        let name_ref = if let Some(name) = name {
+            let name_idx = self.buffer.len();
+            write_string(name, &mut self.buffer);
+            &self.buffer[name_idx..] as *const [u8]
+        } else {
+            &[]
+        };
+        let value_idx = self.buffer.len();
+        write_bytes(value, &mut self.buffer);
+        self.view.push((name_ref, &self.buffer[value_idx..] as *const [u8]));
+    }
+
+    pub fn push_null(&mut self, name: Option<&str>) {
+        let name_ref = if let Some(name) = name {
+            let name_idx = self.buffer.len();
+            write_string(name, &mut self.buffer);
+            &self.buffer[name_idx..] as *const [u8]
+        } else {
+            &[]
+        };
+        let value_idx = self.buffer.len();
+        write_int(-1, &mut self.buffer);
+        self.view.push((name_ref, &self.buffer[value_idx..] as *const [u8]));
+    }
+
+    pub fn push_unset(&mut self, name: Option<&str>) {
+        let name_ref = if let Some(name) = name {
+            let name_idx = self.buffer.len();
+            write_string(name, &mut self.buffer);
+            &self.buffer[name_idx..] as *const [u8]
+        } else {
+            &[]
+        };
+        let value_idx = self.buffer.len();
+        write_int(-2, &mut self.buffer);
+        self.view.push((name_ref, &self.buffer[value_idx..] as *const [u8]));
+    }
+
+    pub fn iter(&self) -> ValuesIter {
+        ValuesIter { values: self, idx: 0 }
+    }
+
+    pub fn len(&self) -> usize {
+        self.view.len()
+    }
+}
+
+impl Clone for Values {
+    fn clone(&self) -> Self {
+        let buffer = self.buffer.clone();
+        let mut view = Vec::new();
+        let mut idx = 0;
+        for v in &self.view {
+            unsafe {
+                let (name, value) = *v;
+                let (name, value) = (&*name, &*value);
+                view.push((
+                    &buffer[idx..][..name.len()] as *const [u8],
+                    &buffer[idx..][..value.len()] as *const [u8],
+                ));
+            }
+        }
+        Self { buffer, view }
+    }
+}
+
+impl std::ops::Index<usize> for Values {
+    type Output = [u8];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get_value_unchecked(index)
+    }
+}
+
+unsafe impl Send for Values {}
+unsafe impl Sync for Values {}
+
+impl IntoIterator for Values {
+    type Item = (Option<String>, Vec<u8>);
+    type IntoIter = ValuesIntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ValuesIntoIter { values: self, idx: 0 }
+    }
+}
+
+impl Debug for Values {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Values").field(&self.iter().collect::<Vec<_>>()).finish()
+    }
+}
+
+pub struct ValuesIter<'a> {
+    values: &'a Values,
+    idx: usize,
+}
+
+impl<'a> Iterator for ValuesIter<'a> {
+    type Item = (Option<&'a str>, &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.idx += 1;
+        self.values.get(self.idx - 1)
+    }
+}
+
+pub struct ValuesIntoIter {
+    values: Values,
+    idx: usize,
+}
+
+impl Iterator for ValuesIntoIter {
+    type Item = (Option<String>, Vec<u8>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.idx += 1;
+        self.values
+            .get(self.idx - 1)
+            .map(|(name, value)| (name.map(|s| s.to_owned()), value.to_vec()))
+    }
+}

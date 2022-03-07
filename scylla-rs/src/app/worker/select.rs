@@ -68,7 +68,7 @@ where
                 ErrorCode::Unprepared => {
                     if let Some(reporter) = reporter {
                         handle_unprepared_error(self, cql_error.unprepared_id().unwrap(), reporter).or_else(|worker| {
-                            error!("Error trying to reprepare query: {}", worker.request().statement());
+                            error!("Error trying to reprepare query: {:?}", worker.request().statement());
                             worker.handle.handle_error(error)
                         })
                     } else {

@@ -111,7 +111,7 @@ where
                 ErrorCode::Unprepared => {
                     if let Some(reporter) = reporter {
                         handle_unprepared_error(self, cql_error.unprepared_id().unwrap(), reporter).or_else(|worker| {
-                            error!("Error trying to reprepare query: {}", worker.request().statement());
+                            error!("Error trying to reprepare query: {:?}", worker.request().statement());
                             anyhow::bail!("Error trying to reprepare query!")
                         })
                     } else {
@@ -171,7 +171,7 @@ where
         R: SendRequestExt,
     {
         Box::new(self.worker.clone()).send_to_reporter(reporter)?;
-        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+        Ok(DecodeResult::new(self.worker.request().marker(), R::TYPE))
     }
 
     /// Send a spawned worker to the local datacenter, without waiting for a response
@@ -181,7 +181,7 @@ where
         R: SendRequestExt,
     {
         Box::new(self.worker.clone()).send_local()?;
-        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+        Ok(DecodeResult::new(self.worker.request().marker(), R::TYPE))
     }
 
     /// Send a spawned worker to a global datacenter, without waiting for a response
@@ -191,7 +191,7 @@ where
         R: SendRequestExt,
     {
         Box::new(self.worker.clone()).send_global()?;
-        Ok(DecodeResult::new(R::Marker::new(), R::TYPE))
+        Ok(DecodeResult::new(self.worker.request().marker(), R::TYPE))
     }
 }
 
@@ -206,7 +206,7 @@ where
         Self: Sized,
     {
         let marker = Box::new(self.worker.clone()).send_local()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             self.inbox
                 .recv()
                 .await
@@ -220,7 +220,7 @@ where
         Self: Sized,
     {
         let marker = Box::new(self.worker.clone()).send_local()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             self.inbox
                 .blocking_recv()
                 .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??,
@@ -233,7 +233,7 @@ where
         Self: Sized,
     {
         let marker = Box::new(self.worker.clone()).send_global()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             self.inbox
                 .recv()
                 .await
@@ -247,7 +247,7 @@ where
         Self: Sized,
     {
         let marker = Box::new(self.worker.clone()).send_global()?;
-        Ok(marker.try_decode(
+        Ok(marker.inner.try_decode(
             self.inbox
                 .blocking_recv()
                 .ok_or_else(|| anyhow::anyhow!("No response from worker!"))??,

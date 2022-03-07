@@ -2,12 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::{
-    cql::PrepareFrameBuilder,
-    prelude::{
-        PrepareFrame,
-        PrepareWorker,
-    },
+use crate::prelude::{
+    PrepareFrame,
+    PrepareWorker,
 };
 
 /// Specifies helper functions for creating static prepare requests from a keyspace with any access trait definition
@@ -61,10 +58,10 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_select<T, K, O>(&self) -> PrepareRequest
+    fn prepare_select<T, K, O>(&self) -> PrepareRequest<SelectBuilder<DynamicRequest, O, ExecuteFrameBuilder>>
     where
         T: Select<K, O>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
         O: RowsDecoder,
     {
         PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
@@ -122,10 +119,10 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_insert<T, K>(&self) -> PrepareRequest
+    fn prepare_insert<T, K>(&self) -> PrepareRequest<InsertBuilder<DynamicRequest, ExecuteFrameBuilder>>
     where
         T: Insert<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
     {
         PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
@@ -187,10 +184,10 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_update<T, K, V>(&self) -> PrepareRequest
+    fn prepare_update<T, K, V>(&self) -> PrepareRequest<UpdateBuilder<DynamicRequest, ExecuteFrameBuilder>>
     where
         T: Update<K, V>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
     {
         PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
@@ -243,10 +240,10 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare_delete<T, K>(&self) -> PrepareRequest
+    fn prepare_delete<T, K>(&self) -> PrepareRequest<DeleteBuilder<DynamicRequest, ExecuteFrameBuilder>>
     where
         T: Delete<K>,
-        K: Bindable + TokenEncoder,
+        K: Bindable,
     {
         PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
     }
@@ -255,7 +252,7 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
 /// Specifies helper functions for creating dynamic prepare requests from anything that can be interpreted as a
 /// statement
 
-pub trait AsDynamicPrepareRequest: KeyspaceExt + ToString {
+pub trait AsDynamicPrepareRequest<P>: KeyspaceExt + ToString {
     /// Create a dynamic prepare request from a statement.
     /// name.
     ///
@@ -267,33 +264,55 @@ pub trait AsDynamicPrepareRequest: KeyspaceExt + ToString {
     ///     .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn prepare(&self) -> PrepareRequest {
+    fn prepare(&self) -> PrepareRequest<P> {
+        PrepareRequest::new(self.get_keyspace(), self.to_string())
+    }
+}
+
+pub trait AsDynamicPrepareSelectRequest: KeyspaceExt + ToString {
+    /// Create a dynamic prepare request from a statement.
+    /// name.
+    ///
+    /// ## Example
+    /// ```no_run
+    /// use scylla_rs::app::access::*;
+    /// parse_statement!("DELETE FROM my_keyspace.my_table WHERE key = ?")
+    ///     .prepare()
+    ///     .get_local_blocking()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    fn prepare<O: RowsDecoder>(&self) -> PrepareRequest<SelectBuilder<DynamicRequest, O, ExecuteFrameBuilder>> {
         PrepareRequest::new(self.get_keyspace(), self.to_string())
     }
 }
 
 impl<S: Keyspace> GetStaticPrepareRequest for S {}
-impl<T: KeyspaceExt + ToString> AsDynamicPrepareRequest for T {}
+impl AsDynamicPrepareSelectRequest for SelectStatement {}
+impl AsDynamicPrepareRequest<InsertBuilder<DynamicRequest, ExecuteFrameBuilder>> for InsertStatement {}
+impl AsDynamicPrepareRequest<UpdateBuilder<DynamicRequest, ExecuteFrameBuilder>> for UpdateStatement {}
+impl AsDynamicPrepareRequest<DeleteBuilder<DynamicRequest, ExecuteFrameBuilder>> for DeleteStatement {}
 
 /// A request to prepare a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct PrepareRequest {
+pub struct PrepareRequest<P> {
     pub(crate) keyspace: Option<String>,
     pub(crate) statement: String,
     pub(crate) token: i64,
+    pub(crate) _marker: PhantomData<fn(P) -> P>,
 }
 
-impl PrepareRequest {
+impl<P> PrepareRequest<P> {
     fn new(keyspace: Option<String>, statement: String) -> Self {
-        PrepareRequest {
+        Self {
             keyspace,
             statement,
             token: rand::random(),
+            _marker: PhantomData,
         }
     }
 }
 
-impl Request for PrepareRequest {
+impl<P> Request for PrepareRequest<P> {
     fn token(&self) -> i64 {
         self.token
     }
@@ -306,18 +325,25 @@ impl Request for PrepareRequest {
         RequestFrame::from(PrepareFrame::new(self.statement.clone())).build_payload()
     }
 
-    fn keyspace(&self) -> &Option<String> {
-        &self.keyspace
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
     }
 }
 
 #[async_trait::async_trait]
-impl SendRequestExt for PrepareRequest {
-    type Marker = DecodeVoid;
-    type Worker = PrepareWorker;
+impl<P> SendRequestExt for PrepareRequest<P>
+where
+    P: 'static + From<PreparedQuery> + Debug + Send + Sync,
+{
+    type Marker = DecodePrepared<P>;
+    type Worker = PrepareWorker<P>;
     const TYPE: RequestType = RequestType::Execute;
 
     fn worker(self) -> Box<Self::Worker> {
         Box::new(PrepareWorker::from(self))
+    }
+
+    fn marker(&self) -> Self::Marker {
+        DecodePrepared::new(self.keyspace.clone(), self.statement.clone())
     }
 }
