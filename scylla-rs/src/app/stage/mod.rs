@@ -41,7 +41,7 @@ mod receiver;
 pub mod reporter;
 mod sender;
 /// The max number
-static MAX_STREAM_IDS: i16 = 32767;
+static MAX_STREAM_IDS: u16 = 32767;
 /// The thread-safe reusable payloads.
 pub type Payloads = Arc<Vec<Reusable>>;
 /// Reporter handles at the stage level
@@ -102,11 +102,11 @@ where
         // create payload resource
         let mut payloads = Vec::new();
         let appends_num = appends_num(scylla.reporter_count);
-        let last_range = appends_num * (scylla.reporter_count as i16);
+        let last_range = appends_num * (scylla.reporter_count as u16);
         (0..last_range).for_each(|_| payloads.push(Reusable::default()));
         let payloads = Arc::new(payloads);
         rt.publish(payloads).await;
-        let all_stage_streams: Vec<i16> = (0..last_range).collect();
+        let all_stage_streams: Vec<u16> = (0..last_range).collect();
         let streams_iter = all_stage_streams.chunks_exact(appends_num as usize);
         // start sender first to let it awaits reporters_handles resources
         let cql = CqlBuilder::<_, C>::new()
@@ -219,10 +219,10 @@ impl Reusable {
 
 unsafe impl Sync for Reusable {}
 
-pub(super) fn appends_num(reporter_count: u8) -> i16 {
-    MAX_STREAM_IDS / (reporter_count as i16)
+pub(super) fn appends_num(reporter_count: u8) -> u16 {
+    MAX_STREAM_IDS / (reporter_count as u16)
 }
 
-pub(super) fn compute_reporter_num(stream_id: i16, appends_num: i16) -> u8 {
+pub(super) fn compute_reporter_num(stream_id: u16, appends_num: u16) -> u8 {
     (stream_id / appends_num) as u8
 }

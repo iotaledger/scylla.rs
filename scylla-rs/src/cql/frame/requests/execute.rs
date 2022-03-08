@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module defines the execute frame.
+//! This module implements the EXECUTE frame.
 
 use super::*;
 
@@ -112,10 +112,10 @@ impl ToPayload for ExecuteFrame {
             self.values.payload().len() + self.paging_state.as_ref().map(|s| s.len()).unwrap_or_default() + 41,
         );
         write_prepared_id(self.id, payload);
-        write_short(self.consistency as i16, payload);
+        write_short(self.consistency as u16, payload);
         write_byte(self.flags.0, payload);
         if self.flags.values() {
-            write_short(self.values.len() as i16, payload);
+            write_short(self.values.len() as u16, payload);
             payload.extend(self.values.payload());
         }
         if let Some(page_size) = self.page_size {
@@ -130,7 +130,7 @@ impl ToPayload for ExecuteFrame {
         }
         if let Some(serial_consistency) = self.serial_consistency {
             if self.flags.serial_consistency() {
-                write_short(serial_consistency as i16, payload);
+                write_short(serial_consistency as u16, payload);
             }
         }
         if let Some(timestamp) = self.timestamp {

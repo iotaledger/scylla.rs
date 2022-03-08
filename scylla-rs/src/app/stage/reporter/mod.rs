@@ -31,12 +31,11 @@ use backstage::core::{
 };
 use std::{
     collections::HashMap,
-    convert::TryFrom,
     marker::PhantomData,
 };
 
 /// Workers Map holds all the workers_ids
-type Workers = HashMap<i16, Box<dyn Worker>>;
+type Workers = HashMap<u16, Box<dyn Worker>>;
 /// Reporter's handle, used to push cql request
 pub type ReporterHandle = UnboundedHandle<ReporterEvent>;
 
@@ -53,10 +52,10 @@ pub enum ReporterEvent {
     /// The response Cql query.
     Response {
         /// The reponse stream ID.
-        stream_id: i16,
+        stream_id: u16,
     },
     /// The stream error.
-    Err(anyhow::Error, i16),
+    Err(anyhow::Error, u16),
     /// Shutdown signal
     Shutdown,
 }
@@ -67,7 +66,7 @@ impl ShutdownEvent for ReporterEvent {
 }
 /// Reporter state
 pub struct Reporter<C: Compression> {
-    streams: Vec<i16>,
+    streams: Vec<u16>,
     workers: Workers,
     _compression: PhantomData<fn(C) -> C>,
 }
@@ -149,7 +148,7 @@ where
 }
 impl<C: 'static + Compression> Reporter<C> {
     /// Create new reporter
-    pub(super) fn new(streams: Vec<i16>) -> Self {
+    pub(super) fn new(streams: Vec<u16>) -> Self {
         Self {
             streams,
             workers: HashMap::new(),
@@ -157,14 +156,13 @@ impl<C: 'static + Compression> Reporter<C> {
         }
     }
 
-    fn handle_response(&mut self, handle: &ReporterHandle, stream: i16, payloads: &mut Payloads) -> anyhow::Result<()> {
+    fn handle_response(&mut self, handle: &ReporterHandle, stream: u16, payloads: &mut Payloads) -> anyhow::Result<()> {
         // push the stream_id back to streams vector.
         self.streams.push(stream);
         // remove the worker from workers.
         if let Some(worker) = self.workers.remove(&stream) {
             if let Some(payload) = payloads[stream as usize].as_mut().take() {
-                match ResponseFrame::decode::<C>(payload).map_err(WorkerError::FrameError)
-                {
+                match ResponseFrame::decode::<C>(payload).map_err(WorkerError::FrameError) {
                     Ok(frame) => match frame.into_body() {
                         ResponseBody::Error(err) => {
                             worker.handle_error(WorkerError::Cql(err), Some(handle))?;
@@ -188,7 +186,7 @@ impl<C: 'static + Compression> Reporter<C> {
     fn handle_error(
         &mut self,
         handle: &ReporterHandle,
-        stream: i16,
+        stream: u16,
         payloads: &mut Payloads,
         error: WorkerError,
     ) -> anyhow::Result<()> {
@@ -221,7 +219,7 @@ impl<C: 'static + Compression> Reporter<C> {
 }
 
 // private functions
-fn assign_stream_to_payload(stream: i16, payload: &mut Vec<u8>) {
+fn assign_stream_to_payload(stream: u16, payload: &mut Vec<u8>) {
     payload[2] = (stream >> 8) as u8; // payload[2] is where the first byte of the stream_id should be,
     payload[3] = stream as u8; // payload[3] is the second byte of the stream_id. please refer to cql specs
 }

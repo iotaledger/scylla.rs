@@ -1,9 +1,9 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module defines the batch flag.
+//! This module defines the BATCH frame flags.
 
-/// The batch flag indicates that there is no flags.
+/// The batch flag indicates that there are no flags.
 pub const NOFLAGS: u8 = 0x00;
 /// The batch flag indicates whether to use serial consistency.
 pub const SERIAL_CONSISTENCY: u8 = 0x10;
@@ -12,6 +12,7 @@ pub const DEFAULT_TIMESTAMP: u8 = 0x20;
 /// The batch flag indicating whether bound values are named
 pub const NAMED_VALUES: u8 = 0x40;
 
+/// Flags for a batch request
 #[derive(Copy, Clone, Debug, Default)]
 pub struct BatchFlags(pub u8);
 

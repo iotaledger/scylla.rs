@@ -23,17 +23,17 @@ const CQL_FRAME_HEADER_BYTES_LENGTH: usize = 9;
 
 /// Receiver state
 pub(super) struct Receiver {
-    stream_id: i16,
+    stream_id: u16,
     total_length: usize,
     current_length: usize,
     header: bool,
     buffer: Vec<u8>,
     i: usize,
-    appends_num: i16,
+    appends_num: u16,
 }
 
 impl Receiver {
-    pub(super) fn new(buffer_size: Option<usize>, appends_num: i16) -> Self {
+    pub(super) fn new(buffer_size: Option<usize>, appends_num: u16) -> Self {
         Self {
             stream_id: 0,
             total_length: 0,
@@ -182,6 +182,6 @@ fn get_total_length_usize(buffer: &[u8]) -> usize {
     (buffer[8] as usize)
 }
 
-fn get_stream_id(buffer: &[u8]) -> i16 {
-    ((buffer[2] as i16) << 8) | buffer[3] as i16
+fn get_stream_id(buffer: &[u8]) -> u16 {
+    ((buffer[2] as u16) << 8) | buffer[3] as u16
 }

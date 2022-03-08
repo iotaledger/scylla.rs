@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the batch query frame.
+//! This module implements the BATCH frame.
 
 use super::*;
 
@@ -105,7 +105,7 @@ impl ToPayload for BatchFrame {
         // add batch type
         write_byte(self.batch_type as u8, payload);
         // add query count
-        write_short(self.queries.len() as i16, payload);
+        write_short(self.queries.len() as u16, payload);
         for query in self.queries {
             match &query {
                 BatchQuery::Query { statement, values: _ } => {
@@ -123,7 +123,7 @@ impl ToPayload for BatchFrame {
             }
             let (BatchQuery::Query { statement: _, values } | BatchQuery::Prepared { id: _, values }) = query;
             // add query values
-            write_short(values.len() as i16, payload);
+            write_short(values.len() as u16, payload);
             for (name, value) in values {
                 if let Some(name) = name {
                     if self.flags.named_values() {
@@ -134,13 +134,13 @@ impl ToPayload for BatchFrame {
             }
         }
         // add consistency
-        write_short(self.consistency as i16, payload);
+        write_short(self.consistency as u16, payload);
         // add flags
         write_byte(self.flags.0, payload);
         // add serial consistency
         if let Some(consistency) = self.serial_consistency {
             if self.flags.serial_consistency() {
-                write_short(consistency as i16, payload);
+                write_short(consistency as u16, payload);
             }
         }
         if let Some(timestamp) = self.timestamp {

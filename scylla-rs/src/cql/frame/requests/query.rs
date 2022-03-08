@@ -1,10 +1,32 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module defines the query frame.
+//! This module implements the QUERY frame.
 
 use super::*;
 
+/**
+    Performs a CQL query. The body of the message must be:
+
+    `<query><query_parameters>`
+
+    where <query> is a [long string] representing the query and
+
+    `<query_parameters>` must be
+
+    `<consistency><flags>[<n>[name_1]<value_1>...[name_n]<value_n>][<result_page_size>][<paging_state>][<serial_consistency>][<timestamp>]`
+
+    where:
+    - `<consistency>` is the `[consistency]` level for the operation.
+    - `<flags>` is a `[byte]` whose bits define the options for this query and
+        in particular influence what the remainder of the message contains. See [`QueryFlags`].
+
+    Note that the consistency is ignored by some queries (USE, CREATE, ALTER,
+    TRUNCATE, ...).
+
+    The server will respond to a QUERY message with a RESULT message, the content
+    of which depends on the query.
+*/
 #[derive(Clone, Debug, Builder)]
 #[builder(derive(Clone, Debug))]
 #[builder(pattern = "owned", setter(strip_option))]
@@ -128,10 +150,10 @@ impl ToPayload for QueryFrame {
                 + 23,
         );
         write_long_string(&self.statement, payload);
-        write_short(self.consistency as i16, payload);
+        write_short(self.consistency as u16, payload);
         write_byte(self.flags.0, payload);
         if self.flags.values() {
-            write_short(self.values.len() as i16, payload);
+            write_short(self.values.len() as u16, payload);
             payload.extend(self.values.payload());
         }
         if let Some(page_size) = self.page_size {
@@ -146,7 +168,7 @@ impl ToPayload for QueryFrame {
         }
         if let Some(serial_consistency) = self.serial_consistency {
             if self.flags.serial_consistency() {
-                write_short(serial_consistency as i16, payload);
+                write_short(serial_consistency as u16, payload);
             }
         }
         if let Some(timestamp) = self.timestamp {

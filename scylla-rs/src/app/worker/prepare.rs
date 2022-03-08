@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::prelude::PreparedResult;
 use std::fmt::Debug;
 
 /// A statement prepare worker

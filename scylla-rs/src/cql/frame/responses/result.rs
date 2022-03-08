@@ -343,7 +343,7 @@ impl FromPayload for RowsResult {
 pub struct PreparedResultMetadata {
     pub flags: ResultFlags,
     pub columns_count: i32,
-    pub pk_indexes: Vec<i16>,
+    pub pk_indexes: Vec<u16>,
     pub global_table_spec: Option<GlobalTableSpec>,
     pub column_specs: Option<Vec<ColumnSpec>>,
 }
@@ -357,7 +357,7 @@ impl PreparedResultMetadata {
         self.columns_count
     }
 
-    pub fn pk_indexes(&self) -> &Vec<i16> {
+    pub fn pk_indexes(&self) -> &Vec<u16> {
         &self.pk_indexes
     }
 

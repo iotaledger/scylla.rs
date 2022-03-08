@@ -25,11 +25,11 @@ use tokio::{
 /// Sender state
 pub struct Sender {
     socket: OwnedWriteHalf,
-    appends_num: i16,
+    appends_num: u16,
 }
 
 impl Sender {
-    pub(super) fn new(split_sink_owned: OwnedWriteHalf, appends_num: i16) -> Self {
+    pub(super) fn new(split_sink_owned: OwnedWriteHalf, appends_num: u16) -> Self {
         Self {
             socket: split_sink_owned,
             appends_num,
@@ -38,7 +38,7 @@ impl Sender {
 }
 
 /// The sender's event type
-pub(super) type SenderEvent = i16;
+pub(super) type SenderEvent = u16;
 
 /// The Sender actor lifecycle implementation
 #[async_trait]

@@ -1,6 +1,9 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+//! This module implements the version 4 scylla request frame protocol.
+//! See `https://github.com/apache/cassandra/blob/3233c823116343cd95381790d736e239d800035a/doc/native_protocol_v4.spec#L280` for more details.
+
 pub mod auth_response;
 pub mod batch;
 pub mod batch_flags;

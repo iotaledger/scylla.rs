@@ -1,17 +1,20 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+//! Binding traits for binding scylla values to QUERY, EXECUTE, and BATCH frames
+
 use crate::prelude::ColumnEncoder;
 use std::fmt::Debug;
 
 /// Defines how values are bound to the frame
 pub trait Binder {
+    #[allow(missing_docs)]
     type Error: Debug;
     /// Add a single value
     fn value<V: ColumnEncoder>(self, value: &V) -> Result<Self, Self::Error>
     where
         Self: Sized;
-    /// Add a slice of values
+    /// Bind a type that may be a single value or a collection of values
     fn bind<V: Bindable>(self, values: &V) -> Result<Self, Self::Error>
     where
         Self: Sized,

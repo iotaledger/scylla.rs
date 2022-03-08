@@ -1,15 +1,32 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the response part of the challenge–response authentication.
+//! This module implements the AUTH_RESPONSE frame.
 
 use super::*;
 
-/// The authentication response frame.
+/**
+    Answers a server authentication challenge.
+
+    Authentication in the protocol is SASL based. The server sends authentication
+    challenges (a bytes token) to which the client answers with this message. Those
+    exchanges continue until the server accepts the authentication by sending a
+    AUTH_SUCCESS message after a client AUTH_RESPONSE. Note that the exchange
+    begins with the client sending an initial AUTH_RESPONSE in response to a
+    server AUTHENTICATE request.
+
+    The body of this message is a single `[bytes]` token. The details of what this
+    token contains (and when it can be null/empty, if ever) depends on the actual
+    authenticator used.
+
+    The response to a AUTH_RESPONSE is either a follow-up AUTH_CHALLENGE message,
+    an AUTH_SUCCESS message or an ERROR message.
+*/
 #[derive(Debug, Clone, Builder)]
 #[builder(derive(Clone, Debug))]
 #[builder(pattern = "owned", setter(strip_option))]
 pub struct AuthResponseFrame {
+    #[allow(missing_docs)]
     pub(crate) token: Vec<u8>,
 }
 
@@ -35,6 +52,7 @@ impl ToPayload for AuthResponseFrame {
 }
 
 impl AuthResponseFrameBuilder {
+    /// Set the authentication token using an [`Authenticator`]
     pub fn auth_token(mut self, authenticator: &impl Authenticator) -> Self {
         let token = authenticator.token();
         self.token.replace(token);

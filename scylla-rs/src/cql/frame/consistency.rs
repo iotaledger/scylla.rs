@@ -84,14 +84,6 @@ impl TryFrom<u16> for Consistency {
     }
 }
 
-impl TryFrom<i16> for Consistency {
-    type Error = anyhow::Error;
-
-    fn try_from(value: i16) -> Result<Self, Self::Error> {
-        (value as u16).try_into()
-    }
-}
-
 impl FromPayload for Consistency {
     fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
         Ok(read_short(start, payload)?.try_into()?)

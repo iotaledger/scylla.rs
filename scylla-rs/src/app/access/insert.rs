@@ -441,24 +441,6 @@ impl<R, B: Clone> Clone for InsertBuilder<R, B> {
     }
 }
 
-impl<R, B> Request for InsertBuilder<R, B> {
-    fn token(&self) -> i64 {
-        todo!()
-    }
-
-    fn statement(&self) -> &String {
-        todo!()
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        todo!()
-    }
-
-    fn keyspace(&self) -> Option<&String> {
-        todo!()
-    }
-}
-
 impl<R> TryInto<InsertRequest> for InsertBuilder<R, QueryFrameBuilder> {
     type Error = anyhow::Error;
 

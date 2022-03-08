@@ -191,7 +191,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
                 // Create Decoder from buffer.
                 let response_frame = ResponseFrame::decode::<C>(buffer)?;
                 match response_frame.body() {
-                    ResponseBody::Authenticate(auth_frame) => {
+                    ResponseBody::Authenticate(_auth_frame) => {
                         if self.authenticator.is_none() {
                             bail!("CQL connection not ready due to authenticator is not provided");
                         }
@@ -212,7 +212,7 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
                         let response_frame = ResponseFrame::decode::<C>(buffer)?;
                         match response_frame.body() {
                             ResponseBody::AuthSuccess(_) => (),
-                            ResponseBody::AuthChallenge(auth_chal) => {
+                            ResponseBody::AuthChallenge(_auth_chal) => {
                                 todo!("Support auth challenges")
                             }
                             ResponseBody::Error(err) => {

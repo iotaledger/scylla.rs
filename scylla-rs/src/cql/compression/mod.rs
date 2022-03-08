@@ -12,7 +12,9 @@ use thiserror::Error;
 
 /// This compression thread provides the buffer compression/decompression methods for uncompressed/Lz4/snappy.
 pub trait Compression: Sync {
+    /// The flag used in the frame for this compression, either 1 or 0
     const FLAG: u8;
+    /// The compression type enum variant representation
     const KIND: Option<CompressionType>;
     /// Accepts a buffer with a header and decompresses it.
     fn decompress(mut buffer: Vec<u8>) -> Result<Vec<u8>, CompressionError> {
@@ -51,11 +53,14 @@ pub trait Compression: Sync {
     fn compress_body(buffer: &[u8]) -> Result<Option<Vec<u8>>, CompressionError>;
 }
 
+/// The available compression types usable by scylla
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CompressionType {
+    /// Snappy compression, provided by [`snap`](https://docs.rs/snap/latest/snap/)
     #[serde(rename = "snappy")]
     Snappy = 0,
+    /// LZ4 compression, provided by [`lz4_flex`](https://docs.rs/lz4_flex/latest/lz4_flex/)
     #[serde(rename = "lz4")]
     Lz4 = 1,
 }
@@ -69,6 +74,7 @@ impl core::fmt::Display for CompressionType {
     }
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, Error)]
 pub enum CompressionError {
     #[error("Failed to compress the frame: {0}")]

@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This crate implements decoder/encoder for a Cassandra _ and the associated protocol.
+//! This module implements the version 4 scylla frame protocol.
 //! See `https://github.com/apache/cassandra/blob/trunk/doc/native_protocol_v4.spec` for more details.
 
 pub mod bind;
@@ -74,6 +74,7 @@ use std::{
 };
 use thiserror::Error;
 
+#[allow(missing_docs)]
 #[derive(Error, Debug)]
 pub enum FrameError {
     #[error("Invalid frame opcode. Expected {0:x}, got {1:x}")]
@@ -90,9 +91,11 @@ pub enum FrameError {
     CompressionError(CompressionError),
 }
 
+/// A wrapper for a `Vec<u8>` that can be used to encode and decode values as the `blob` scylla type.
 #[derive(Debug, Clone)]
 pub struct Blob(pub Vec<u8>);
 
+#[allow(missing_docs)]
 impl Blob {
     pub fn new(data: Vec<u8>) -> Self {
         Blob(data)
@@ -123,10 +126,9 @@ impl From<Vec<u8>> for Blob {
     }
 }
 
-/// Big Endian 16-length, used for MD5 ID
-pub const MD5_BE_LENGTH: [u8; 2] = [0, 16];
-
-/// Get the `String` from a u8 slice.
+/// Read a scylla `[string]` from a payload into an owned String.
+///
+/// `[string]`: A `[short]` n, followed by n bytes representing a UTF-8 string.
 pub fn read_string(start: &mut usize, payload: &[u8]) -> anyhow::Result<String> {
     anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes for string length");
     let length = read_short(start, payload)? as usize;
@@ -136,7 +138,9 @@ pub fn read_string(start: &mut usize, payload: &[u8]) -> anyhow::Result<String> 
     Ok(res)
 }
 
-/// Get the `String` from a u8 slice.
+/// Read a scylla `[long string]` from a payload into an owned String.
+///
+/// `[long string]`: An `[int]` n, followed by n bytes representing a UTF-8 string.
 pub fn read_long_string(start: &mut usize, payload: &[u8]) -> anyhow::Result<String> {
     anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for string length");
     let length = read_int(start, payload)? as usize;
@@ -146,7 +150,9 @@ pub fn read_long_string(start: &mut usize, payload: &[u8]) -> anyhow::Result<Str
     Ok(res)
 }
 
-/// Get the `&str` from a u8 payload.
+/// Read a scylla `[string]` from a payload into a borrowed str.
+///
+/// `[string]`: A `[short]` n, followed by n bytes representing a UTF-8 string.
 pub fn read_str<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a str> {
     anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes for string length");
     let length = read_short(start, payload)? as usize;
@@ -156,12 +162,9 @@ pub fn read_str<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a 
     Ok(res)
 }
 
-pub fn write_string(s: &str, payload: &mut Vec<u8>) {
-    payload.extend((s.len() as i16).to_be_bytes());
-    payload.extend(s.as_bytes());
-}
-
-/// Get the `&str` from a u8 payload.
+/// Read a scylla `[long string]` from a payload into a borrowed str.
+///
+/// `[long string]`: An `[int]` n, followed by n bytes representing a UTF-8 string.
 pub fn read_long_str<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a str> {
     anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for string length");
     let length = read_int(start, payload)? as usize;
@@ -171,22 +174,42 @@ pub fn read_long_str<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result
     Ok(res)
 }
 
+/// Write a scylla `[string]` to a payload.
+///
+/// `[string]`: A `[short]` n, followed by n bytes representing a UTF-8 string.
+pub fn write_string(s: &str, payload: &mut Vec<u8>) {
+    payload.extend((s.len() as u16).to_be_bytes());
+    payload.extend(s.as_bytes());
+}
+
+/// Write a scylla `[long string]` to a payload.
+///
+/// `[long string]`: An `[int]` n, followed by n bytes representing a UTF-8 string.
 pub fn write_long_string(s: &str, payload: &mut Vec<u8>) {
     payload.extend((s.len() as i32).to_be_bytes());
     payload.extend(s.as_bytes());
 }
 
-pub fn read_short(start: &mut usize, payload: &[u8]) -> anyhow::Result<i16> {
+/// Read a scylla `[short]` from a payload into a u16.
+///
+/// `[short]`: A 2 bytes unsigned integer
+pub fn read_short(start: &mut usize, payload: &[u8]) -> anyhow::Result<u16> {
     anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes for short");
-    let res = i16::from_be_bytes(payload[*start..][..2].try_into()?);
+    let res = u16::from_be_bytes(payload[*start..][..2].try_into()?);
     *start += 2;
     Ok(res)
 }
 
-pub fn write_short(v: i16, payload: &mut Vec<u8>) {
+/// Write a scylla `[short]` to a payload.
+///
+/// `[short]`: A 2 bytes unsigned integer
+pub fn write_short(v: u16, payload: &mut Vec<u8>) {
     payload.extend(v.to_be_bytes());
 }
 
+/// Read a scylla `[int]` from a payload into an i32.
+///
+/// `[int]`: A 4 bytes integer
 pub fn read_int(start: &mut usize, payload: &[u8]) -> anyhow::Result<i32> {
     anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for int");
     let res = i32::from_be_bytes(payload[*start..][..4].try_into()?);
@@ -194,10 +217,16 @@ pub fn read_int(start: &mut usize, payload: &[u8]) -> anyhow::Result<i32> {
     Ok(res)
 }
 
+/// Write a scylla `[int]` to a payload.
+///
+/// `[int]`: A 4 bytes integer
 pub fn write_int(v: i32, payload: &mut Vec<u8>) {
     payload.extend(v.to_be_bytes());
 }
 
+/// Read a scylla `[long]` from a payload into an i64.
+///
+/// `[long]`: An 8 bytes integer
 pub fn read_long(start: &mut usize, payload: &[u8]) -> anyhow::Result<i64> {
     anyhow::ensure!(payload.len() >= *start + 8, "Not enough bytes for long");
     let res = i64::from_be_bytes(payload[*start..][..8].try_into()?);
@@ -205,11 +234,17 @@ pub fn read_long(start: &mut usize, payload: &[u8]) -> anyhow::Result<i64> {
     Ok(res)
 }
 
+/// Write a scylla `[long]` to a payload.
+///
+/// `[long]`: An 8 bytes integer
 pub fn write_long(v: i64, payload: &mut Vec<u8>) {
     payload.extend(v.to_be_bytes());
 }
 
-/// Get the vector from byte payload.
+/// Read a scylla `[bytes]` from a payload into a borrowed slice.
+///
+/// `[bytes]`: An `[int]` n, followed by n bytes if `n >= 0`. If `n < 0`, no byte should follow and the value
+/// represented is `null`.
 pub fn read_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a [u8]> {
     anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for length");
     let length = read_int(start, payload)?;
@@ -223,12 +258,18 @@ pub fn read_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'
     }
 }
 
+/// Write a scylla `[bytes]` to a payload.
+///
+/// `[bytes]`: An `[int]` n, followed by n bytes if `n >= 0`. If `n < 0`, no byte should follow and the value
+/// represented is `null`.
 pub fn write_bytes(b: &[u8], payload: &mut Vec<u8>) {
     payload.extend((b.len() as i32).to_be_bytes());
     payload.extend(b);
 }
 
-/// Get the `short_bytes` from a u8 payload.
+/// Read a scylla `[short bytes]` from a payload into a borrowed slice.
+///
+/// `[short bytes]`: A `[short]` n, followed by n bytes if `n >= 0`.
 pub fn read_short_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a [u8]> {
     anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes");
     let length = read_short(start, payload)?;
@@ -242,24 +283,29 @@ pub fn read_short_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Res
     }
 }
 
+/// Write a scylla `[short bytes]` to a payload.
+///
+/// `[short bytes]`: A `[short]` n, followed by n bytes if `n >= 0`.
 pub fn write_short_bytes(b: &[u8], payload: &mut Vec<u8>) {
-    payload.extend((b.len() as i16).to_be_bytes());
+    payload.extend((b.len() as u16).to_be_bytes());
     payload.extend(b);
 }
 
-/// Get the `prepared_id` from a u8 payload.
+/// Read a prepared id from a payload into a `[u8; 16]`.
 pub fn read_prepared_id(start: &mut usize, payload: &[u8]) -> anyhow::Result<[u8; 16]> {
     anyhow::ensure!(payload.len() >= *start + 18, "Not enough bytes for prepared id");
     Ok(read_short_bytes(start, payload)?.try_into()?)
 }
 
+/// Write a prepared id to a payload.
 pub fn write_prepared_id(id: [u8; 16], payload: &mut Vec<u8>) {
-    payload.extend((id.len() as i16).to_be_bytes());
+    payload.extend((id.len() as u16).to_be_bytes());
     payload.extend(id);
 }
 
-// helper types frame functions
-/// Get the string list from a u8 payload.
+/// Read a scylla `[string list]` from a payload into a `Vec<String>`.
+///
+/// `[string list]`: A `[short]` n, followed by n `[string]`.
 pub fn read_string_list(start: &mut usize, payload: &[u8]) -> anyhow::Result<Vec<String>> {
     let list_len = read_short(start, payload)? as usize;
     let mut list = Vec::with_capacity(list_len);
@@ -269,13 +315,18 @@ pub fn read_string_list(start: &mut usize, payload: &[u8]) -> anyhow::Result<Vec
     Ok(list)
 }
 
+/// Write a scylla `[string list]` to a payload.
+///
+/// `[string list]`: A `[short]` n, followed by n `[string]`.
 pub fn write_string_list(l: &[String], payload: &mut Vec<u8>) {
-    payload.extend((l.len() as i16).to_be_bytes());
+    payload.extend((l.len() as u16).to_be_bytes());
     for s in l {
         write_string(s, payload);
     }
 }
 
+/// Read a list of any type that can be read from a payload into a `Vec<T>`.
+/// Uses `[short]` for the length of the list.
 pub fn read_list<T: FromPayload>(start: &mut usize, payload: &[u8]) -> anyhow::Result<Vec<T>> {
     let list_len = read_short(start, payload)? as usize;
     let mut list = Vec::with_capacity(list_len);
@@ -285,13 +336,18 @@ pub fn read_list<T: FromPayload>(start: &mut usize, payload: &[u8]) -> anyhow::R
     Ok(list)
 }
 
+/// Write a list of any type that can be written to a payload.
+/// Uses `[short]` for the length of the list.
 pub fn write_list<T: ToPayload>(l: Vec<T>, payload: &mut Vec<u8>) {
-    payload.extend((l.len() as i16).to_be_bytes());
+    payload.extend((l.len() as u16).to_be_bytes());
     for v in l {
         T::to_payload(v, payload);
     }
 }
 
+/// Read a scylla `[string map]` from a payload into a `HashMap<String, String>`.
+///
+/// `[string map]`: A `[short]` n, followed by n pair `<k><v>` where `<k>` and `<v>` are `[string]`.
 pub fn read_string_map(start: &mut usize, payload: &[u8]) -> anyhow::Result<HashMap<String, String>> {
     let length = read_short(start, payload)? as usize;
     let mut multimap = HashMap::with_capacity(length);
@@ -301,15 +357,21 @@ pub fn read_string_map(start: &mut usize, payload: &[u8]) -> anyhow::Result<Hash
     Ok(multimap)
 }
 
+/// Write a scylla `[string map]` to a payload.
+///
+/// `[string map]`: A `[short]` n, followed by n pair `<k><v>` where `<k>` and `<v>` are `[string]`.
 pub fn write_string_map(m: &HashMap<String, String>, payload: &mut Vec<u8>) {
-    payload.extend((m.len() as i16).to_be_bytes());
+    payload.extend((m.len() as u16).to_be_bytes());
     for (k, v) in m {
         write_string(k, payload);
         write_string(v, payload);
     }
 }
 
-/// Get hashmap of string to string vector from payload.
+/// Read a scylla `[string multimap]` from a payload into a `HashMap<String, Vec<String>>`.
+///
+/// `[string multimap]`: A `[short]` n, followed by n pair `<k><v>` where `<k>` is a `[string]` and `<v>` is a `[string
+/// list]`.
 pub fn read_string_multimap(start: &mut usize, payload: &[u8]) -> anyhow::Result<HashMap<String, Vec<String>>> {
     let length = read_short(start, payload)? as usize;
     let mut multimap = HashMap::with_capacity(length);
@@ -319,14 +381,25 @@ pub fn read_string_multimap(start: &mut usize, payload: &[u8]) -> anyhow::Result
     Ok(multimap)
 }
 
+/// Write a scylla `[string multimap]` to a payload.
+///
+/// `[string multimap]`: A `[short]` n, followed by n pair `<k><v>` where `<k>` is a `[string]` and `<v>` is a `[string
+/// list]`.
 pub fn write_string_multimap(m: &HashMap<String, Vec<String>>, payload: &mut Vec<u8>) {
-    payload.extend((m.len() as i16).to_be_bytes());
+    payload.extend((m.len() as u16).to_be_bytes());
     for (k, v) in m {
         write_string(k, payload);
         write_string_list(v, payload);
     }
 }
 
+/// Read a scylla `[inet]` from a payload into a `SocketAddr`.
+///
+/// `[inet]`: An address (ip and port) to a node. It consists of one
+///     `[byte]` n, that represents the address size, followed by n
+///     `[byte]` representing the IP address (in practice n can only be
+///     either 4 (IPv4) or 16 (IPv6)), following by one `[int]`
+///     representing the port.
 pub fn read_inet(start: &mut usize, payload: &[u8]) -> anyhow::Result<SocketAddr> {
     anyhow::ensure!(payload.len() > *start, "Not enough bytes for inet");
     let address_len = payload[0] as usize;
@@ -346,6 +419,13 @@ pub fn read_inet(start: &mut usize, payload: &[u8]) -> anyhow::Result<SocketAddr
     })
 }
 
+/// Write a scylla `[inet]` to a payload.
+///
+/// `[inet]`: An address (ip and port) to a node. It consists of one
+///     `[byte]` n, that represents the address size, followed by n
+///     `[byte]` representing the IP address (in practice n can only be
+///     either 4 (IPv4) or 16 (IPv6)), following by one `[int]`
+///     representing the port.
 pub fn write_inet(a: SocketAddr, payload: &mut Vec<u8>) {
     match a {
         SocketAddr::V4(addr) => {
@@ -361,6 +441,9 @@ pub fn write_inet(a: SocketAddr, payload: &mut Vec<u8>) {
     }
 }
 
+/// Read a scylla `[byte`] from a payload into a `u8`.
+///
+/// `[byte]`: A 1 byte unsigned integer
 pub fn read_byte(start: &mut usize, payload: &[u8]) -> anyhow::Result<u8> {
     anyhow::ensure!(payload.len() > *start, "Not enough bytes");
     let res = payload[*start];
@@ -368,11 +451,17 @@ pub fn read_byte(start: &mut usize, payload: &[u8]) -> anyhow::Result<u8> {
     Ok(res)
 }
 
+/// Write a scylla `[byte]` to a payload.
+///
+/// `[byte]`: A 1 byte unsigned integer
 pub fn write_byte(b: u8, payload: &mut Vec<u8>) {
     payload.push(b);
 }
 
+/// Defines a type that can be read from a frame payload.
 pub trait FromPayload: Sized {
+    /// Read this value from a frame payload. This method should read the payload beginning with the given `start`
+    /// index, and update it by adding the number of bytes read.
     fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self>;
 }
 
@@ -388,6 +477,8 @@ impl FromPayload for SocketAddr {
     }
 }
 
+/// Defines a type that can be written to a frame payload.
 pub trait ToPayload {
+    /// Write this value to a frame payload.
     fn to_payload(self, payload: &mut Vec<u8>);
 }

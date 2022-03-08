@@ -1,12 +1,12 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the Startup frame.
+//! This module implements the STARTUP frame.
 
 use super::*;
 use std::collections::HashMap;
 
-/// The Startup frame.
+
 #[derive(Clone, Debug, Builder)]
 #[builder(derive(Clone, Debug))]
 #[builder(pattern = "owned")]
