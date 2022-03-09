@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod batch;
+pub(crate) mod data_def;
 /// Provides the `Delete` trait which can be implemented to
 /// define delete queries for Key / Value pairs and how
 /// they are decoded
 pub(crate) mod delete;
-pub(crate) mod execute;
 /// Provides the `Insert` trait which can be implemented to
 /// define insert queries for Key / Value pairs and how
 /// they are decoded
@@ -30,13 +30,6 @@ use super::{
     Worker,
     WorkerError,
 };
-use crate::prelude::{
-    PreparedResult,
-    RequestFrame,
-    ResponseBody,
-    ResponseFrame,
-    ResultBodyKind,
-};
 pub use crate::{
     app::{
         ring::{
@@ -44,17 +37,27 @@ pub use crate::{
             RingSendError,
         },
         stage::reporter::ReporterEvent,
+        worker::GetWorkerExt,
     },
     cql::{
         compression::{
             Compression,
             Uncompressed,
         },
+        BatchFrame,
         Bindable,
         Binder,
         Consistency,
+        ExecuteFrame,
         ExecuteFrameBuilder,
+        PrepareFrame,
+        PreparedResult,
+        QueryFrame,
         QueryFrameBuilder,
+        RequestFrame,
+        ResponseBody,
+        ResponseFrame,
+        ResultBodyKind,
         RowsDecoder,
     },
     prelude::{
@@ -70,24 +73,26 @@ pub use batch::{
     BatchCollector,
     BatchRequest,
 };
+pub use data_def::{
+    AsDynamicDataDefRequest,
+    DataDefBuilder,
+    DataDefRequest,
+};
 pub use delete::{
     AsDynamicDeleteRequest,
     Delete,
     DeleteBuilder,
-    DeleteRequest,
+    ExecuteDeleteRequest,
     GetStaticDeleteRequest,
-};
-pub use execute::{
-    AsDynamicExecuteRequest,
-    ExecuteBuilder,
-    ExecuteRequest,
+    QueryDeleteRequest,
 };
 pub use insert::{
     AsDynamicInsertRequest,
+    ExecuteInsertRequest,
     GetStaticInsertRequest,
     Insert,
     InsertBuilder,
-    InsertRequest,
+    QueryInsertRequest,
 };
 pub use keyspace::Keyspace;
 pub use prepare::{
@@ -100,10 +105,11 @@ pub use scylla_parse::*;
 pub use scylla_rs_macros::parse_statement;
 pub use select::{
     AsDynamicSelectRequest,
+    ExecuteSelectRequest,
     GetStaticSelectRequest,
+    QuerySelectRequest,
     Select,
     SelectBuilder,
-    SelectRequest,
 };
 pub use std::{
     borrow::Cow,
@@ -124,10 +130,11 @@ use std::{
 use thiserror::Error;
 pub use update::{
     AsDynamicUpdateRequest,
+    ExecuteUpdateRequest,
     GetStaticUpdateRequest,
+    QueryUpdateRequest,
     Update,
     UpdateBuilder,
-    UpdateRequest,
 };
 
 pub trait TableMetadata {
@@ -405,7 +412,8 @@ pub enum RequestType {
     Delete = 2,
     Select = 3,
     Batch = 4,
-    Execute = 5,
+    DataDef = 5,
+    Prepare = 6,
 }
 
 /// Errors which can be returned from a sent request
@@ -421,133 +429,144 @@ pub enum RequestError {
 }
 
 /// A request which has a token, statement, and payload
-pub trait Request {
+pub trait RequestFrameExt: Debug {
+    type Frame: Into<RequestFrame> + Clone;
     /// Get the token for this request
+    fn frame(&self) -> &Self::Frame;
+
+    fn into_frame(self) -> RequestFrame;
+}
+
+pub trait ShardAwareExt {
     fn token(&self) -> i64;
 
-    /// Get the statement that was used to create this request
-    fn statement(&self) -> &String;
-
-    /// Get the request payload
-    fn payload(&self) -> Vec<u8>;
-
-    /// get the keyspace of the request
     fn keyspace(&self) -> Option<&String>;
 }
 
+pub trait ReprepareExt {
+    type OutRequest: SendRequestExt + Clone;
+    fn convert(self) -> Self::OutRequest;
+
+    fn statement(&self) -> &String;
+}
+
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
-#[async_trait::async_trait]
-pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
+pub trait SendRequestExt: 'static + RequestFrameExt + Debug + Send + Sync + Sized {
+    type Worker: Worker;
     /// The marker type which will be returned when sending a request
     type Marker: 'static + Marker;
-    /// The default worker type
-    type Worker: RetryableWorker<Self>;
     /// The request type
     const TYPE: RequestType;
 
     fn marker(&self) -> Self::Marker;
 
     /// Create a worker containing this request
-    fn worker(self) -> Box<Self::Worker>;
+    fn worker(self) -> Self::Worker;
+
+    /// Create an event worker and request frame
+    fn event(self) -> (Self::Worker, RequestFrame);
 
     /// Send this request to a specific reporter, without waiting for a response
     fn send_to_reporter(self, reporter: &ReporterHandle) -> Result<DecodeResult<Self::Marker>, RequestError> {
         let marker = self.marker();
-        self.worker().send_to_reporter(reporter)?;
+        let (worker, frame) = self.event();
+        let request = ReporterEvent::Request {
+            frame,
+            worker: Box::new(worker),
+        };
+        reporter.send(request).map_err(|e| RingSendError::SendError(e))?;
         Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request and worker to a specific reporter, without waiting for a response
-    fn send_to_reporter_with_worker<W: 'static + RetryableWorker<Self>>(
+    fn send_to_reporter_with_worker<W: 'static + Worker>(
         self,
         reporter: &ReporterHandle,
-        worker: Box<W>,
+        worker: W,
     ) -> Result<DecodeResult<Self::Marker>, RequestError> {
         let marker = self.marker();
-        worker.send_to_reporter(reporter)?;
+        let request = ReporterEvent::Request {
+            frame: self.into_frame().into(),
+            worker: Box::new(worker),
+        };
+        reporter.send(request).map_err(|e| RingSendError::SendError(e))?;
         Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request to the local datacenter, without waiting for a response
-    fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
+    fn send_local(self) -> Result<DecodeResult<Self::Marker>, RequestError>
+    where
+        Self: ShardAwareExt,
+    {
         let marker = self.marker();
-        self.worker().send_local()?;
+        let (keyspace, token) = (self.keyspace().cloned(), self.token());
+        let (worker, frame) = self.event();
+        send_local(keyspace.as_deref(), token, frame, worker)?;
         Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request and worker to the local datacenter, without waiting for a response
-    fn send_local_with_worker<W: 'static + Worker>(
-        self,
-        worker: Box<W>,
-    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+    fn send_local_with_worker<W: 'static + Worker>(self, worker: W) -> Result<DecodeResult<Self::Marker>, RequestError>
+    where
+        Self: ShardAwareExt,
+    {
         let marker = self.marker();
-        send_local(
-            self.keyspace().clone().as_ref().map(|s| s.as_str()),
-            self.token(),
-            self.payload(),
-            worker,
-        )?;
+        let (keyspace, token) = (self.keyspace().cloned(), self.token());
+        send_local(keyspace.as_deref(), token, self.into_frame(), worker)?;
         Ok(DecodeResult::new(marker, Self::TYPE))
     }
     /// Send this request to a global datacenter, without waiting for a response
-    fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError> {
+    fn send_global(self) -> Result<DecodeResult<Self::Marker>, RequestError>
+    where
+        Self: ShardAwareExt,
+    {
         let marker = self.marker();
-        self.worker().send_global()?;
+        let (keyspace, token) = (self.keyspace().cloned(), self.token());
+        let (worker, frame) = self.event();
+        send_global(keyspace.as_deref(), token, frame, worker)?;
         Ok(DecodeResult::new(marker, Self::TYPE))
     }
 
     /// Send this request and worker to a global datacenter, without waiting for a response
-    fn send_global_with_worker<W: 'static + Worker>(
-        self,
-        worker: Box<W>,
-    ) -> Result<DecodeResult<Self::Marker>, RequestError> {
+    fn send_global_with_worker<W: 'static + Worker>(self, worker: W) -> Result<DecodeResult<Self::Marker>, RequestError>
+    where
+        Self: ShardAwareExt,
+    {
         let marker = self.marker();
-        send_global(
-            self.keyspace().clone().as_ref().map(|s| s.as_str()),
-            self.token(),
-            self.payload(),
-            worker,
-        )?;
+        let (keyspace, token) = (self.keyspace().cloned(), self.token());
+        send_global(keyspace.as_deref(), token, self.into_frame(), worker)?;
         Ok(DecodeResult::new(marker, Self::TYPE))
     }
+}
+
+/// Helper trait for getting query responses from a request
+#[async_trait::async_trait]
+pub trait GetRequestExt: SendRequestExt + ShardAwareExt + Clone {
     /// Send this request to the local datacenter and await the response asynchronously
     async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        Self::Marker: Send + Sync,
-        Self::Worker:
-            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
-        self.worker().get_local().await
-    }
+        Self::Marker: Send + Sync;
 
     /// Send this request to the local datacenter and await the response asynchronously
-    async fn get_local_with_worker<W: 'static + RetryableWorker<Self>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    async fn get_local_with_worker<W>(self, worker: W) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<Self>
+            + IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         worker.get_local().await
     }
 
     /// Send this request to the local datacenter and await the response synchronously
-    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
-    where
-        Self::Worker:
-            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
-        self.worker().get_local_blocking()
-    }
+    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>;
 
     /// Send this request to the local datacenter and await the response synchronously
-    fn get_local_blocking_with_worker<W: 'static + RetryableWorker<Self>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    fn get_local_blocking_with_worker<W>(self, worker: W) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<Self>
+            + IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         worker.get_local_blocking()
     }
@@ -555,52 +574,66 @@ pub trait SendRequestExt: 'static + Request + Debug + Send + Sync + Sized {
     /// Send this request to a global datacenter and await the response asynchronously
     async fn get_global(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        Self::Marker: Send + Sync,
-        Self::Worker:
-            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
-        self.worker().get_global().await
-    }
+        Self::Marker: Send + Sync;
 
     /// Send this request to a global datacenter and await the response asynchronously
-    async fn get_global_with_worker<W: 'static + RetryableWorker<Self>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    async fn get_global_with_worker<W>(self, worker: W) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
         Self::Marker: Send + Sync,
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<Self>
+            + IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         worker.get_global().await
     }
 
     /// Send this request to a global datacenter and await the response synchronously
-    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
-    where
-        Self::Worker:
-            IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
-        self.worker().get_global_blocking()
-    }
+    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError>;
 
     /// Send this request to a global datacenter and await the response synchronously
-    fn get_global_blocking_with_worker<W: 'static + RetryableWorker<Self>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    fn get_global_blocking_with_worker<W>(self, worker: W) -> Result<<Self::Marker as Marker>::Output, RequestError>
     where
-        W: IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<Self>
+            + IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         worker.get_global_blocking()
     }
 }
+#[async_trait::async_trait]
+impl<T: SendRequestExt + ShardAwareExt + Clone> GetRequestExt for T
+where
+    T::Worker: RetryableWorker<Self>
+        + IntoRespondingWorker<Self, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
+{
+    async fn get_local(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+    {
+        self.worker().get_local().await
+    }
+
+    fn get_local_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError> {
+        self.worker().get_local_blocking()
+    }
+
+    async fn get_global(self) -> Result<<Self::Marker as Marker>::Output, RequestError>
+    where
+        Self::Marker: Send + Sync,
+    {
+        self.worker().get_global().await
+    }
+
+    fn get_global_blocking(self) -> Result<<Self::Marker as Marker>::Output, RequestError> {
+        self.worker().get_global_blocking()
+    }
+}
 
 /// Extension trait which provides helper functions for sending requests and retrieving their responses
-#[async_trait::async_trait]
 pub trait SendAsRequestExt<R>
 where
     Self: TryInto<R>,
-    R: SendRequestExt,
+    R: SendRequestExt + Clone,
     Self::Error: Debug,
 {
     /// Send this request to a specific reporter, without waiting for a response
@@ -614,7 +647,7 @@ where
     fn send_to_reporter_with_worker<W: 'static + RetryableWorker<R>>(
         self,
         reporter: &ReporterHandle,
-        worker: Box<W>,
+        worker: W,
     ) -> Result<DecodeResult<R::Marker>, RequestError> {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
@@ -622,75 +655,83 @@ where
     }
 
     /// Send this request to the local datacenter, without waiting for a response
-    fn send_local(self) -> Result<DecodeResult<R::Marker>, RequestError> {
+    fn send_local(self) -> Result<DecodeResult<R::Marker>, RequestError>
+    where
+        R: ShardAwareExt,
+    {
         self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?.send_local()
     }
 
     /// Send this request and worker to the local datacenter, without waiting for a response
-    fn send_local_with_worker<W: 'static + Worker>(
-        self,
-        worker: Box<W>,
-    ) -> Result<DecodeResult<R::Marker>, RequestError> {
+    fn send_local_with_worker<W: 'static + Worker>(self, worker: W) -> Result<DecodeResult<R::Marker>, RequestError>
+    where
+        R: ShardAwareExt,
+    {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
             .send_local_with_worker(worker)
     }
     /// Send this request to a global datacenter, without waiting for a response
-    fn send_global(self) -> Result<DecodeResult<R::Marker>, RequestError> {
+    fn send_global(self) -> Result<DecodeResult<R::Marker>, RequestError>
+    where
+        R: ShardAwareExt,
+    {
         self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?.send_global()
     }
 
     /// Send this request and worker to a global datacenter, without waiting for a response
-    fn send_global_with_worker<W: 'static + Worker>(
-        self,
-        worker: Box<W>,
-    ) -> Result<DecodeResult<R::Marker>, RequestError> {
+    fn send_global_with_worker<W: 'static + Worker>(self, worker: W) -> Result<DecodeResult<R::Marker>, RequestError>
+    where
+        R: ShardAwareExt,
+    {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
             .send_global_with_worker(worker)
     }
+}
+
+/// Defines helper functions for getting query results from anything that looks like a basic request
+#[async_trait::async_trait]
+pub trait GetAsRequestExt<R>
+where
+    Self: SendAsRequestExt<R>,
+    R: GetRequestExt,
+    Self::Error: Debug,
+{
     /// Send this request to the local datacenter and await the response asynchronously
     async fn get_local(self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R::Marker: Send + Sync,
-        R::Worker:
-            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
         req.get_local().await
     }
 
     /// Send this request to the local datacenter and await the response asynchronously
-    async fn get_local_with_worker<W: 'static + RetryableWorker<R>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    async fn get_local_with_worker<W>(self, worker: W) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R::Marker: Send + Sync,
-        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<R>
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
         req.get_local_with_worker(worker).await
     }
 
     /// Send this request to the local datacenter and await the response synchronously
-    fn get_local_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError>
-    where
-        R::Worker:
-            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
+    fn get_local_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError> {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
             .get_local_blocking()
     }
 
     /// Send this request to the local datacenter and await the response synchronously
-    fn get_local_blocking_with_worker<W: 'static + RetryableWorker<R>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    fn get_local_blocking_with_worker<W>(self, worker: W) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
-        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<R>
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
@@ -701,88 +742,49 @@ where
     async fn get_global(self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R::Marker: Send + Sync,
-        R::Worker:
-            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
     {
         let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
         req.get_global().await
     }
 
     /// Send this request to a global datacenter and await the response asynchronously
-    async fn get_global_with_worker<W: 'static + RetryableWorker<R>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    async fn get_global_with_worker<W>(self, worker: W) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
         R::Marker: Send + Sync,
-        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<R>
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         let req = self.try_into().map_err(|e| anyhow::anyhow!("{:?}", e))?;
         req.get_global_with_worker(worker).await
     }
 
     /// Send this request to a global datacenter and await the response synchronously
-    fn get_global_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError>
-    where
-        R::Worker:
-            IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
+    fn get_global_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError> {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
             .get_global_blocking()
     }
 
     /// Send this request to a global datacenter and await the response synchronously
-    fn get_global_blocking_with_worker<W: 'static + RetryableWorker<R>>(
-        self,
-        worker: Box<W>,
-    ) -> Result<<R::Marker as Marker>::Output, RequestError>
+    fn get_global_blocking_with_worker<W>(self, worker: W) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
-        W: IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        W: 'static
+            + RetryableWorker<R>
+            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
     {
         self.try_into()
             .map_err(|e| anyhow::anyhow!("{:?}", e))?
             .get_global_blocking_with_worker(worker)
     }
 }
-
-/// A common request type which contains only the bare minimum information needed
-#[derive(Debug, Clone)]
-pub struct CommonRequest {
-    pub(crate) token: i64,
-    pub(crate) payload: Vec<u8>,
-    pub(crate) keyspace: Option<String>,
-    pub(crate) statement: String,
-}
-
-impl CommonRequest {
-    #[allow(missing_docs)]
-    pub fn new<T: Into<String>>(keyspace: Option<String>, statement: String, payload: Vec<u8>) -> Self {
-        Self {
-            token: 0,
-            payload,
-            keyspace,
-            statement,
-        }
-    }
-}
-
-impl Request for CommonRequest {
-    fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn statement(&self) -> &String {
-        &self.statement
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.payload.clone()
-    }
-
-    fn keyspace(&self) -> Option<&String> {
-        self.keyspace.as_ref()
-    }
+impl<T, R> GetAsRequestExt<R> for T
+where
+    T: SendAsRequestExt<R>,
+    R: GetRequestExt,
+    T: TryInto<R>,
+    T::Error: Debug,
+{
 }
 
 /// Defines two helper methods to specify statement / id
@@ -1009,26 +1011,32 @@ impl<V> DecodeResult<DecodeRows<V>> {
 
 /// Send a local request to the Ring
 #[inline]
-pub fn send_local(
+pub fn send_local<W: Worker>(
     keyspace: Option<&str>,
     token: i64,
-    payload: Vec<u8>,
-    worker: Box<dyn Worker>,
+    frame: RequestFrame,
+    worker: W,
 ) -> Result<(), RingSendError> {
-    let request = ReporterEvent::Request { worker, payload };
+    let request = ReporterEvent::Request {
+        worker: Box::new(worker),
+        frame,
+    };
 
     SharedRing::send_local_random_replica(keyspace, token, request)
 }
 
 /// Send a global request to the Ring
 #[inline]
-pub fn send_global(
+pub fn send_global<W: Worker>(
     keyspace: Option<&str>,
     token: i64,
-    payload: Vec<u8>,
-    worker: Box<dyn Worker>,
+    frame: RequestFrame,
+    worker: W,
 ) -> Result<(), RingSendError> {
-    let request = ReporterEvent::Request { worker, payload };
+    let request = ReporterEvent::Request {
+        worker: Box::new(worker),
+        frame,
+    };
 
     SharedRing::send_global_random_replica(keyspace, token, request)
 }

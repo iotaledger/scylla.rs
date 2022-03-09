@@ -1,13 +1,23 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the challenge part of the challenge–response authentication.
+//! This module implements the AUTH_CHALLENGE frame.
 
 use super::*;
 
-/// The authentication Challenge structure with the token field.
+/**
+   A server authentication challenge (see [`AuthResponseFrame`] for more
+   details).
+
+   The body of this message is a single `[bytes]` token. The details of what this
+   token contains (and when it can be null/empty, if ever) depends on the actual
+   authenticator used.
+
+   Clients are expected to answer the server challenge with an [`AuthResponseFrame`].
+*/
 #[derive(Clone, Debug)]
 pub struct AuthChallengeFrame {
+    /// The authentication token.
     pub token: Vec<u8>,
 }
 

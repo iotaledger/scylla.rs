@@ -13,12 +13,13 @@ pub mod ready;
 pub mod result;
 pub mod supported;
 
-use crate::prelude::Compression;
-
 use super::*;
+use crate::prelude::Compression;
 use thiserror::Error;
 
+/// Possible response frame bodies.
 #[derive(Clone, Debug, From, TryInto)]
+#[allow(missing_docs)]
 pub enum ResponseBody {
     Error(ErrorFrame),
     Ready(ReadyFrame),
@@ -31,16 +32,17 @@ pub enum ResponseBody {
 }
 
 impl ResponseBody {
-    pub fn opcode(&self) -> u8 {
+    /// Get the frame type's opcode.
+    pub fn opcode(&self) -> OpCode {
         match self {
-            Self::Error(_) => opcode::ERROR,
-            Self::Ready(_) => opcode::READY,
-            Self::Authenticate(_) => opcode::AUTHENTICATE,
-            Self::Supported(_) => opcode::SUPPORTED,
-            Self::Result(_) => opcode::RESULT,
-            Self::Event(_) => opcode::EVENT,
-            Self::AuthChallenge(_) => opcode::AUTH_CHALLENGE,
-            Self::AuthSuccess(_) => opcode::AUTH_SUCCESS,
+            Self::Error(_) => OpCode::Error,
+            Self::Ready(_) => OpCode::Ready,
+            Self::Authenticate(_) => OpCode::Authenticate,
+            Self::Supported(_) => OpCode::Supported,
+            Self::Result(_) => OpCode::Result,
+            Self::Event(_) => OpCode::Event,
+            Self::AuthChallenge(_) => OpCode::AuthChallenge,
+            Self::AuthSuccess(_) => OpCode::AuthSuccess,
         }
     }
 }
@@ -56,6 +58,7 @@ impl TryInto<RowsResult> for ResponseBody {
     }
 }
 
+/// A response frame, which contains a [`Header`] and a [`ResponseBody`].
 #[derive(Clone, Debug)]
 pub struct ResponseFrame {
     pub(crate) header: Header,
@@ -95,65 +98,83 @@ impl FromPayload for ResponseFrame {
     fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
         let header = Header::from_payload(start, payload)?;
         let body = match header.opcode() {
-            0x00 => ResponseBody::Error(ErrorFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x02 => ResponseBody::Ready(ReadyFrame),
-            0x03 => ResponseBody::Authenticate(
+            OpCode::Error => {
+                ResponseBody::Error(ErrorFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::Ready => ResponseBody::Ready(ReadyFrame),
+            OpCode::Authenticate => ResponseBody::Authenticate(
                 AuthenticateFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?,
             ),
-            0x06 => {
+            OpCode::Supported => {
                 ResponseBody::Supported(SupportedFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
             }
-            0x08 => ResponseBody::Result(ResultFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x0C => ResponseBody::Event(EventFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x0E => ResponseBody::AuthChallenge(
+            OpCode::Result => {
+                ResponseBody::Result(ResultFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::Event => {
+                ResponseBody::Event(EventFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::AuthChallenge => ResponseBody::AuthChallenge(
                 AuthChallengeFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?,
             ),
-            0x10 => ResponseBody::AuthSuccess(
+            OpCode::AuthSuccess => ResponseBody::AuthSuccess(
                 AuthSuccessFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?,
             ),
-            c => anyhow::bail!("Unknown frame opcode: {}", c),
+            c => anyhow::bail!("Invalid response frame opcode: {:x}", c as u8),
         };
         Ok(Self { header, body })
     }
 }
 
 impl ResponseFrame {
+    /// Get the frame body.
     pub fn body(&self) -> &ResponseBody {
         &self.body
     }
+    /// Consume the frame and get the body.
     pub fn into_body(self) -> ResponseBody {
         self.body
     }
+    /// Check if the frame is an [`ErrorFrame`].
     pub fn is_error_frame(&self) -> bool {
-        self.header.opcode() == opcode::ERROR
+        self.header.opcode() == OpCode::Error
     }
+    /// Check if the frame is a [`ReadyFrame`].
     pub fn is_ready_frame(&self) -> bool {
-        self.header.opcode() == opcode::READY
+        self.header.opcode() == OpCode::Ready
     }
+    /// Check if the frame is an [`AuthenticateFrame`].
     pub fn is_authenticate_frame(&self) -> bool {
-        self.header.opcode() == opcode::AUTHENTICATE
+        self.header.opcode() == OpCode::Authenticate
     }
+    /// Check if the frame is a [`SupportedFrame`].
     pub fn is_supported_frame(&self) -> bool {
-        self.header.opcode() == opcode::SUPPORTED
+        self.header.opcode() == OpCode::Supported
     }
+    /// Check if the frame is a [`ResultFrame`].
     pub fn is_result_frame(&self) -> bool {
-        self.header.opcode() == opcode::RESULT
+        self.header.opcode() == OpCode::Result
     }
+    /// Check if the frame is an [`EventFrame`].
     pub fn is_event_frame(&self) -> bool {
-        self.header.opcode() == opcode::EVENT
+        self.header.opcode() == OpCode::Event
     }
+    /// Check if the frame is an [`AuthChallengeFrame`].
     pub fn is_auth_challenge_frame(&self) -> bool {
-        self.header.opcode() == opcode::AUTH_CHALLENGE
+        self.header.opcode() == OpCode::AuthChallenge
     }
+    /// Check if the frame is an [`AuthSuccessFrame`].
     pub fn is_auth_success_frame(&self) -> bool {
-        self.header.opcode() == opcode::AUTH_SUCCESS
+        self.header.opcode() == OpCode::AuthSuccess
     }
+    /// Get the frame error if it is an [`ErrorFrame`].
     pub fn get_error(&self) -> anyhow::Result<&ErrorFrame> {
         match self.body() {
             ResponseBody::Error(e) => Ok(e),
             _ => Err(anyhow::anyhow!("Not an error")),
         }
     }
+    /// Decode the frame using a given compression.
     pub fn decode<C: Compression>(payload: Vec<u8>) -> Result<Self, FrameError> {
         ResponseFrame::from_payload(
             &mut 0,

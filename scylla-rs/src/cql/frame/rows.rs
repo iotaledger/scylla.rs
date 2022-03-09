@@ -13,6 +13,7 @@ use std::{
     marker::PhantomData,
 };
 
+/// A result row which can be used to decode column values in order.
 pub struct ResultRow<'a> {
     idx: &'a mut usize,
     remaining_cols: usize,
@@ -20,7 +21,7 @@ pub struct ResultRow<'a> {
 }
 
 impl<'a> ResultRow<'a> {
-    pub fn new(idx: &'a mut usize, rows: &'a RowsResult) -> Self {
+    pub(crate) fn new(idx: &'a mut usize, rows: &'a RowsResult) -> Self {
         Self {
             buffer: &rows.rows()[*idx..],
             remaining_cols: rows.metadata().columns_count() as usize,
@@ -28,6 +29,8 @@ impl<'a> ResultRow<'a> {
         }
     }
 
+    /// Decode a column value from the row. This will fail if there are no more columns to decode
+    /// (specified by the result frame), or if the buffer is malformatted.
     pub fn decode_column<C: ColumnDecoder>(&mut self) -> anyhow::Result<C> {
         ensure!(self.remaining_cols > 0, "No more columns to decode");
         ensure!(
@@ -67,7 +70,7 @@ where
     }
 }
 
-/// An iterator over the rows of a result-set
+/// A reference iterator over the rows of a result set
 #[derive(Clone)]
 pub struct Iter<'a, T: RowDecoder> {
     rows: &'a RowsResult,
@@ -85,6 +88,7 @@ impl<'a, T: RowDecoder> std::fmt::Debug for Iter<'a, T> {
     }
 }
 impl<'a, T: RowDecoder> Iter<'a, T> {
+    /// Create a new iterator over the rows of a result set
     pub fn new(result: &'a RowsResult) -> Self {
         Self {
             remaining_rows: result.rows_count() as usize,
@@ -111,10 +115,12 @@ impl<'a, T: RowDecoder> Iter<'a, T> {
         self.rows.metadata().flags().has_more_pages()
     }
 
+    /// Get the result set column count
     pub fn columns_count(&self) -> usize {
         self.rows.metadata().columns_count() as usize
     }
 
+    /// Get the result set paging state
     pub fn paging_state(&self) -> &Option<Vec<u8>> {
         self.rows.metadata().paging_state()
     }
@@ -140,6 +146,7 @@ impl<'a, T: RowDecoder> Iterator for Iter<'a, T> {
     }
 }
 
+/// An owning iterator over the rows of a result set
 #[derive(Clone)]
 pub struct IntoIter<T: RowDecoder> {
     rows: RowsResult,
@@ -159,6 +166,7 @@ impl<T: RowDecoder> std::fmt::Debug for IntoIter<T> {
 }
 
 impl<T: RowDecoder> IntoIter<T> {
+    /// Create a new owning iterator over the rows of a result set
     pub fn new(result: RowsResult) -> Self {
         Self {
             remaining_rows: result.rows_count() as usize,
@@ -185,10 +193,12 @@ impl<T: RowDecoder> IntoIter<T> {
         self.rows.metadata().flags().has_more_pages()
     }
 
+    /// Get the result set column count
     pub fn columns_count(&self) -> usize {
         self.rows.metadata().columns_count() as usize
     }
 
+    /// Get the result set paging state
     pub fn paging_state(&self) -> &Option<Vec<u8>> {
         self.rows.metadata().paging_state()
     }

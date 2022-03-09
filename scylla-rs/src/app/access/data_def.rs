@@ -3,11 +3,8 @@
 
 use super::*;
 
-pub trait KeyspaceExecuteExt: KeyspaceExt + Into<Statement> {}
-impl<T> KeyspaceExecuteExt for T where T: KeyspaceExt + Into<Statement> {}
-
 /// Specifies helper functions for creating dynamic requests from anything that can be interpreted as a statement
-pub trait AsDynamicExecuteRequest: Into<Statement>
+pub trait AsDynamicDataDefRequest: Into<DataDefinitionStatement>
 where
     Self: Sized,
 {
@@ -28,11 +25,11 @@ where
     /// .get_local_blocking()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    fn execute(self) -> ExecuteBuilder {
+    fn define(self) -> DataDefBuilder {
         let statement = self.into();
         let keyspace = statement.get_keyspace();
         let statement = statement.to_string();
-        ExecuteBuilder {
+        DataDefBuilder {
             builder: QueryFrameBuilder::default()
                 .statement(statement)
                 .consistency(Consistency::Quorum),
@@ -40,14 +37,15 @@ where
         }
     }
 }
-impl<T: Into<Statement>> AsDynamicExecuteRequest for T {}
+impl<T: Into<DataDefinitionStatement>> AsDynamicDataDefRequest for T {}
 
-pub struct ExecuteBuilder {
+/// A builder for creating data definition (DDL) requests
+pub struct DataDefBuilder {
     keyspace: Option<String>,
     builder: QueryFrameBuilder,
 }
 
-impl ExecuteBuilder {
+impl DataDefBuilder {
     pub fn consistency(mut self, consistency: Consistency) -> Self {
         self.builder = self.builder.consistency(consistency);
         self
@@ -63,56 +61,61 @@ impl ExecuteBuilder {
         Ok(self)
     }
 
-    pub fn build(self) -> anyhow::Result<ExecuteRequest> {
+    pub fn build(self) -> anyhow::Result<DataDefRequest> {
         let frame = self.builder.build()?;
-        Ok(CommonRequest {
-            token: rand::random(),
-            statement: frame.statement().clone(),
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(DataDefRequest::new(frame.into(), self.keyspace))
     }
 }
 
 /// A request to execute a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct ExecuteRequest(CommonRequest);
+pub struct DataDefRequest {
+    frame: QueryFrame,
+    keyspace: Option<String>,
+}
 
-impl From<CommonRequest> for ExecuteRequest {
-    fn from(req: CommonRequest) -> Self {
-        ExecuteRequest(req)
+impl DataDefRequest {
+    pub fn new(frame: QueryFrame, keyspace: Option<String>) -> Self {
+        Self { frame, keyspace }
     }
 }
 
-impl Request for ExecuteRequest {
+impl RequestFrameExt for DataDefRequest {
+    type Frame = QueryFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for DataDefRequest {
     fn token(&self) -> i64 {
-        self.0.token
-    }
-
-    fn statement(&self) -> &String {
-        self.0.statement()
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.0.payload()
+        rand::random()
     }
 
     fn keyspace(&self) -> Option<&String> {
-        self.0.keyspace()
+        self.keyspace.as_ref()
     }
 }
 
-impl SendRequestExt for ExecuteRequest {
-    type Marker = DecodeVoid;
+impl SendRequestExt for DataDefRequest {
     type Worker = BasicRetryWorker<Self>;
-    const TYPE: RequestType = RequestType::Execute;
-
-    fn worker(self) -> Box<Self::Worker> {
-        BasicRetryWorker::new(self)
-    }
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::DataDef;
 
     fn marker(&self) -> Self::Marker {
         DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
     }
 }

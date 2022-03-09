@@ -3,19 +3,52 @@
 
 //! This module defines the opcode.
 
-pub const ERROR: u8 = 0x00;
-pub const STARTUP: u8 = 0x01;
-pub const READY: u8 = 0x02;
-pub const AUTHENTICATE: u8 = 0x03;
-pub const OPTIONS: u8 = 0x05;
-pub const SUPPORTED: u8 = 0x06;
-pub const QUERY: u8 = 0x07;
-pub const RESULT: u8 = 0x08;
-pub const PREPARE: u8 = 0x09;
-pub const EXECUTE: u8 = 0x0A;
-pub const REGISTER: u8 = 0x0B;
-pub const EVENT: u8 = 0x0C;
-pub const BATCH: u8 = 0x0D;
-pub const AUTH_CHALLENGE: u8 = 0x0E;
-pub const AUTH_RESPONSE: u8 = 0x0F;
-pub const AUTH_SUCCESS: u8 = 0x10;
+use std::convert::TryFrom;
+
+#[allow(missing_docs)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum OpCode {
+    Error = 0x00,
+    Startup = 0x01,
+    Ready = 0x02,
+    Authenticate = 0x03,
+    Options = 0x05,
+    Supported = 0x06,
+    Query = 0x07,
+    Result = 0x08,
+    Prepare = 0x09,
+    Execute = 0x0A,
+    Register = 0x0B,
+    Event = 0x0C,
+    Batch = 0x0D,
+    AuthChallenge = 0x0E,
+    AuthResponse = 0x0F,
+    AuthSuccess = 0x10,
+}
+
+impl TryFrom<u8> for OpCode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u8) -> Result<Self, anyhow::Error> {
+        Ok(match value {
+            0x00 => Self::Error,
+            0x01 => Self::Startup,
+            0x02 => Self::Ready,
+            0x03 => Self::Authenticate,
+            0x05 => Self::Options,
+            0x06 => Self::Supported,
+            0x07 => Self::Query,
+            0x08 => Self::Result,
+            0x09 => Self::Prepare,
+            0x0A => Self::Execute,
+            0x0B => Self::Register,
+            0x0C => Self::Event,
+            0x0D => Self::Batch,
+            0x0E => Self::AuthChallenge,
+            0x0F => Self::AuthResponse,
+            0x10 => Self::AuthSuccess,
+            _ => return Err(anyhow::anyhow!("Invalid opcode: {}", value)),
+        })
+    }
+}

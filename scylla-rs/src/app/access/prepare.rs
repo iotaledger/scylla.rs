@@ -64,7 +64,11 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
         K: Bindable,
         O: RowsDecoder,
     {
-        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
+        PrepareRequest::new(
+            PrepareFrame::new(T::statement(self).to_string()),
+            rand::random(),
+            Some(self.name().to_string()),
+        )
     }
 
     /// Create a static prepare request from a keyspace with a `Insert<K, V>` definition.
@@ -124,7 +128,11 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
         T: Insert<K>,
         K: Bindable,
     {
-        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
+        PrepareRequest::new(
+            PrepareFrame::new(T::statement(self).to_string()),
+            rand::random(),
+            Some(self.name().to_string()),
+        )
     }
 
     /// Create a static prepare request from a keyspace with a `Update<K, V>` definition.
@@ -189,7 +197,11 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
         T: Update<K, V>,
         K: Bindable,
     {
-        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
+        PrepareRequest::new(
+            PrepareFrame::new(T::statement(self).to_string()),
+            rand::random(),
+            Some(self.name().to_string()),
+        )
     }
 
     /// Create a static prepare request from a keyspace with a `Delete<K, V>` definition.
@@ -245,7 +257,11 @@ pub trait GetStaticPrepareRequest: Keyspace + Sized {
         T: Delete<K>,
         K: Bindable,
     {
-        PrepareRequest::new(Some(self.name().to_string()), T::statement(self).to_string())
+        PrepareRequest::new(
+            PrepareFrame::new(T::statement(self).to_string()),
+            rand::random(),
+            Some(self.name().to_string()),
+        )
     }
 }
 
@@ -265,7 +281,7 @@ pub trait AsDynamicPrepareRequest<P>: KeyspaceExt + ToString {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn prepare(&self) -> PrepareRequest<P> {
-        PrepareRequest::new(self.get_keyspace(), self.to_string())
+        PrepareRequest::new(PrepareFrame::new(self.to_string()), rand::random(), self.get_keyspace())
     }
 }
 
@@ -282,7 +298,7 @@ pub trait AsDynamicPrepareSelectRequest: KeyspaceExt + ToString {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     fn prepare<O: RowsDecoder>(&self) -> PrepareRequest<SelectBuilder<DynamicRequest, O, ExecuteFrameBuilder>> {
-        PrepareRequest::new(self.get_keyspace(), self.to_string())
+        PrepareRequest::new(PrepareFrame::new(self.to_string()), rand::random(), self.get_keyspace())
     }
 }
 
@@ -293,36 +309,56 @@ impl AsDynamicPrepareRequest<UpdateBuilder<DynamicRequest, ExecuteFrameBuilder>>
 impl AsDynamicPrepareRequest<DeleteBuilder<DynamicRequest, ExecuteFrameBuilder>> for DeleteStatement {}
 
 /// A request to prepare a record which can be sent to the ring
-#[derive(Debug, Clone)]
 pub struct PrepareRequest<P> {
-    pub(crate) keyspace: Option<String>,
-    pub(crate) statement: String,
-    pub(crate) token: i64,
-    pub(crate) _marker: PhantomData<fn(P) -> P>,
+    frame: PrepareFrame,
+    keyspace: Option<String>,
+    _marker: PhantomData<fn(P) -> P>,
 }
 
-impl<P> PrepareRequest<P> {
-    fn new(keyspace: Option<String>, statement: String) -> Self {
+impl<P> Debug for PrepareRequest<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrepareRequest")
+            .field("frame", &self.frame)
+            .field("keyspace", &self.keyspace)
+            .finish()
+    }
+}
+
+impl<P> Clone for PrepareRequest<P> {
+    fn clone(&self) -> Self {
         Self {
-            keyspace,
-            statement,
-            token: rand::random(),
+            frame: self.frame.clone(),
+            keyspace: self.keyspace.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<P> Request for PrepareRequest<P> {
+impl<P> PrepareRequest<P> {
+    pub fn new(frame: PrepareFrame, token: i64, keyspace: Option<String>) -> Self {
+        Self {
+            frame,
+            keyspace,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<P> RequestFrameExt for PrepareRequest<P> {
+    type Frame = PrepareFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl<P> ShardAwareExt for PrepareRequest<P> {
     fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn statement(&self) -> &String {
-        &self.statement
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        RequestFrame::from(PrepareFrame::new(self.statement.clone())).build_payload()
+        rand::random()
     }
 
     fn keyspace(&self) -> Option<&String> {
@@ -330,20 +366,37 @@ impl<P> Request for PrepareRequest<P> {
     }
 }
 
-#[async_trait::async_trait]
+impl<P> Deref for PrepareRequest<P> {
+    type Target = PrepareFrame;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+
+impl<P> DerefMut for PrepareRequest<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frame
+    }
+}
+
 impl<P> SendRequestExt for PrepareRequest<P>
 where
     P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
-    type Marker = DecodePrepared<P>;
     type Worker = PrepareWorker<P>;
-    const TYPE: RequestType = RequestType::Execute;
-
-    fn worker(self) -> Box<Self::Worker> {
-        Box::new(PrepareWorker::from(self))
-    }
+    type Marker = DecodePrepared<P>;
+    const TYPE: RequestType = RequestType::Prepare;
 
     fn marker(&self) -> Self::Marker {
-        DecodePrepared::new(self.keyspace.clone(), self.statement.clone())
+        DecodePrepared::new(self.keyspace.clone(), self.frame.statement.clone())
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (PrepareWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        PrepareWorker::new(self)
     }
 }

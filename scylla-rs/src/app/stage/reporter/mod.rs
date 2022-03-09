@@ -12,6 +12,7 @@ use crate::{
     },
     cql::compression::Compression,
     prelude::{
+        RequestFrame,
         ResponseBody,
         ResponseFrame,
     },
@@ -47,7 +48,7 @@ pub enum ReporterEvent {
         /// The worker which is used to process the request.
         worker: Box<dyn Worker>,
         /// The request payload.
-        payload: Vec<u8>,
+        frame: RequestFrame,
     },
     /// The response Cql query.
     Response {
@@ -98,9 +99,9 @@ where
     async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, sender): Self::Data) -> ActorResult<()> {
         while let Some(event) = rt.inbox_mut().next().await {
             match event {
-                ReporterEvent::Request { worker, payload } => {
+                ReporterEvent::Request { worker, frame } => {
                     // log::info!("reporter received request, payload len: {}", payload.len());
-                    match C::compress(payload) {
+                    match frame.encode::<C>() {
                         Ok(mut payload) => {
                             // log::info!("Compressed payload len: {}", payload.len());
                             if let Some(stream) = self.streams.pop() {
@@ -115,13 +116,13 @@ where
                             } else {
                                 // Send overload to the worker in-case we don't have anymore streams
                                 worker
-                                    .handle_error(WorkerError::Overload, Some(rt.handle()))
+                                    .handle_error(WorkerError::Overload, rt.handle())
                                     .unwrap_or_else(|e| log::error!("{}", e));
                             }
                         }
                         Err(e) => {
                             worker
-                                .handle_error(WorkerError::Other(anyhow::anyhow!(e)), Some(rt.handle()))
+                                .handle_error(WorkerError::Other(anyhow::anyhow!(e)), rt.handle())
                                 .unwrap_or_else(|e| log::error!("{}", e));
                         }
                     }
@@ -165,14 +166,14 @@ impl<C: 'static + Compression> Reporter<C> {
                 match ResponseFrame::decode::<C>(payload).map_err(WorkerError::FrameError) {
                     Ok(frame) => match frame.into_body() {
                         ResponseBody::Error(err) => {
-                            worker.handle_error(WorkerError::Cql(err), Some(handle))?;
+                            worker.handle_error(WorkerError::Cql(err), handle)?;
                         }
                         body => {
                             worker.handle_response(body)?;
                         }
                     },
                     Err(e) => {
-                        worker.handle_error(e, Some(handle))?;
+                        worker.handle_error(e, handle)?;
                     }
                 }
             } else {
@@ -196,7 +197,7 @@ impl<C: 'static + Compression> Reporter<C> {
         if let Some(worker) = self.workers.remove(&stream) {
             // drop payload.
             if let Some(_payload) = payloads[stream as usize].as_mut().take() {
-                worker.handle_error(error, Some(handle))?;
+                worker.handle_error(error, handle)?;
             } else {
                 log::error!("No payload found while handling error for stream {}!", stream);
             }
@@ -212,7 +213,7 @@ impl<C: 'static + Compression> Reporter<C> {
             // tell worker_id that we lost the response for his request, because we lost scylla connection in
             // middle of request cycle, still this is a rare case.
             worker_id
-                .handle_error(WorkerError::Lost, Some(handle))
+                .handle_error(WorkerError::Lost, handle)
                 .unwrap_or_else(|e| log::error!("{}", e));
         }
     }

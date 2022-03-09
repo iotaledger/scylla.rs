@@ -299,7 +299,7 @@ impl<R> DeleteBuilder<R, QueryFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<DeleteRequest> {
+    pub fn build(self) -> anyhow::Result<QueryDeleteRequest> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -308,13 +308,7 @@ impl<R> DeleteBuilder<R, QueryFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: frame.statement().clone(),
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(QueryDeleteRequest::new(frame, token.finish(), self.keyspace))
     }
 }
 
@@ -329,7 +323,7 @@ impl<R> DeleteBuilder<R, ExecuteFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<DeleteRequest> {
+    pub fn build(self) -> anyhow::Result<ExecuteDeleteRequest> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -338,13 +332,12 @@ impl<R> DeleteBuilder<R, ExecuteFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: self.statement,
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(ExecuteDeleteRequest::new(
+            frame,
+            token.finish(),
+            self.keyspace,
+            self.statement,
+        ))
     }
 }
 
@@ -392,74 +385,176 @@ impl<R, B: Clone> Clone for DeleteBuilder<R, B> {
     }
 }
 
-impl<R> TryInto<DeleteRequest> for DeleteBuilder<R, QueryFrameBuilder> {
+impl<R> TryInto<QueryDeleteRequest> for DeleteBuilder<R, QueryFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<DeleteRequest, Self::Error> {
+    fn try_into(self) -> Result<QueryDeleteRequest, Self::Error> {
         self.build()
     }
 }
-impl<R> TryInto<DeleteRequest> for DeleteBuilder<R, ExecuteFrameBuilder> {
+impl<R> TryInto<ExecuteDeleteRequest> for DeleteBuilder<R, ExecuteFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<DeleteRequest, Self::Error> {
+    fn try_into(self) -> Result<ExecuteDeleteRequest, Self::Error> {
         self.build()
     }
 }
-impl<R> SendAsRequestExt<DeleteRequest> for DeleteBuilder<R, QueryFrameBuilder> {}
-impl<R> SendAsRequestExt<DeleteRequest> for DeleteBuilder<R, ExecuteFrameBuilder> {}
+impl<R> SendAsRequestExt<QueryDeleteRequest> for DeleteBuilder<R, QueryFrameBuilder> {}
+impl<R> SendAsRequestExt<ExecuteDeleteRequest> for DeleteBuilder<R, ExecuteFrameBuilder> {}
 
 /// A request to delete a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct DeleteRequest(CommonRequest);
+pub struct QueryDeleteRequest {
+    frame: QueryFrame,
+    token: i64,
+    keyspace: Option<String>,
+}
 
-impl From<CommonRequest> for DeleteRequest {
-    fn from(req: CommonRequest) -> Self {
-        DeleteRequest(req)
+impl QueryDeleteRequest {
+    pub fn new(frame: QueryFrame, token: i64, keyspace: Option<String>) -> Self {
+        Self { frame, token, keyspace }
     }
 }
 
-impl Deref for DeleteRequest {
-    type Target = CommonRequest;
+impl RequestFrameExt for QueryDeleteRequest {
+    type Frame = QueryFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for QueryDeleteRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl Deref for QueryDeleteRequest {
+    type Target = QueryFrame;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.frame
     }
 }
 
-impl DerefMut for DeleteRequest {
+impl DerefMut for QueryDeleteRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.frame
     }
 }
 
-impl Request for DeleteRequest {
-    fn token(&self) -> i64 {
-        self.0.token()
-    }
-
-    fn statement(&self) -> &String {
-        self.0.statement()
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.0.payload()
-    }
-    fn keyspace(&self) -> Option<&String> {
-        self.0.keyspace()
-    }
-}
-
-impl SendRequestExt for DeleteRequest {
-    type Marker = DecodeVoid;
+impl SendRequestExt for QueryDeleteRequest {
     type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Delete;
-
-    fn worker(self) -> Box<Self::Worker> {
-        BasicRetryWorker::new(self)
-    }
 
     fn marker(&self) -> Self::Marker {
         DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
+    }
+}
+
+/// A request to delete a record which can be sent to the ring
+#[derive(Debug, Clone)]
+pub struct ExecuteDeleteRequest {
+    frame: ExecuteFrame,
+    token: i64,
+    keyspace: Option<String>,
+    statement: String,
+}
+
+impl ExecuteDeleteRequest {
+    pub fn new(frame: ExecuteFrame, token: i64, keyspace: Option<String>, statement: String) -> Self {
+        Self {
+            frame,
+            token,
+            keyspace,
+            statement,
+        }
+    }
+}
+
+impl RequestFrameExt for ExecuteDeleteRequest {
+    type Frame = ExecuteFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for ExecuteDeleteRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl ReprepareExt for ExecuteDeleteRequest {
+    type OutRequest = QueryDeleteRequest;
+    fn convert(self) -> Self::OutRequest {
+        QueryDeleteRequest {
+            token: self.token,
+            frame: QueryFrame::from_execute(self.frame, self.statement),
+            keyspace: self.keyspace,
+        }
+    }
+
+    fn statement(&self) -> &String {
+        &self.statement
+    }
+}
+
+impl Deref for ExecuteDeleteRequest {
+    type Target = ExecuteFrame;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+
+impl DerefMut for ExecuteDeleteRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frame
+    }
+}
+
+impl SendRequestExt for ExecuteDeleteRequest {
+    type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Delete;
+
+    fn marker(&self) -> Self::Marker {
+        DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
     }
 }

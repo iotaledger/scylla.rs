@@ -106,7 +106,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     let keyspace = MyKeyspace::new();
     keyspace
         .drop()
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()
@@ -114,7 +114,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was dropped: {}", e))?;
     keyspace
         .create()
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()
@@ -122,7 +122,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
     TestTable::drop(&keyspace)
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()
@@ -130,7 +130,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .map_err(|e| anyhow::anyhow!("Could not verify if table was dropped: {}", e))?;
 
     TestTable::create(&keyspace)
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()
@@ -196,7 +196,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
     let time = start.elapsed().unwrap().as_nanos();
     keyspace
         .drop()
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()

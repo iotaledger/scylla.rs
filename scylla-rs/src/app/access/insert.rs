@@ -92,7 +92,7 @@ impl<T: Table + Bindable> Insert<T> for T {
     }
 }
 
-/// Specifies helper functions for creating static insert requests from a keyspace with a `Delete<K, V>` definition
+/// Specifies helper functions for creating static insert requests from a keyspace with a `Insert<K, V>` definition
 pub trait GetStaticInsertRequest<K: Bindable>: Table {
     /// Create a static insert request from a keyspace with a `Insert<K, V>` definition. Will use the default `type
     /// QueryOrPrepared` from the trait definition.
@@ -348,7 +348,7 @@ impl<R> InsertBuilder<R, QueryFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
+    pub fn build(self) -> anyhow::Result<QueryInsertRequest> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -357,13 +357,7 @@ impl<R> InsertBuilder<R, QueryFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: frame.statement().clone(),
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(QueryInsertRequest::new(frame, token.finish(), self.keyspace))
     }
 }
 
@@ -378,7 +372,7 @@ impl<R> InsertBuilder<R, ExecuteFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<InsertRequest> {
+    pub fn build(self) -> anyhow::Result<ExecuteInsertRequest> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -387,13 +381,12 @@ impl<R> InsertBuilder<R, ExecuteFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: self.statement,
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(ExecuteInsertRequest::new(
+            frame,
+            token.finish(),
+            self.keyspace,
+            self.statement,
+        ))
     }
 }
 
@@ -441,74 +434,176 @@ impl<R, B: Clone> Clone for InsertBuilder<R, B> {
     }
 }
 
-impl<R> TryInto<InsertRequest> for InsertBuilder<R, QueryFrameBuilder> {
+impl<R> TryInto<QueryInsertRequest> for InsertBuilder<R, QueryFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<InsertRequest, Self::Error> {
+    fn try_into(self) -> Result<QueryInsertRequest, Self::Error> {
         self.build()
     }
 }
-impl<R> TryInto<InsertRequest> for InsertBuilder<R, ExecuteFrameBuilder> {
+impl<R> TryInto<ExecuteInsertRequest> for InsertBuilder<R, ExecuteFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<InsertRequest, Self::Error> {
+    fn try_into(self) -> Result<ExecuteInsertRequest, Self::Error> {
         self.build()
     }
 }
-impl<R> SendAsRequestExt<InsertRequest> for InsertBuilder<R, QueryFrameBuilder> {}
-impl<R> SendAsRequestExt<InsertRequest> for InsertBuilder<R, ExecuteFrameBuilder> {}
+impl<R> SendAsRequestExt<QueryInsertRequest> for InsertBuilder<R, QueryFrameBuilder> {}
+impl<R> SendAsRequestExt<ExecuteInsertRequest> for InsertBuilder<R, ExecuteFrameBuilder> {}
 
 /// A request to insert a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct InsertRequest(CommonRequest);
+pub struct QueryInsertRequest {
+    frame: QueryFrame,
+    token: i64,
+    keyspace: Option<String>,
+}
 
-impl From<CommonRequest> for InsertRequest {
-    fn from(req: CommonRequest) -> Self {
-        InsertRequest(req)
+impl QueryInsertRequest {
+    pub fn new(frame: QueryFrame, token: i64, keyspace: Option<String>) -> Self {
+        Self { frame, token, keyspace }
     }
 }
 
-impl Deref for InsertRequest {
-    type Target = CommonRequest;
+impl RequestFrameExt for QueryInsertRequest {
+    type Frame = QueryFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for QueryInsertRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl Deref for QueryInsertRequest {
+    type Target = QueryFrame;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.frame
     }
 }
 
-impl DerefMut for InsertRequest {
+impl DerefMut for QueryInsertRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.frame
     }
 }
 
-impl Request for InsertRequest {
-    fn token(&self) -> i64 {
-        self.0.token()
-    }
-
-    fn statement(&self) -> &String {
-        self.0.statement()
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.0.payload()
-    }
-    fn keyspace(&self) -> Option<&String> {
-        self.0.keyspace()
-    }
-}
-
-impl SendRequestExt for InsertRequest {
-    type Marker = DecodeVoid;
+impl SendRequestExt for QueryInsertRequest {
     type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Insert;
-
-    fn worker(self) -> Box<Self::Worker> {
-        BasicRetryWorker::new(self)
-    }
 
     fn marker(&self) -> Self::Marker {
         DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
+    }
+}
+
+/// A request to delete a record which can be sent to the ring
+#[derive(Debug, Clone)]
+pub struct ExecuteInsertRequest {
+    frame: ExecuteFrame,
+    token: i64,
+    keyspace: Option<String>,
+    statement: String,
+}
+
+impl ExecuteInsertRequest {
+    pub fn new(frame: ExecuteFrame, token: i64, keyspace: Option<String>, statement: String) -> Self {
+        Self {
+            frame,
+            token,
+            keyspace,
+            statement,
+        }
+    }
+}
+
+impl RequestFrameExt for ExecuteInsertRequest {
+    type Frame = ExecuteFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for ExecuteInsertRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl ReprepareExt for ExecuteInsertRequest {
+    type OutRequest = QueryInsertRequest;
+    fn convert(self) -> Self::OutRequest {
+        QueryInsertRequest {
+            token: self.token,
+            frame: QueryFrame::from_execute(self.frame, self.statement),
+            keyspace: self.keyspace,
+        }
+    }
+
+    fn statement(&self) -> &String {
+        &self.statement
+    }
+}
+
+impl Deref for ExecuteInsertRequest {
+    type Target = ExecuteFrame;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+
+impl DerefMut for ExecuteInsertRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frame
+    }
+}
+
+impl SendRequestExt for ExecuteInsertRequest {
+    type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Insert;
+
+    fn marker(&self) -> Self::Marker {
+        DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
     }
 }

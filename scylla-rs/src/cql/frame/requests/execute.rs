@@ -5,55 +5,82 @@
 
 use super::*;
 
+/**
+   Executes a prepared query. The body of the message must be:
+
+   `<id><query_parameters>`
+
+   where `<id>` is the prepared query ID. It's the `[short bytes]` returned as a
+   response to a PREPARE message. As for `<query_parameters>`, it has the exact
+   same definition as in [`QueryFrame`].
+
+   The response from the server will be a [`ResultFrame`].
+*/
 #[derive(Clone, Debug, Builder)]
 #[builder(derive(Clone, Debug))]
 #[builder(pattern = "owned", setter(strip_option))]
 pub struct ExecuteFrame {
+    /// The query's prepared ID
     pub(crate) id: [u8; 16],
+    /// The consistency level
     pub(crate) consistency: Consistency,
     #[builder(default)]
+    /// The query flags
     pub(crate) flags: QueryFlags,
     #[builder(private, default)]
+    /// The bound values list
     pub(crate) values: Values,
     #[builder(default)]
+    /// The page size
     pub(crate) page_size: Option<i32>,
     #[builder(default)]
+    /// The paging state
     pub(crate) paging_state: Option<Vec<u8>>,
     #[builder(default)]
+    /// The serial consistency level
     pub(crate) serial_consistency: Option<Consistency>,
     #[builder(default)]
+    /// The timestamp
     pub(crate) timestamp: Option<i64>,
 }
 
 impl ExecuteFrame {
+    /// Get the prepared ID.
     pub fn id(&self) -> &[u8; 16] {
         &self.id
     }
 
+    /// Get the consistency level.
     pub fn consistency(&self) -> Consistency {
         self.consistency
     }
 
+    /// Get the query flags.
     pub fn flags(&self) -> QueryFlags {
         self.flags
     }
 
+    /// Get the bound values.
     pub fn values(&self) -> &Values {
         &self.values
     }
 
+    /// Get the page size.
     pub fn page_size(&self) -> Option<i32> {
         self.page_size
     }
 
+    /// Get the paging state.
     pub fn paging_state(&self) -> &Option<Vec<u8>> {
         &self.paging_state
     }
 
+    /// Get the serial consistency level.
     pub fn serial_consistency(&self) -> Option<Consistency> {
         self.serial_consistency
     }
 
+    /// Get the timestamp.
     pub fn timestamp(&self) -> Option<i64> {
         self.timestamp
     }
@@ -64,15 +91,11 @@ impl FromPayload for ExecuteFrame {
         let id = read_prepared_id(start, payload)?;
         let consistency = Consistency::try_from(read_short(start, payload)?)?;
         let flags = QueryFlags(read_byte(start, payload)?);
-        let value_count = read_short(start, payload)?;
-        let mut values = Values::default();
-        for _ in 0..value_count {
-            if flags.named_values() {
-                values.push(Some(read_str(start, payload)?), read_bytes(start, payload)?);
-            } else {
-                values.push(None, read_bytes(start, payload)?);
-            }
-        }
+        let values = if flags.named_values() {
+            read_named_values(start, payload)?
+        } else {
+            read_values(start, payload)?
+        };
         let page_size = if flags.page_size() {
             Some(read_int(start, payload)?)
         } else {
@@ -156,6 +179,7 @@ impl From<QueryFrame> for ExecuteFrame {
     }
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, Error)]
 pub enum ExecuteBindError {
     #[error("Execute encode error: {0}")]
@@ -203,5 +227,41 @@ impl Binder for ExecuteFrameBuilder {
         let values = self.values.as_mut().unwrap();
         values.push_null(None);
         Ok(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::Uncompressed;
+    use std::time::{
+        SystemTime,
+        UNIX_EPOCH,
+    };
+    #[test]
+    fn simple_query_builder_test() {
+        let _payload = ExecuteFrameBuilder::default()
+            .id(md5::compute("query").into())
+            .consistency(Consistency::One)
+            .value(&"HASH_VALUE")
+            .unwrap()
+            .value(&"PAYLOAD_VALUE")
+            .unwrap()
+            .value(&"ADDRESS_VALUE")
+            .unwrap()
+            .value(&0_i64)
+            .unwrap() // tx-value as i64
+            .value(&"OBSOLETE_TAG_VALUE")
+            .unwrap()
+            .value(&SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
+            .unwrap() // junk timestamp
+            .value(&0)
+            .unwrap() // current-index
+            .unset_value()
+            .unwrap() // not-set value for milestone
+            .build()
+            .unwrap()
+            .encode::<Uncompressed>()
+            .unwrap();
     }
 }

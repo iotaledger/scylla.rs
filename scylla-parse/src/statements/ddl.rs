@@ -46,6 +46,35 @@ impl TryFrom<TaggedDataDefinitionStatement> for DataDefinitionStatement {
     }
 }
 
+impl KeyspaceExt for DataDefinitionStatement {
+    fn get_keyspace(&self) -> Option<String> {
+        match self {
+            DataDefinitionStatement::Use(s) => Some(s.keyspace.to_string()),
+            DataDefinitionStatement::CreateKeyspace(s) => Some(s.keyspace.to_string()),
+            DataDefinitionStatement::AlterKeyspace(s) => Some(s.keyspace.to_string()),
+            DataDefinitionStatement::DropKeyspace(s) => Some(s.keyspace.to_string()),
+            DataDefinitionStatement::CreateTable(s) => s.table.keyspace.as_ref().map(ToString::to_string),
+            DataDefinitionStatement::AlterTable(s) => s.table.keyspace.as_ref().map(ToString::to_string),
+            DataDefinitionStatement::DropTable(s) => s.table.keyspace.as_ref().map(ToString::to_string),
+            DataDefinitionStatement::Truncate(s) => s.table.keyspace.as_ref().map(ToString::to_string),
+        }
+    }
+
+    fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
+        let keyspace = keyspace.into();
+        match self {
+            DataDefinitionStatement::Use(s) => s.keyspace = keyspace,
+            DataDefinitionStatement::CreateKeyspace(s) => s.keyspace = keyspace,
+            DataDefinitionStatement::AlterKeyspace(s) => s.keyspace = keyspace,
+            DataDefinitionStatement::DropKeyspace(s) => s.keyspace = keyspace,
+            DataDefinitionStatement::CreateTable(s) => s.table.keyspace = Some(keyspace),
+            DataDefinitionStatement::AlterTable(s) => s.table.keyspace = Some(keyspace),
+            DataDefinitionStatement::DropTable(s) => s.table.keyspace = Some(keyspace),
+            DataDefinitionStatement::Truncate(s) => s.table.keyspace = Some(keyspace),
+        }
+    }
+}
+
 #[derive(ParseFromStr, Clone, Debug, TryInto, From, ToTokens, PartialEq)]
 #[tokenize_as(DataDefinitionStatement)]
 pub enum TaggedDataDefinitionStatement {

@@ -5,44 +5,95 @@
 
 use super::*;
 
+/**
+   Allows executing a list of queries (prepared or not) as a batch (note that
+   only DML statements are accepted in a batch). The body of the message must
+   be:
+   <type><n><query_1>...<query_n><consistency><flags>[<serial_consistency>][<timestamp>]
+   where:
+   - <type> is a [byte] indicating the type of batch to use:
+       - If <type> == 0, the batch will be "logged". This is equivalent to a
+           normal CQL3 batch statement.
+       - If <type> == 1, the batch will be "unlogged".
+       - If <type> == 2, the batch will be a "counter" batch (and non-counter
+           statements will be rejected).
+   - <flags> is a [byte] whose bits define the options for this query and
+       in particular influence what the remainder of the message contains. See [`BatchFlags`].
+   - <n> is a [short] indicating the number of following queries.
+   - <query_1>...<query_n> are the queries to execute. A <query_i> must be of the
+       form:
+       <kind><string_or_id><n>[<name_1>]<value_1>...[<name_n>]<value_n>
+       where:
+       - <kind> is a [byte] indicating whether the following query is a prepared
+           one or not. <kind> value must be either 0 or 1.
+       - <string_or_id> depends on the value of <kind>. If <kind> == 0, it should be
+           a [long string] query string (as in QUERY, the query string might contain
+           bind markers). Otherwise (that is, if <kind> == 1), it should be a
+           [short bytes] representing a prepared query ID.
+       - <n> is a [short] indicating the number (possibly 0) of following values.
+       - <name_i> is the optional name of the following <value_i>. It must be present
+           if and only if the 0x40 flag is provided for the batch.
+       - <value_i> is the [value] to use for bound variable i (of bound variable <name_i>
+           if the 0x40 flag is used).
+   - <consistency> is the [consistency] level for the operation.
+   - <serial_consistency> is only present if the 0x10 flag is set. In that case,
+       <serial_consistency> is the [consistency] level for the serial phase of
+       conditional updates. That consitency can only be either SERIAL or
+       LOCAL_SERIAL and if not present will defaults to SERIAL. This option will
+       be ignored for anything else other than a conditional update/insert.
+
+   The server will respond with a RESULT message.
+*/
 #[derive(Clone, Debug, Builder)]
 #[builder(derive(Clone, Debug))]
 #[builder(pattern = "owned", setter(strip_option))]
 pub struct BatchFrame {
+    /// Batch type: 0 = logged, 1 = unlogged, 2 = counter
     #[builder(default)]
     pub(crate) batch_type: BatchType,
+    /// The batch queries
     #[builder(private)]
     pub(crate) queries: Vec<BatchQuery>,
+    /// Batch consistency
     pub(crate) consistency: Consistency,
+    /// Batch flags
     #[builder(default)]
     pub(crate) flags: BatchFlags,
+    /// Batch Serial consistency
     #[builder(default)]
     pub(crate) serial_consistency: Option<Consistency>,
+    /// Batch timestamp
     #[builder(default)]
     pub(crate) timestamp: Option<i64>,
 }
 
 impl BatchFrame {
+    /// Get the batch type.
     pub fn batch_type(&self) -> BatchType {
         self.batch_type
     }
 
+    /// Get the batch queries.
     pub fn queries(&self) -> &Vec<BatchQuery> {
         &self.queries
     }
 
+    /// Get the consistency.
     pub fn consistency(&self) -> Consistency {
         self.consistency
     }
 
+    /// Get the flags.
     pub fn flags(&self) -> BatchFlags {
         self.flags
     }
 
+    /// Get the serial consistency.
     pub fn serial_consistency(&self) -> Option<Consistency> {
         self.serial_consistency
     }
 
+    /// Get the timestamp.
     pub fn timestamp(&self) -> Option<i64> {
         self.timestamp
     }
@@ -58,21 +109,17 @@ impl FromPayload for BatchFrame {
             queries.push(match query_kind {
                 0 => {
                     let statement = read_long_string(start, payload)?;
-                    let values_count = read_short(start, payload)? as usize;
-                    let mut values = Vec::with_capacity(values_count);
-                    for _ in 0..values_count {
-                        values.push((None, Value::from_payload(start, payload)?));
+                    BatchQuery::Query {
+                        statement,
+                        values: read_values(start, payload)?,
                     }
-                    BatchQuery::Query { statement, values }
                 }
                 1 => {
                     let id = read_prepared_id(start, payload)?;
-                    let values_count = read_short(start, payload)? as usize;
-                    let mut values = Vec::with_capacity(values_count);
-                    for _ in 0..values_count {
-                        values.push((None, Value::from_payload(start, payload)?));
+                    BatchQuery::Prepared {
+                        id,
+                        values: read_values(start, payload)?,
                     }
-                    BatchQuery::Prepared { id, values }
                 }
                 _ => anyhow::bail!("Invalid query kind: {}", query_kind),
             });
@@ -124,14 +171,7 @@ impl ToPayload for BatchFrame {
             let (BatchQuery::Query { statement: _, values } | BatchQuery::Prepared { id: _, values }) = query;
             // add query values
             write_short(values.len() as u16, payload);
-            for (name, value) in values {
-                if let Some(name) = name {
-                    if self.flags.named_values() {
-                        write_string(&name, payload);
-                    }
-                }
-                value.to_payload(payload);
-            }
+            payload.extend(values.payload());
         }
         // add consistency
         write_short(self.consistency as u16, payload);
@@ -151,15 +191,22 @@ impl ToPayload for BatchFrame {
     }
 }
 
+/// A query in a batch.
 #[derive(Clone, Debug)]
 pub enum BatchQuery {
+    /// An unprepared query
     Query {
+        /// The query statement
         statement: String,
-        values: Vec<(Option<String>, Value)>,
+        /// The query bound values
+        values: Values,
     },
+    /// A prepared query
     Prepared {
+        /// The query's prepared id
         id: [u8; 16],
-        values: Vec<(Option<String>, Value)>,
+        /// The query bound values
+        values: Values,
     },
 }
 
@@ -248,6 +295,7 @@ impl BatchFrameBuilder {
     }
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, Error)]
 pub enum BatchBindError {
     #[error("No statements to bind values for")]
@@ -269,11 +317,10 @@ impl Binder for BatchFrameBuilder {
             self.flags.replace(BatchFlags::default());
         }
         if let Some(query) = self.queries.as_mut().and_then(|q| q.last_mut()) {
-            let mut value_buf = Vec::new();
-            value.encode(&mut value_buf);
+            let value_buf = value.encode_new();
             match query {
                 BatchQuery::Query { statement: _, values } | BatchQuery::Prepared { id: _, values } => {
-                    values.push((None, Value::Set(value_buf)));
+                    values.push(None, value_buf.as_slice());
                 }
             }
             Ok(self)
@@ -290,7 +337,7 @@ impl Binder for BatchFrameBuilder {
         if let Some(query) = self.queries.as_mut().and_then(|q| q.last_mut()) {
             match query {
                 BatchQuery::Query { statement: _, values } | BatchQuery::Prepared { id: _, values } => {
-                    values.push((None, Value::Unset));
+                    values.push_unset(None);
                 }
             }
             Ok(self)
@@ -307,7 +354,7 @@ impl Binder for BatchFrameBuilder {
         if let Some(query) = self.queries.as_mut().and_then(|q| q.last_mut()) {
             match query {
                 BatchQuery::Query { statement: _, values } | BatchQuery::Prepared { id: _, values } => {
-                    values.push((None, Value::Null));
+                    values.push_null(None);
                 }
             }
             Ok(self)
@@ -320,11 +367,12 @@ impl Binder for BatchFrameBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::Uncompressed;
 
     #[test]
     // note: junk data
     fn simple_query_builder_test() {
-        let frame = BatchFrameBuilder::default()
+        let _payload = BatchFrameBuilder::default()
             .logged()
             .statement("INSERT_TX_QUERY")
             .value(&"HASH_VALUE")
@@ -336,6 +384,8 @@ mod tests {
             .unwrap() // junk value
             .consistency(Consistency::One)
             .build()
+            .unwrap()
+            .encode::<Uncompressed>()
             .unwrap();
     }
 }

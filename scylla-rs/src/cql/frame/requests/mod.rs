@@ -16,9 +16,12 @@ pub mod register;
 pub mod startup;
 
 use super::*;
+use crate::prelude::Compression;
 use derive_builder::Builder;
 use thiserror::Error;
 
+/// Possible request frame bodies.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, From, TryInto)]
 pub enum RequestBody {
     Startup(StartupFrame),
@@ -32,16 +35,17 @@ pub enum RequestBody {
 }
 
 impl RequestBody {
-    pub fn opcode(&self) -> u8 {
+    /// Get the frame type's opcode.
+    pub fn opcode(&self) -> OpCode {
         match self {
-            Self::Startup(_) => opcode::STARTUP,
-            Self::Options(_) => opcode::OPTIONS,
-            Self::Query(_) => opcode::QUERY,
-            Self::Prepare(_) => opcode::PREPARE,
-            Self::Execute(_) => opcode::EXECUTE,
-            Self::Register(_) => opcode::REGISTER,
-            Self::Batch(_) => opcode::BATCH,
-            Self::AuthResponse(_) => opcode::AUTH_RESPONSE,
+            Self::Startup(_) => OpCode::Startup,
+            Self::Options(_) => OpCode::Options,
+            Self::Query(_) => OpCode::Query,
+            Self::Prepare(_) => OpCode::Prepare,
+            Self::Execute(_) => OpCode::Execute,
+            Self::Register(_) => OpCode::Register,
+            Self::Batch(_) => OpCode::Batch,
+            Self::AuthResponse(_) => OpCode::AuthResponse,
         }
     }
 }
@@ -61,6 +65,7 @@ impl ToPayload for RequestBody {
     }
 }
 
+/// A request frame, which contains a [`Header`] and a [`RequestBody`].
 #[derive(Clone, Debug)]
 pub struct RequestFrame {
     pub(crate) header: Header,
@@ -97,19 +102,29 @@ impl FromPayload for RequestFrame {
     fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
         let header = Header::from_payload(start, payload)?;
         let body = match header.opcode() {
-            0x01 => RequestBody::Startup(StartupFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x05 => RequestBody::Options(OptionsFrame),
-            0x07 => RequestBody::Query(QueryFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x09 => RequestBody::Prepare(PrepareFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x0A => RequestBody::Execute(ExecuteFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x0B => {
+            OpCode::Startup => {
+                RequestBody::Startup(StartupFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::Options => RequestBody::Options(OptionsFrame),
+            OpCode::Query => {
+                RequestBody::Query(QueryFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::Prepare => {
+                RequestBody::Prepare(PrepareFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::Execute => {
+                RequestBody::Execute(ExecuteFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::Register => {
                 RequestBody::Register(RegisterFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
             }
-            0x0D => RequestBody::Batch(BatchFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?),
-            0x0F => RequestBody::AuthResponse(
+            OpCode::Batch => {
+                RequestBody::Batch(BatchFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?)
+            }
+            OpCode::AuthResponse => RequestBody::AuthResponse(
                 AuthResponseFrame::from_payload(start, payload).map_err(FrameError::InvalidBody)?,
             ),
-            c => anyhow::bail!("Unknown frame opcode: {}", c),
+            c => anyhow::bail!("Invalid request frame opcode: {:x}", c as u8),
         };
         Ok(Self { header, body })
     }
@@ -131,43 +146,64 @@ impl ToPayload for RequestFrame {
 }
 
 impl RequestFrame {
+    /// Get the frame body.
     pub fn body(&self) -> &RequestBody {
         &self.body
     }
+    /// Consume the frame and get the body.
     pub fn into_body(self) -> RequestBody {
         self.body
     }
+    /// Check if the frame is a [`StartupFrame`].
     pub fn is_startup_frame(&self) -> bool {
-        self.header.opcode() == opcode::STARTUP
+        self.header.opcode() == OpCode::Startup
     }
+    /// Check if the frame is an [`OptionsFrame`].
     pub fn is_options_frame(&self) -> bool {
-        self.header.opcode() == opcode::OPTIONS
+        self.header.opcode() == OpCode::Options
     }
+    /// Check if the frame is a [`QueryFrame`].
     pub fn is_query_frame(&self) -> bool {
-        self.header.opcode() == opcode::QUERY
+        self.header.opcode() == OpCode::Query
     }
+    /// Check if the frame is a [`PrepareFrame`].
     pub fn is_prepare_frame(&self) -> bool {
-        self.header.opcode() == opcode::PREPARE
+        self.header.opcode() == OpCode::Prepare
     }
+    /// Check if the frame is an [`ExecuteFrame`].
     pub fn is_execute_frame(&self) -> bool {
-        self.header.opcode() == opcode::EXECUTE
+        self.header.opcode() == OpCode::Execute
     }
+    /// Check if the frame is a [`RegisterFrame`].
     pub fn is_register_frame(&self) -> bool {
-        self.header.opcode() == opcode::REGISTER
+        self.header.opcode() == OpCode::Register
     }
+    /// Check if the frame is a [`BatchFrame`].
     pub fn is_batch_frame(&self) -> bool {
-        self.header.opcode() == opcode::BATCH
+        self.header.opcode() == OpCode::Batch
     }
+    /// Check if the frame is an [`AuthResponseFrame`].
     pub fn is_auth_response_frame(&self) -> bool {
-        self.header.opcode() == opcode::AUTH_RESPONSE
+        self.header.opcode() == OpCode::AuthResponse
     }
-    pub fn build_payload(self) -> Vec<u8> {
+    /// Build the frame payload bytes.
+    pub fn encode<C: Compression>(self) -> Result<Vec<u8>, FrameError> {
         let mut payload = Vec::new();
         self.to_payload(&mut payload);
-        payload
+        Ok(C::compress(payload)?)
     }
 }
 
+#[allow(missing_docs)]
+pub trait EncodePayload: Into<RequestFrame> + Sized {
+    fn encode<C: Compression>(self) -> Result<Vec<u8>, FrameError> {
+        RequestFrame::encode::<C>(self.into())
+    }
+}
+impl<T: Into<RequestFrame> + Sized> EncodePayload for T {}
+
+/// Scylla value type
+#[allow(missing_docs)]
 #[derive(Clone, Debug)]
 pub enum Value {
     Set(Vec<u8>),
@@ -215,6 +251,7 @@ impl ToPayload for Value {
     }
 }
 
+/// A list of scylla values
 #[derive(Default)]
 pub struct Values {
     buffer: Vec<u8>,
@@ -222,10 +259,12 @@ pub struct Values {
 }
 
 impl Values {
+    /// Get the underlying buffer in the format expected by the scylla protocol.
     pub fn payload(&self) -> &[u8] {
         &self.buffer
     }
 
+    /// Get a name value pair at an index.
     pub fn get<'a>(&'a self, idx: usize) -> Option<(Option<&'a str>, &'a [u8])> {
         let rec = self.view.get(idx).map(|r| *r);
         match rec {
@@ -238,6 +277,7 @@ impl Values {
         }
     }
 
+    /// Get a name value pair at an index without checking if the index exists.
     pub fn get_unchecked<'a>(&'a self, idx: usize) -> (Option<&'a str>, &'a [u8]) {
         let (name, value) = self.view[idx];
         unsafe {
@@ -247,7 +287,29 @@ impl Values {
         }
     }
 
-    pub fn get_value<'a>(&'a self, idx: usize) -> Option<Option<&'a str>> {
+    /// Get a value at an index.
+    pub fn get_value<'a>(&'a self, idx: usize) -> Option<&'a [u8]> {
+        let rec = self.view.get(idx).map(|r| *r);
+        match rec {
+            Some((_, value)) => unsafe {
+                let value = &*value;
+                Some(value)
+            },
+            None => None,
+        }
+    }
+
+    /// Get a value at an index without checking if the index exists.
+    pub fn get_value_unchecked<'a>(&'a self, idx: usize) -> &'a [u8] {
+        let (_, value) = self.view[idx];
+        unsafe {
+            let value = &*value;
+            value
+        }
+    }
+
+    /// Get a name at an index.
+    pub fn get_name<'a>(&'a self, idx: usize) -> Option<Option<&'a str>> {
         let rec = self.view.get(idx).map(|r| *r);
         match rec {
             Some((name, _)) => unsafe {
@@ -259,22 +321,7 @@ impl Values {
         }
     }
 
-    pub fn get_value_unchecked<'a>(&'a self, idx: usize) -> &'a [u8] {
-        let (_, value) = self.view[idx];
-        unsafe {
-            let value = &*value;
-            value
-        }
-    }
-
-    pub fn get_name<'a>(&'a self, idx: usize) -> Option<&'a [u8]> {
-        let rec = self.view.get(idx).map(|r| *r);
-        match rec {
-            Some((_, value)) => unsafe { Some(&*value) },
-            None => None,
-        }
-    }
-
+    /// Get a name at an index without checking if the index exists.
     pub fn get_name_unchecked<'a>(&'a self, idx: usize) -> Option<&'a str> {
         let (name, _) = self.view[idx];
         unsafe {
@@ -284,11 +331,13 @@ impl Values {
         }
     }
 
+    /// Add a name value pair to the end of the list
     pub fn push(&mut self, name: Option<&str>, value: &[u8]) {
         let name_ref = if let Some(name) = name {
             let name_idx = self.buffer.len();
             write_string(name, &mut self.buffer);
-            &self.buffer[name_idx..] as *const [u8]
+            // Use a ref that does not include the length bytes for the name
+            &self.buffer[(name_idx + 4)..] as *const [u8]
         } else {
             &[]
         };
@@ -297,11 +346,13 @@ impl Values {
         self.view.push((name_ref, &self.buffer[value_idx..] as *const [u8]));
     }
 
+    /// Add a null value to the end of the list
     pub fn push_null(&mut self, name: Option<&str>) {
         let name_ref = if let Some(name) = name {
             let name_idx = self.buffer.len();
             write_string(name, &mut self.buffer);
-            &self.buffer[name_idx..] as *const [u8]
+            // Use a ref that does not include the length bytes for the name
+            &self.buffer[(name_idx + 4)..] as *const [u8]
         } else {
             &[]
         };
@@ -310,11 +361,13 @@ impl Values {
         self.view.push((name_ref, &self.buffer[value_idx..] as *const [u8]));
     }
 
+    /// Add an unset value to the end of the list
     pub fn push_unset(&mut self, name: Option<&str>) {
         let name_ref = if let Some(name) = name {
             let name_idx = self.buffer.len();
             write_string(name, &mut self.buffer);
-            &self.buffer[name_idx..] as *const [u8]
+            // Use a ref that does not include the length bytes for the name
+            &self.buffer[(name_idx + 4)..] as *const [u8]
         } else {
             &[]
         };
@@ -323,10 +376,12 @@ impl Values {
         self.view.push((name_ref, &self.buffer[value_idx..] as *const [u8]));
     }
 
+    /// Get an reference iterator over the values.
     pub fn iter(&self) -> ValuesIter {
         ValuesIter { values: self, idx: 0 }
     }
 
+    /// Get the number of values in the list.
     pub fn len(&self) -> usize {
         self.view.len()
     }
@@ -345,6 +400,7 @@ impl Clone for Values {
                     &buffer[idx..][..name.len()] as *const [u8],
                     &buffer[idx..][..value.len()] as *const [u8],
                 ));
+                idx += name.len() + value.len();
             }
         }
         Self { buffer, view }
@@ -377,6 +433,7 @@ impl Debug for Values {
     }
 }
 
+/// A reference interator over values
 pub struct ValuesIter<'a> {
     values: &'a Values,
     idx: usize,
@@ -391,6 +448,7 @@ impl<'a> Iterator for ValuesIter<'a> {
     }
 }
 
+/// An owning interator over values
 pub struct ValuesIntoIter {
     values: Values,
     idx: usize,

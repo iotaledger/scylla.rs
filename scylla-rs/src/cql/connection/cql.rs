@@ -156,10 +156,8 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
         let mut stream = socket
             .connect(self.address.ok_or_else(|| anyhow!("Address does not exist!"))?)
             .await?;
-        // create options frame
-        let opts_frame = RequestFrame::from(OptionsFrame);
         // write_all options frame to stream
-        stream.write_all(&opts_frame.build_payload()).await?;
+        stream.write_all(&OptionsFrame.encode::<Uncompressed>()?).await?;
         // collect_frame_response
         let buffer = collect_frame_response(&mut stream).await?;
         // Create Decoder from buffer. OPTIONS cannot be compressed as
@@ -184,9 +182,9 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
                     options.insert("COMPRESSION".to_owned(), compression.to_string());
                 }
                 // create startup frame using the selected options;
-                let startup_frame = RequestFrame::from(StartupFrameBuilder::default().options(options).build()?);
+                let startup_frame = StartupFrameBuilder::default().options(options).build()?;
                 // write_all startup frame to stream;
-                stream.write_all(&startup_frame.build_payload()).await?;
+                stream.write_all(&startup_frame.encode::<Uncompressed>()?).await?;
                 let buffer = collect_frame_response(&mut stream).await?;
                 // Create Decoder from buffer.
                 let response_frame = ResponseFrame::decode::<C>(buffer)?;
@@ -195,17 +193,15 @@ impl<Auth: Authenticator, C: Compression> CqlBuilder<Auth, C> {
                         if self.authenticator.is_none() {
                             bail!("CQL connection not ready due to authenticator is not provided");
                         }
-                        let auth_response_frame = RequestFrame::from(
-                            AuthResponseFrameBuilder::default()
-                                .auth_token(
-                                    self.authenticator
-                                        .as_ref()
-                                        .ok_or_else(|| anyhow!("Failed to read Auth Response!"))?,
-                                )
-                                .build()?,
-                        );
+                        let auth_response_frame = AuthResponseFrameBuilder::default()
+                            .auth_token(
+                                self.authenticator
+                                    .as_ref()
+                                    .ok_or_else(|| anyhow!("Failed to read Auth Response!"))?,
+                            )
+                            .build()?;
                         // write_all auth_response frame to stream;
-                        stream.write_all(&auth_response_frame.build_payload()).await?;
+                        stream.write_all(&auth_response_frame.encode::<Uncompressed>()?).await?;
                         // collect_frame_response
                         let buffer = collect_frame_response(&mut stream).await?;
                         // Create Decoder from buffer.
@@ -487,12 +483,9 @@ async fn collect_frame_response(stream: &mut TcpStream) -> anyhow::Result<Vec<u8
 
 /// Query the data center, and tokens from the ScyllaDB.
 fn fetch_tokens_query<C: Compression>() -> anyhow::Result<Vec<u8>> {
-    let frame = RequestFrame::from(
-        QueryFrameBuilder::default()
-            .statement("SELECT data_center, tokens FROM system.local".to_owned())
-            .consistency(Consistency::One)
-            .build()?,
-    );
-    let payload = C::compress(frame.build_payload())?;
-    Ok(payload)
+    Ok(QueryFrameBuilder::default()
+        .statement("SELECT data_center, tokens FROM system.local".to_owned())
+        .consistency(Consistency::One)
+        .build()?
+        .encode::<C>()?)
 }

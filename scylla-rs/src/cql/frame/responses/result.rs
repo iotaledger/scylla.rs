@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module defines the information in result frame.
+//! This module implements the RESULT frame.
 
 use super::*;
 use scylla_parse::{
@@ -12,18 +12,18 @@ use scylla_parse::{
 };
 use std::convert::TryFrom;
 
-pub const VOID: i32 = 0x0001;
-pub const ROWS: i32 = 0x0002;
-pub const SETKEYSPACE: i32 = 0x0003;
-pub const PREPARED: i32 = 0x0004;
-pub const SCHEMACHANGE: i32 = 0x0005;
-
+/// The result of a query ([`QueryFrame`], [`PrepareFrame`], [`ExecuteFrame`] or [`BatchFrame`]).
+///
+/// The first element of the body of a RESULT message is an `[int]` representing the
+/// `kind` of result. The rest of the body depends on the kind.
 #[derive(Clone, Debug)]
 pub struct ResultFrame {
+    /// The body kind
     pub kind: ResultBodyKind,
 }
 
 impl ResultFrame {
+    /// Get the body kind
     pub fn kind(&self) -> &ResultBodyKind {
         &self.kind
     }
@@ -57,6 +57,7 @@ impl FromPayload for ResultFrame {
     }
 }
 
+#[allow(missing_docs)]
 #[derive(Copy, Clone, Debug)]
 #[repr(i32)]
 pub enum ResultKind {
@@ -72,16 +73,23 @@ impl TryFrom<i32> for ResultKind {
 
     fn try_from(kind: i32) -> anyhow::Result<Self> {
         match kind {
-            VOID => Ok(Self::Void),
-            ROWS => Ok(Self::Rows),
-            SETKEYSPACE => Ok(Self::SetKeyspace),
-            PREPARED => Ok(Self::Prepared),
-            SCHEMACHANGE => Ok(Self::SchemaChange),
+            0x0001 => Ok(Self::Void),
+            0x0002 => Ok(Self::Rows),
+            0x0003 => Ok(Self::SetKeyspace),
+            0x0004 => Ok(Self::Prepared),
+            0x0005 => Ok(Self::SchemaChange),
             _ => anyhow::bail!("Unknown result kind: {:x}", kind),
         }
     }
 }
 
+/// The result body kind. Can be one of:
+///     - `0x0001`: **Void**: result carrying no information.
+///     - `0x0002`: **Rows**: the result of select queries, returning a set of rows.
+///     - `0x0003`: **Set keyspace**: the result of a `use` query.
+///     - `0x0004`: **Prepared**: result of a [`PrepareFrame`].
+///     - `0x0005`: **Schema change**: the result to a schema altering query.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, From, TryInto)]
 pub enum ResultBodyKind {
     Void,
@@ -91,23 +99,44 @@ pub enum ResultBodyKind {
     SchemaChange(SchemaChangeResult),
 }
 
+/// Result flags. A flag is set if the bit corresponding to its `mask` is set.
+/// Supported flags are, given their mask:
+///     - `0x0001`: **Global tables spec:** if set, only one table spec (keyspace and table name) is provided as
+///       `<global_table_spec>`. If not set, `<global_table_spec>` is not present.
+///     - `0x0002`: **Has more pages:** indicates whether this is not the last page of results and more should be
+///       retrieved. If set, the `<paging_state>` will be present. The `<paging_state>` is a `[bytes]` value that should
+///       be used in QUERY/EXECUTE to continue paging and retrieve the remainder of the result for this query.
+///     - `0x0004`: **No metadata:** if set, the `<metadata>` is only composed of these `<flags>`, the `<column_count>`
+///       and optionally the `<paging_state>` (depending on the Has more pages flag) but no other information. This will
+///       only ever be the case if this was requested during the query.
 #[derive(Copy, Clone, Debug)]
+#[repr(transparent)]
 pub struct ResultFlags(i32);
 
 impl ResultFlags {
+    /// The global tables spec flag.
+    pub const GLOBAL_TABLES_SPEC: i32 = 0x0001;
+    /// The has more pages flag.
+    pub const HAS_MORE_PAGES: i32 = 0x0002;
+    /// The no metadata flag.
+    pub const NO_METADATA: i32 = 0x0004;
+
+    /// Get the global tables spec flag
     pub fn global_tables_spec(&self) -> bool {
-        self.0 & 0x0001 != 0
+        self.0 & Self::GLOBAL_TABLES_SPEC != 0
     }
 
+    /// Get the has more pages flag
     pub fn has_more_pages(&self) -> bool {
-        self.0 & 0x0002 != 0
+        self.0 & Self::HAS_MORE_PAGES != 0
     }
 
+    /// Get the no metadata flag
     pub fn no_metadata(&self) -> bool {
-        self.0 & 0x0004 != 0
+        self.0 & Self::NO_METADATA != 0
     }
 }
-
+#[allow(missing_docs)]
 #[derive(Clone, Debug)]
 pub struct GlobalTableSpec {
     pub keyspace: String,
@@ -115,10 +144,12 @@ pub struct GlobalTableSpec {
 }
 
 impl GlobalTableSpec {
+    /// Get the keyspace
     pub fn keyspace(&self) -> &String {
         &self.keyspace
     }
 
+    /// Get the table
     pub fn table(&self) -> &String {
         &self.table
     }
@@ -133,35 +164,47 @@ impl FromPayload for GlobalTableSpec {
     }
 }
 
+/// Specifies a bind marker in a prepared statement.
 #[derive(Clone, Debug)]
 pub struct ColumnSpec {
+    /// The keyspace, only present if the Global tables spec flag is not set.
     pub keyspace: Option<String>,
+    /// The table, only present if the Global tables spec flag is not set.
     pub table: Option<String>,
+    /// The name of the bind marker (if named), or the name of the column, field, or expression that the bind marker
+    /// corresponds to (if the bind marker is "anonymous").
     pub name: String,
-    pub kind: CqlType,
+    /// The expected type of values for the bind marker
+    pub cql_type: CqlType,
 }
 
 impl ColumnSpec {
+    /// Get the keyspace
     pub fn keyspace(&self) -> &Option<String> {
         &self.keyspace
     }
 
+    /// Get the table
     pub fn table(&self) -> &Option<String> {
         &self.table
     }
 
+    /// Get the name
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn kind(&self) -> &CqlType {
-        &self.kind
+    /// Get the cql type
+    pub fn cql_type(&self) -> &CqlType {
+        &self.cql_type
     }
 }
 
 #[derive(Clone, Debug)]
+#[allow(missing_docs)]
 pub struct RowsResultMetadata {
     pub flags: ResultFlags,
+    /// The number of columns selected by the query that produced this result.
     pub columns_count: i32,
     pub paging_state: Option<Vec<u8>>,
     pub global_table_spec: Option<GlobalTableSpec>,
@@ -169,22 +212,27 @@ pub struct RowsResultMetadata {
 }
 
 impl RowsResultMetadata {
+    /// Get the flags
     pub fn flags(&self) -> ResultFlags {
         self.flags
     }
 
+    /// Get the columns count
     pub fn columns_count(&self) -> i32 {
         self.columns_count
     }
 
+    /// Get the paging state
     pub fn paging_state(&self) -> &Option<Vec<u8>> {
         &self.paging_state
     }
 
+    /// Get the global table spec
     pub fn global_table_spec(&self) -> &Option<GlobalTableSpec> {
         &self.global_table_spec
     }
 
+    /// Get the column specs
     pub fn column_specs(&self) -> &Option<Vec<ColumnSpec>> {
         &self.column_specs
     }
@@ -218,7 +266,7 @@ impl FromPayload for RowsResultMetadata {
                     keyspace,
                     table,
                     name,
-                    kind,
+                    cql_type: kind,
                 });
             }
             Some(column_specs)
@@ -287,7 +335,9 @@ fn read_cql_type(start: &mut usize, payload: &[u8]) -> anyhow::Result<CqlType> {
     })
 }
 
+/// Indicates a set of rows.
 #[derive(Clone)]
+#[allow(missing_docs)]
 pub struct RowsResult {
     pub metadata: RowsResultMetadata,
     pub rows_count: i32,
@@ -304,22 +354,27 @@ impl std::fmt::Debug for RowsResult {
 }
 
 impl RowsResult {
+    /// Get the rows metadata
     pub fn metadata(&self) -> &RowsResultMetadata {
         &self.metadata
     }
 
+    /// Get the number of rows
     pub fn rows_count(&self) -> i32 {
         self.rows_count
     }
 
+    /// Get the rows buffer
     pub fn rows(&self) -> &[u8] {
         &self.rows
     }
 
+    /// Get an iterator over the rows
     pub fn iter<R: RowDecoder>(&self) -> Iter<R> {
         Iter::new(&self)
     }
 
+    /// Consume the result and get an iterator over the rows
     pub fn into_iter<R: RowDecoder>(self) -> IntoIter<R> {
         IntoIter::new(self)
     }
@@ -339,32 +394,46 @@ impl FromPayload for RowsResult {
     }
 }
 
+#[allow(missing_docs)]
 #[derive(Clone, Debug)]
 pub struct PreparedResultMetadata {
     pub flags: ResultFlags,
+    /// An `[int]` representing the number of bind markers in the prepared statement.
     pub columns_count: i32,
+    /// Represents the indexes of the bind markers
+    /// that corresponds to the partition key columns in the query.
+    ///
+    /// For example, a sequence of [2, 0, 1] indicates that the table has three partition key columns; the full
+    /// partition key can be constructed by creating a composite of the values for the bind markers at index 2, at
+    /// index 0, and at index 1. This allows implementations with token-aware routing to correctly
+    /// construct the partition key without needing to inspect table metadata.
     pub pk_indexes: Vec<u16>,
     pub global_table_spec: Option<GlobalTableSpec>,
     pub column_specs: Option<Vec<ColumnSpec>>,
 }
 
 impl PreparedResultMetadata {
+    /// Get the result flags
     pub fn flags(&self) -> &ResultFlags {
         &self.flags
     }
 
+    /// Get the number of columns in the result
     pub fn columns_count(&self) -> i32 {
         self.columns_count
     }
 
+    /// Get the primary key indexes list
     pub fn pk_indexes(&self) -> &Vec<u16> {
         &self.pk_indexes
     }
 
+    /// Get the global table spec
     pub fn global_table_spec(&self) -> &Option<GlobalTableSpec> {
         &self.global_table_spec
     }
 
+    /// Get the column specs
     pub fn column_specs(&self) -> &Option<Vec<ColumnSpec>> {
         &self.column_specs
     }
@@ -401,7 +470,7 @@ impl FromPayload for PreparedResultMetadata {
                     keyspace,
                     table,
                     name,
-                    kind,
+                    cql_type: kind,
                 });
             }
             Some(column_specs)
@@ -418,22 +487,32 @@ impl FromPayload for PreparedResultMetadata {
     }
 }
 
+/// The result of a [`PrepareFrame`].
+///
+/// Note that the prepared query ID returned is global to the node on which the query has been prepared.
 #[derive(Clone, Debug)]
+#[allow(missing_docs)]
 pub struct PreparedResult {
     pub id: [u8; 16],
     pub metadata: PreparedResultMetadata,
+    /// This describes the metadata for the result set that will be returned
+    /// when this prepared statement is executed.
     pub result_metadata: Option<RowsResultMetadata>,
 }
 
 impl PreparedResult {
+    /// Get the id of the prepared statement.
     pub fn id(&self) -> &[u8; 16] {
         &self.id
     }
 
+    /// Get the metadata of the prepared statement.
     pub fn metadata(&self) -> &PreparedResultMetadata {
         &self.metadata
     }
 
+    /// Get the metadata of the result set that will be returned when this
+    /// prepared statement is executed.
     pub fn result_metadata(&self) -> &Option<RowsResultMetadata> {
         &self.result_metadata
     }
@@ -456,17 +535,25 @@ impl FromPayload for PreparedResult {
     }
 }
 
+/// The result of a schema altering query (creation/update/drop of a
+/// keyspace/table/index).
+///
+/// Note that a query to create or drop an index is considered to be a change
+/// to the table the index is on.
 #[derive(Clone, Debug)]
+#[allow(missing_docs)]
 pub struct SchemaChangeResult {
     pub change_type: SchemaChangeType,
     pub target: SchemaChangeTarget,
 }
 
 impl SchemaChangeResult {
+    /// Get the change type
     pub fn change_type(&self) -> &SchemaChangeType {
         &self.change_type
     }
 
+    /// Get the target
     pub fn target(&self) -> &SchemaChangeTarget {
         &self.target
     }

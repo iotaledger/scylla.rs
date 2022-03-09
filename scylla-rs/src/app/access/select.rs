@@ -326,7 +326,7 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O, QueryFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
+    pub fn build(self) -> anyhow::Result<QuerySelectRequest<O>> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -335,13 +335,7 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O, QueryFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: frame.statement().clone(),
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(QuerySelectRequest::new(frame, token.finish(), self.keyspace))
     }
 }
 
@@ -365,7 +359,7 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O, ExecuteFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<SelectRequest<O>> {
+    pub fn build(self) -> anyhow::Result<ExecuteSelectRequest<O>> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -374,13 +368,12 @@ impl<R, O: RowsDecoder> SelectBuilder<R, O, ExecuteFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: self.statement,
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(ExecuteSelectRequest::new(
+            frame,
+            token.finish(),
+            self.keyspace,
+            self.statement,
+        ))
     }
 }
 
@@ -428,91 +421,123 @@ impl<R, O: RowsDecoder, B: Clone> Clone for SelectBuilder<R, O, B> {
     }
 }
 
-impl<R, O: RowsDecoder> TryInto<SelectRequest<O>> for SelectBuilder<R, O, QueryFrameBuilder> {
+impl<R, O: RowsDecoder> TryInto<QuerySelectRequest<O>> for SelectBuilder<R, O, QueryFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<SelectRequest<O>, Self::Error> {
+    fn try_into(self) -> Result<QuerySelectRequest<O>, Self::Error> {
         self.build()
     }
 }
-impl<R, O: RowsDecoder> TryInto<SelectRequest<O>> for SelectBuilder<R, O, ExecuteFrameBuilder> {
+impl<R, O: RowsDecoder> TryInto<ExecuteSelectRequest<O>> for SelectBuilder<R, O, ExecuteFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<SelectRequest<O>, Self::Error> {
+    fn try_into(self) -> Result<ExecuteSelectRequest<O>, Self::Error> {
         self.build()
     }
 }
-impl<R, O: 'static + RowsDecoder + Send + Sync> SendAsRequestExt<SelectRequest<O>>
+impl<R, O: 'static + RowsDecoder + Send + Sync> SendAsRequestExt<QuerySelectRequest<O>>
     for SelectBuilder<R, O, QueryFrameBuilder>
 {
 }
-impl<R, O: 'static + RowsDecoder + Send + Sync> SendAsRequestExt<SelectRequest<O>>
+impl<R, O: 'static + RowsDecoder + Send + Sync> SendAsRequestExt<ExecuteSelectRequest<O>>
     for SelectBuilder<R, O, ExecuteFrameBuilder>
 {
 }
 
-/// A request to select a record which can be sent to the ring
-pub struct SelectRequest<O> {
-    inner: CommonRequest,
+pub struct QuerySelectRequest<O> {
+    frame: QueryFrame,
+    token: i64,
+    keyspace: Option<String>,
     _marker: PhantomData<fn(O) -> O>,
 }
 
-impl<O> From<CommonRequest> for SelectRequest<O> {
-    fn from(inner: CommonRequest) -> Self {
-        SelectRequest {
-            inner,
+impl<O> QuerySelectRequest<O> {
+    pub fn new(frame: QueryFrame, token: i64, keyspace: Option<String>) -> Self {
+        Self {
+            frame,
+            token,
+            keyspace,
             _marker: PhantomData,
         }
     }
 }
 
-impl<O> Deref for SelectRequest<O> {
-    type Target = CommonRequest;
+impl<O> RequestFrameExt for QuerySelectRequest<O> {
+    type Frame = QueryFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl<O> ShardAwareExt for QuerySelectRequest<O> {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl<O> Deref for QuerySelectRequest<O> {
+    type Target = QueryFrame;
 
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.frame
     }
 }
 
-impl<O> DerefMut for SelectRequest<O> {
+impl<O> DerefMut for QuerySelectRequest<O> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+        &mut self.frame
     }
 }
 
-impl<O> Debug for SelectRequest<O> {
+impl<O: 'static + Send + Sync + RowsDecoder> SendRequestExt for QuerySelectRequest<O> {
+    type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeRows<O>;
+    const TYPE: RequestType = RequestType::Select;
+
+    fn marker(&self) -> Self::Marker {
+        DecodeRows::<O>::new()
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
+    }
+}
+
+impl<O> Debug for QuerySelectRequest<O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SelectRequest").field("inner", &self.inner).finish()
+        f.debug_struct("SelectRequest")
+            .field("frame", &self.frame)
+            .field("token", &self.token)
+            .field("keyspace", &self.keyspace)
+            .finish()
     }
 }
 
-impl<O> Clone for SelectRequest<O> {
+impl<O> Clone for QuerySelectRequest<O> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            frame: self.frame.clone(),
+            token: self.token,
+            keyspace: self.keyspace.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<O: 'static> Request for SelectRequest<O> {
-    fn token(&self) -> i64 {
-        self.inner.token()
-    }
-
-    fn statement(&self) -> &String {
-        self.inner.statement()
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.inner.payload()
-    }
-    fn keyspace(&self) -> Option<&String> {
-        self.inner.keyspace()
-    }
-}
-
-impl<O> SelectRequest<O> {
+impl<O> QuerySelectRequest<O> {
     /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
     /// decoder in order to decode the response inside handle_response method.
     pub fn result_decoder(&self) -> DecodeResult<DecodeRows<O>> {
@@ -520,19 +545,125 @@ impl<O> SelectRequest<O> {
     }
 }
 
-impl<O> SendRequestExt for SelectRequest<O>
-where
-    O: 'static + Send + RowsDecoder,
-{
-    type Marker = DecodeRows<O>;
-    type Worker = BasicRetryWorker<Self>;
-    const TYPE: RequestType = RequestType::Select;
+/// A request to delete a record which can be sent to the ring
+pub struct ExecuteSelectRequest<O> {
+    frame: ExecuteFrame,
+    token: i64,
+    keyspace: Option<String>,
+    statement: String,
+    _marker: PhantomData<fn(O) -> O>,
+}
 
-    fn worker(self) -> Box<Self::Worker> {
-        BasicRetryWorker::new(self)
+impl<O> ExecuteSelectRequest<O> {
+    pub fn new(frame: ExecuteFrame, token: i64, keyspace: Option<String>, statement: String) -> Self {
+        Self {
+            frame,
+            token,
+            keyspace,
+            statement,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<O> RequestFrameExt for ExecuteSelectRequest<O> {
+    type Frame = ExecuteFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
     }
 
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl<O> ShardAwareExt for ExecuteSelectRequest<O> {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl<O: 'static + Send + Sync + RowsDecoder> ReprepareExt for ExecuteSelectRequest<O> {
+    type OutRequest = QuerySelectRequest<O>;
+    fn convert(self) -> Self::OutRequest {
+        QuerySelectRequest {
+            token: self.token,
+            frame: QueryFrame::from_execute(self.frame, self.statement),
+            keyspace: self.keyspace,
+            _marker: PhantomData,
+        }
+    }
+
+    fn statement(&self) -> &String {
+        &self.statement
+    }
+}
+
+impl<O> Deref for ExecuteSelectRequest<O> {
+    type Target = ExecuteFrame;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+
+impl<O> DerefMut for ExecuteSelectRequest<O> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frame
+    }
+}
+
+impl<O: 'static + Send + Sync + RowsDecoder> SendRequestExt for ExecuteSelectRequest<O> {
+    type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeRows<O>;
+    const TYPE: RequestType = RequestType::Select;
+
     fn marker(&self) -> Self::Marker {
-        Self::Marker::new()
+        DecodeRows::<O>::new()
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
+    }
+}
+
+impl<O> Debug for ExecuteSelectRequest<O> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectRequest")
+            .field("frame", &self.frame)
+            .field("token", &self.token)
+            .field("keyspace", &self.keyspace)
+            .field("statement", &self.statement)
+            .finish()
+    }
+}
+
+impl<O> Clone for ExecuteSelectRequest<O> {
+    fn clone(&self) -> Self {
+        Self {
+            frame: self.frame.clone(),
+            token: self.token,
+            keyspace: self.keyspace.clone(),
+            statement: self.statement.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// A request to select a record which can be sent to the ring
+impl<O> ExecuteSelectRequest<O> {
+    /// Return DecodeResult marker type, useful in case the worker struct wants to hold the
+    /// decoder in order to decode the response inside handle_response method.
+    pub fn result_decoder(&self) -> DecodeResult<DecodeRows<O>> {
+        DecodeResult::select()
     }
 }

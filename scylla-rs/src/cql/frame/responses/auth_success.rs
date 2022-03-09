@@ -1,13 +1,22 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the needed structure and traits used for successful authentication.
+//! This module implements AUTH_SUCCESS frame.
 
 use super::*;
 
-/// The structure for successful authentication.
+/**
+   Indicates the success of the authentication phase. See [`AuthenticateFrame`] for more
+   details.
+
+   The body of this message is a single `[bytes]` token holding final information
+   from the server that the client may require to finish the authentication
+   process. What that token contains and whether it can be null depends on the
+   actual authenticator used.
+*/
 #[derive(Clone, Debug)]
 pub struct AuthSuccessFrame {
+    /// The authentication token.
     pub token: Vec<u8>,
 }
 

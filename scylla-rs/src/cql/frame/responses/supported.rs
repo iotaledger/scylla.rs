@@ -1,14 +1,19 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the Supported frame.
+//! This module implements the SUPPORTED frame.
 
 use super::*;
 use std::collections::HashMap;
 
-/// The supported frame with options field.
+/// Indicates which startup options are supported by the server. This message
+/// comes as a response to an [`OptionsFrame`] message.
+///
+/// The body of a SUPPORTED message is a `[string multimap]`. This multimap gives
+/// for each of the supported [`StartupFrame`] options, the list of supported values.
 #[derive(Clone, Debug)]
 pub struct SupportedFrame {
+    /// Supported options
     pub options: HashMap<String, Vec<String>>,
 }
 

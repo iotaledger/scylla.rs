@@ -330,7 +330,7 @@ impl<R> UpdateBuilder<R, QueryFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+    pub fn build(self) -> anyhow::Result<QueryUpdateRequest> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -339,13 +339,7 @@ impl<R> UpdateBuilder<R, QueryFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: frame.statement().clone(),
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(QueryUpdateRequest::new(frame, token.finish(), self.keyspace))
     }
 }
 
@@ -360,7 +354,7 @@ impl<R> UpdateBuilder<R, ExecuteFrameBuilder> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<UpdateRequest> {
+    pub fn build(self) -> anyhow::Result<ExecuteUpdateRequest> {
         let frame = self.builder.build()?;
         let mut token = TokenEncodeChain::default();
         for idx in self.token_indexes {
@@ -369,13 +363,12 @@ impl<R> UpdateBuilder<R, ExecuteFrameBuilder> {
             }
             token.append(&frame.values[idx]);
         }
-        Ok(CommonRequest {
-            token: token.finish(),
-            statement: self.statement,
-            payload: RequestFrame::from(frame).build_payload(),
-            keyspace: self.keyspace,
-        }
-        .into())
+        Ok(ExecuteUpdateRequest::new(
+            frame,
+            token.finish(),
+            self.keyspace,
+            self.statement,
+        ))
     }
 }
 
@@ -423,74 +416,176 @@ impl<R, B: Clone> Clone for UpdateBuilder<R, B> {
     }
 }
 
-impl<R> TryInto<UpdateRequest> for UpdateBuilder<R, QueryFrameBuilder> {
+impl<R> TryInto<QueryUpdateRequest> for UpdateBuilder<R, QueryFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<UpdateRequest, Self::Error> {
+    fn try_into(self) -> Result<QueryUpdateRequest, Self::Error> {
         self.build()
     }
 }
-impl<R> TryInto<UpdateRequest> for UpdateBuilder<R, ExecuteFrameBuilder> {
+impl<R> TryInto<ExecuteUpdateRequest> for UpdateBuilder<R, ExecuteFrameBuilder> {
     type Error = anyhow::Error;
 
-    fn try_into(self) -> Result<UpdateRequest, Self::Error> {
+    fn try_into(self) -> Result<ExecuteUpdateRequest, Self::Error> {
         self.build()
     }
 }
-impl<R> SendAsRequestExt<UpdateRequest> for UpdateBuilder<R, QueryFrameBuilder> {}
-impl<R> SendAsRequestExt<UpdateRequest> for UpdateBuilder<R, ExecuteFrameBuilder> {}
+impl<R> SendAsRequestExt<QueryUpdateRequest> for UpdateBuilder<R, QueryFrameBuilder> {}
+impl<R> SendAsRequestExt<ExecuteUpdateRequest> for UpdateBuilder<R, ExecuteFrameBuilder> {}
 
 /// A request to update a record which can be sent to the ring
 #[derive(Debug, Clone)]
-pub struct UpdateRequest(CommonRequest);
+pub struct QueryUpdateRequest {
+    frame: QueryFrame,
+    token: i64,
+    keyspace: Option<String>,
+}
 
-impl From<CommonRequest> for UpdateRequest {
-    fn from(req: CommonRequest) -> Self {
-        UpdateRequest(req)
+impl QueryUpdateRequest {
+    pub fn new(frame: QueryFrame, token: i64, keyspace: Option<String>) -> Self {
+        Self { frame, token, keyspace }
     }
 }
 
-impl Deref for UpdateRequest {
-    type Target = CommonRequest;
+impl RequestFrameExt for QueryUpdateRequest {
+    type Frame = QueryFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for QueryUpdateRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl Deref for QueryUpdateRequest {
+    type Target = QueryFrame;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.frame
     }
 }
 
-impl DerefMut for UpdateRequest {
+impl DerefMut for QueryUpdateRequest {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.frame
     }
 }
 
-impl Request for UpdateRequest {
-    fn token(&self) -> i64 {
-        self.0.token()
-    }
-
-    fn statement(&self) -> &String {
-        self.0.statement()
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.0.payload()
-    }
-    fn keyspace(&self) -> Option<&String> {
-        self.0.keyspace()
-    }
-}
-
-impl SendRequestExt for UpdateRequest {
-    type Marker = DecodeVoid;
+impl SendRequestExt for QueryUpdateRequest {
     type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Update;
-
-    fn worker(self) -> Box<Self::Worker> {
-        BasicRetryWorker::new(self)
-    }
 
     fn marker(&self) -> Self::Marker {
         DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
+    }
+}
+
+/// A request to delete a record which can be sent to the ring
+#[derive(Debug, Clone)]
+pub struct ExecuteUpdateRequest {
+    frame: ExecuteFrame,
+    token: i64,
+    keyspace: Option<String>,
+    statement: String,
+}
+
+impl ExecuteUpdateRequest {
+    pub fn new(frame: ExecuteFrame, token: i64, keyspace: Option<String>, statement: String) -> Self {
+        Self {
+            frame,
+            token,
+            keyspace,
+            statement,
+        }
+    }
+}
+
+impl RequestFrameExt for ExecuteUpdateRequest {
+    type Frame = ExecuteFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for ExecuteUpdateRequest {
+    fn token(&self) -> i64 {
+        self.token
+    }
+
+    fn keyspace(&self) -> Option<&String> {
+        self.keyspace.as_ref()
+    }
+}
+
+impl ReprepareExt for ExecuteUpdateRequest {
+    type OutRequest = QueryUpdateRequest;
+    fn convert(self) -> Self::OutRequest {
+        QueryUpdateRequest {
+            token: self.token,
+            frame: QueryFrame::from_execute(self.frame, self.statement),
+            keyspace: self.keyspace,
+        }
+    }
+
+    fn statement(&self) -> &String {
+        &self.statement
+    }
+}
+
+impl Deref for ExecuteUpdateRequest {
+    type Target = ExecuteFrame;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+
+impl DerefMut for ExecuteUpdateRequest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frame
+    }
+}
+
+impl SendRequestExt for ExecuteUpdateRequest {
+    type Worker = BasicRetryWorker<Self>;
+    type Marker = DecodeVoid;
+    const TYPE: RequestType = RequestType::Update;
+
+    fn marker(&self) -> Self::Marker {
+        DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BasicRetryWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BasicRetryWorker::new(self)
     }
 }

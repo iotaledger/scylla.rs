@@ -5,23 +5,13 @@
 
 use super::{
     FromPayload,
+    OpCode,
     ToPayload,
 };
 use std::convert::{
     TryFrom,
     TryInto,
 };
-
-/// The ignore flag.
-pub const IGNORE: u8 = 0x00;
-/// The compression flag.
-pub const COMPRESSION: u8 = 0x01;
-/// The tracing flag.
-pub const TRACING: u8 = 0x02;
-/// The custoem payload flag.
-pub const CUSTOM_PAYLOAD: u8 = 0x04;
-/// The warning flag.
-pub const WARNING: u8 = 0x08;
 
 /// Direction of a request.
 #[derive(Copy, Clone, Debug)]
@@ -109,22 +99,32 @@ impl Version {
     The rest of flags is currently unused and ignored.
 */
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Flags(u8);
+#[repr(transparent)]
+pub struct HeaderFlags(u8);
 
-impl Flags {
+impl HeaderFlags {
+    /// The compression flag.
+    pub const COMPRESSION: u8 = 0x01;
+    /// The tracing flag.
+    pub const TRACING: u8 = 0x02;
+    /// The custoem payload flag.
+    pub const CUSTOM_PAYLOAD: u8 = 0x04;
+    /// The warning flag.
+    pub const WARNING: u8 = 0x08;
+
     /// Compression flag. If set, the frame body is compressed. The actual
     /// compression to use should have been set up beforehand through the
     /// Startup message.
     pub fn compression(&self) -> bool {
-        self.0 & COMPRESSION != 0
+        self.0 & Self::COMPRESSION != 0
     }
 
     /// Set the compression flag.
     pub fn set_compression(&mut self, value: bool) {
         if value {
-            self.0 |= COMPRESSION;
+            self.0 |= Self::COMPRESSION;
         } else {
-            self.0 &= !COMPRESSION;
+            self.0 &= !Self::COMPRESSION;
         }
     }
 
@@ -138,15 +138,15 @@ impl Flags {
     /// a tracing ID. The tracing ID is a `[uuid]` and is the first thing in
     /// the frame body.
     pub fn tracing(&self) -> bool {
-        self.0 & TRACING != 0
+        self.0 & Self::TRACING != 0
     }
 
     /// Set the tracing flag.
     pub fn set_tracing(&mut self, value: bool) {
         if value {
-            self.0 |= TRACING;
+            self.0 |= Self::TRACING;
         } else {
-            self.0 &= !TRACING;
+            self.0 &= !Self::TRACING;
         }
     }
 
@@ -161,15 +161,15 @@ impl Flags {
     /// those indicated elements in the frame body. If neither are set, the custom
     /// payload will be the first value in the frame body.
     pub fn custom_payload(&self) -> bool {
-        self.0 & CUSTOM_PAYLOAD != 0
+        self.0 & Self::CUSTOM_PAYLOAD != 0
     }
 
     /// Set the custom payload flag.
     pub fn set_custom_payload(&mut self, value: bool) {
         if value {
-            self.0 |= CUSTOM_PAYLOAD;
+            self.0 |= Self::CUSTOM_PAYLOAD;
         } else {
-            self.0 &= !CUSTOM_PAYLOAD;
+            self.0 &= !Self::CUSTOM_PAYLOAD;
         }
     }
 
@@ -180,15 +180,15 @@ impl Flags {
     /// first value in the frame body if the tracing flag is not set, or directly
     /// after the tracing ID if it is.
     pub fn warning(&self) -> bool {
-        self.0 & WARNING != 0
+        self.0 & Self::WARNING != 0
     }
 
     /// Set the warning flag.
     pub fn set_warning(&mut self, value: bool) {
         if value {
-            self.0 |= WARNING;
+            self.0 |= Self::WARNING;
         } else {
-            self.0 &= !WARNING;
+            self.0 &= !Self::WARNING;
         }
     }
 }
@@ -198,9 +198,9 @@ impl Flags {
 #[derive(Copy, Clone, Debug)]
 pub struct Header {
     version: Version,
-    flags: Flags,
+    flags: HeaderFlags,
     stream: u16,
-    opcode: u8,
+    opcode: OpCode,
     body_len: u32,
 }
 
@@ -221,31 +221,31 @@ impl Header {
     }
 
     /// The flags of the frame.
-    pub fn flags(&self) -> &Flags {
+    pub fn flags(&self) -> &HeaderFlags {
         &self.flags
     }
 
     /// The mutable flags of the frame.
-    pub fn flags_mut(&mut self) -> &mut Flags {
+    pub fn flags_mut(&mut self) -> &mut HeaderFlags {
         &mut self.flags
     }
 
-    /// The compression flag of the frame. See [`Flags`] for more information.
+    /// The compression flag of the frame. See [`HeaderFlags`] for more information.
     pub fn compression(&self) -> bool {
         self.flags.compression()
     }
 
-    /// The tracing flag of the frame. See [`Flags`] for more information.
+    /// The tracing flag of the frame. See [`HeaderFlags`] for more information.
     pub fn tracing(&self) -> bool {
         self.flags.tracing()
     }
 
-    /// The custom payload flag of the frame. See [`Flags`] for more information.
+    /// The custom payload flag of the frame. See [`HeaderFlags`] for more information.
     pub fn custom_payload(&self) -> bool {
         self.flags.custom_payload()
     }
 
-    /// The warning flag of the frame. See [`Flags`] for more information.
+    /// The warning flag of the frame. See [`HeaderFlags`] for more information.
     pub fn warning(&self) -> bool {
         self.flags.warning()
     }
@@ -253,7 +253,7 @@ impl Header {
     /// The stream id of the frame. When sending request messages, this
     /// stream id must be set by the client to a non-negative value (negative stream id
     /// are reserved for streams initiated by the server; currently all EVENT messages
-    /// (section 4.2.6) have a streamId of -1). If a client sends a request message
+    /// have a streamId of -1). If a client sends a request message
     /// with the stream id X, it is guaranteed that the stream id of the response to
     /// that message will be X.
     ///
@@ -296,12 +296,12 @@ impl Header {
     /// - `0x0E`: AUTH_CHALLENGE
     /// - `0x0F`: AUTH_RESPONSE
     /// - `0x10`: AUTH_SUCCESS
-    pub fn opcode(&self) -> u8 {
+    pub fn opcode(&self) -> OpCode {
         self.opcode
     }
 
     /// Set the opcode of the frame.
-    pub fn set_opcode(&mut self, opcode: u8) {
+    pub fn set_opcode(&mut self, opcode: OpCode) {
         self.opcode = opcode;
     }
 
@@ -316,10 +316,10 @@ impl Header {
     }
 
     /// Create a default header for a frame given an opcode.
-    pub fn from_opcode(opcode: u8) -> Self {
+    pub fn from_opcode(opcode: OpCode) -> Self {
         Self {
             version: Version::default(),
-            flags: Flags::default(),
+            flags: HeaderFlags::default(),
             stream: 0,
             opcode,
             body_len: 0,
@@ -334,9 +334,9 @@ impl TryFrom<&[u8]> for Header {
         anyhow::ensure!(bytes.len() == 9, "Invalid header length");
         Ok(Header {
             version: Version(bytes[0]),
-            flags: Flags(bytes[1]),
+            flags: HeaderFlags(bytes[1]),
             stream: u16::from_be_bytes([bytes[2], bytes[3]]),
-            opcode: bytes[4],
+            opcode: bytes[4].try_into()?,
             body_len: u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]),
         })
     }
@@ -367,7 +367,7 @@ impl Into<[u8; 9]> for Header {
             self.flags.0,
             (self.stream >> 8) as u8,
             self.stream as u8,
-            self.opcode,
+            self.opcode as u8,
             (self.body_len >> 24) as u8,
             (self.body_len >> 16) as u8,
             (self.body_len >> 8) as u8,

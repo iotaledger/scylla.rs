@@ -1,6 +1,11 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+mod basic;
+mod batch;
+mod prepare;
+mod select;
+
 pub use crate::app::stage::reporter::{
     ReporterEvent,
     ReporterHandle,
@@ -11,8 +16,8 @@ use crate::{
         ring::RingSendError,
     },
     cql::{
+        ErrorCode,
         ErrorFrame,
-        RowsDecoder,
     },
     prelude::{
         FrameError,
@@ -20,29 +25,31 @@ use crate::{
     },
 };
 use anyhow::anyhow;
-pub use basic::{
-    BasicRetryWorker,
-    BasicWorker,
-    SpawnableRespondWorker,
-};
+pub use basic::*;
+pub use batch::*;
 use log::*;
-pub use prepare::PrepareWorker;
-pub use select::SelectWorker;
+pub use prepare::*;
+pub use select::*;
+use std::fmt::Debug;
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedSender;
-pub use value::ValueWorker;
-
-mod basic;
-mod prepare;
-mod select;
-mod value;
 
 /// WorkerId trait type which will be implemented by worker in order to send their channel_tx.
 pub trait Worker: Send + Sync + std::fmt::Debug + 'static {
     /// Reporter will invoke this method to Send the cql response to worker
     fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()>;
     /// Reporter will invoke this method to Send the worker error to worker
-    fn handle_error(self: Box<Self>, error: WorkerError, reporter: Option<&ReporterHandle>) -> anyhow::Result<()>;
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()>;
+}
+
+impl<W: Worker + ?Sized> Worker for Box<W> {
+    fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
+        (*self).handle_response(body)
+    }
+
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
+        (*self).handle_error(error, reporter)
+    }
 }
 
 #[derive(Error, Debug)]
@@ -69,9 +76,9 @@ pub enum WorkerError {
 }
 
 /// should be implemented on the handle of the worker
-pub trait HandleResponse<O> {
+pub trait HandleResponse {
     /// Handle response for worker of type W
-    fn handle_response(self, response: O) -> anyhow::Result<()>;
+    fn handle_response(self, body: ResponseBody) -> anyhow::Result<()>;
 }
 /// should be implemented on the handle of the worker
 pub trait HandleError {
@@ -80,8 +87,7 @@ pub trait HandleError {
 }
 
 /// Defines a worker which contains enough information to retry on a failure
-#[async_trait::async_trait]
-pub trait RetryableWorker<R>: Worker {
+pub trait RetryableWorker<R: SendRequestExt + Clone>: Worker {
     /// Get the number of retries remaining
     fn retries(&self) -> usize;
     /// Mutably access the number of retries remaining
@@ -89,7 +95,7 @@ pub trait RetryableWorker<R>: Worker {
     /// Get the request
     fn request(&self) -> &R;
     /// Update the retry count
-    fn with_retries(mut self: Box<Self>, retries: usize) -> Box<Self>
+    fn with_retries(mut self, retries: usize) -> Self
     where
         Self: Sized,
     {
@@ -97,21 +103,14 @@ pub trait RetryableWorker<R>: Worker {
         self
     }
     /// Retry the worker
-    fn retry(mut self: Box<Self>) -> Result<(), Box<Self>>
+    fn retry(mut self, reporter: &ReporterHandle) -> Result<(), Self>
     where
         Self: 'static + Sized,
-        R: Request,
     {
         if self.retries() > 0 {
             *self.retries_mut() -= 1;
             // currently we assume all cql/worker errors are retryable, but we might change this in future
-            send_global(
-                self.request().keyspace().cloned().as_ref().map(|s| s.as_str()),
-                self.request().token(),
-                self.request().payload(),
-                self,
-            )
-            .ok();
+            self.send_to_reporter(reporter).ok();
             Ok(())
         } else {
             Err(self)
@@ -119,76 +118,87 @@ pub trait RetryableWorker<R>: Worker {
     }
 
     /// Send the worker to a specific reporter, without waiting for a response
-    fn send_to_reporter(self: Box<Self>, reporter: &ReporterHandle) -> Result<DecodeResult<R::Marker>, RequestError>
+    fn send_to_reporter(self, reporter: &ReporterHandle) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
-        R: SendRequestExt,
     {
         let marker = self.request().marker();
         let request = ReporterEvent::Request {
-            payload: self.request().payload(),
-            worker: self,
+            frame: self.request().frame().clone().into(),
+            worker: Box::new(self),
         };
         reporter.send(request).map_err(|e| RingSendError::SendError(e))?;
         Ok(DecodeResult::new(marker, R::TYPE))
     }
 
     /// Send the worker to the local datacenter, without waiting for a response
-    fn send_local(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
+    fn send_local(self) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
-        R: SendRequestExt,
+        R: ShardAwareExt,
     {
         let marker = self.request().marker();
-        send_local(
-            self.request().keyspace().cloned().as_ref().map(|s| s.as_str()),
-            self.request().token(),
-            self.request().payload(),
-            self,
-        )?;
+        let req = self.request().clone();
+        send_local(req.keyspace().cloned().as_deref(), req.token(), req.into_frame(), self)?;
         Ok(DecodeResult::new(marker, R::TYPE))
     }
 
     /// Send the worker to a global datacenter, without waiting for a response
-    fn send_global(self: Box<Self>) -> Result<DecodeResult<R::Marker>, RequestError>
+    fn send_global(self) -> Result<DecodeResult<R::Marker>, RequestError>
     where
         Self: 'static + Sized,
-        R: SendRequestExt,
+        R: ShardAwareExt,
     {
         let marker = self.request().marker();
-        send_global(
-            self.request().keyspace().cloned().as_ref().map(|s| s.as_str()),
-            self.request().token(),
-            self.request().payload(),
-            self,
-        )?;
+        let req = self.request().clone();
+        send_local(req.keyspace().cloned().as_deref(), req.token(), req.into_frame(), self)?;
         Ok(DecodeResult::new(marker, R::TYPE))
     }
+}
 
+/// Defines helper functions for getting query results with a worker
+#[async_trait::async_trait]
+pub trait GetWorkerExt<R, H>: RetryableWorker<R>
+where
+    R: SendRequestExt + ShardAwareExt + Clone,
+    H: HandleResponse + HandleError,
+{
     /// Send the worker to the local datacenter and await a response asynchronously
-    async fn get_local(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
+    async fn get_local(self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
-        R: SendRequestExt,
-        Self: 'static
-            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-        R::Marker: Send + Sync,
-    {
-        let (handle, inbox) = tokio::sync::oneshot::channel();
-        let marker = self.with_handle(handle).send_local()?;
-        Ok(marker.inner.try_decode(
-            inbox
-                .await
-                .map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
-        )?)
-    }
+        R::Marker: Send + Sync;
 
     /// Send the worker to the local datacenter and await a response synchronously
-    fn get_local_blocking(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
+    fn get_local_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError>;
+
+    /// Send the worker to a global datacenter and await a response asynchronously
+    async fn get_global(self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
-        R: SendRequestExt,
-        Self: 'static
-            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
+        R::Marker: Send + Sync;
+
+    /// Send the worker to a global datacenter and await a response synchronously
+    fn get_global_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError>;
+}
+#[async_trait::async_trait]
+impl<W, R> GetWorkerExt<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>> for W
+where
+    R: SendRequestExt + ShardAwareExt + Clone,
+    W: RetryableWorker<R> + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>>,
+{
+    async fn get_local(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
     {
+        let (handle, inbox) = tokio::sync::oneshot::channel();
+        let marker = self.with_handle(handle).send_local()?;
+        Ok(marker.inner.try_decode(
+            inbox
+                .await
+                .map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
+        )?)
+    }
+
+    fn get_local_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError> {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_local()?;
         Ok(marker.inner.try_decode(
@@ -196,12 +206,8 @@ pub trait RetryableWorker<R>: Worker {
         )?)
     }
 
-    /// Send the worker to a global datacenter and await a response asynchronously
-    async fn get_global(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
+    async fn get_global(self) -> Result<<R::Marker as Marker>::Output, RequestError>
     where
-        R: SendRequestExt,
-        Self: 'static
-            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
         R::Marker: Send + Sync,
     {
         let (handle, inbox) = tokio::sync::oneshot::channel();
@@ -213,46 +219,94 @@ pub trait RetryableWorker<R>: Worker {
         )?)
     }
 
-    /// Send the worker to a global datacenter and await a response synchronously
-    fn get_global_blocking(self: Box<Self>) -> Result<<R::Marker as Marker>::Output, RequestError>
-    where
-        R: SendRequestExt,
-        Self: 'static
-            + IntoRespondingWorker<R, tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>>, ResponseBody>,
-    {
+    fn get_global_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError> {
         let (handle, inbox) = tokio::sync::oneshot::channel();
         let marker = self.with_handle(handle).send_global()?;
         Ok(marker.inner.try_decode(
             futures::executor::block_on(inbox).map_err(|e| anyhow::anyhow!("No response from worker: {}", e))??,
+        )?)
+    }
+}
+#[async_trait::async_trait]
+impl<W, R> GetWorkerExt<R, UnboundedSender<Result<ResponseBody, WorkerError>>> for W
+where
+    R: SendRequestExt + ShardAwareExt + Clone,
+    W: RetryableWorker<R> + IntoRespondingWorker<R, UnboundedSender<Result<ResponseBody, WorkerError>>>,
+{
+    async fn get_local(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
+    {
+        let (handle, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let marker = self.with_handle(handle).send_local()?;
+        Ok(marker.inner.try_decode(
+            inbox
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No response from worker"))??,
+        )?)
+    }
+
+    fn get_local_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError> {
+        let (handle, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let marker = self.with_handle(handle).send_local()?;
+        Ok(marker.inner.try_decode(
+            inbox
+                .blocking_recv()
+                .ok_or_else(|| anyhow::anyhow!("No response from worker"))??,
+        )?)
+    }
+
+    async fn get_global(self) -> Result<<R::Marker as Marker>::Output, RequestError>
+    where
+        R::Marker: Send + Sync,
+    {
+        let (handle, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let marker = self.with_handle(handle).send_global()?;
+        Ok(marker.inner.try_decode(
+            inbox
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("No response from worker"))??,
+        )?)
+    }
+
+    fn get_global_blocking(self) -> Result<<R::Marker as Marker>::Output, RequestError> {
+        let (handle, mut inbox) = tokio::sync::mpsc::unbounded_channel();
+        let marker = self.with_handle(handle).send_global()?;
+        Ok(marker.inner.try_decode(
+            inbox
+                .blocking_recv()
+                .ok_or_else(|| anyhow::anyhow!("No response from worker"))??,
         )?)
     }
 }
 
 /// Defines a worker which can be given a handle to be capable of responding to the sender
-pub trait IntoRespondingWorker<R, H, O>
+pub trait IntoRespondingWorker<R, H>
 where
-    H: HandleResponse<O> + HandleError,
-    R: SendRequestExt,
+    H: HandleResponse + HandleError,
+    R: SendRequestExt + Clone,
 {
     /// The type of worker which will be created
-    type Output: RespondingWorker<R, H, O> + RetryableWorker<R>;
+    type Output: RespondingWorker<R, H> + RetryableWorker<R>;
     /// Give the worker a handle
-    fn with_handle(self: Box<Self>, handle: H) -> Box<Self::Output>;
+    fn with_handle(self, handle: H) -> Self::Output;
 }
 
 /// A worker which can respond to a sender
 #[async_trait::async_trait]
-pub trait RespondingWorker<R, H, O>: Worker
+pub trait RespondingWorker<R, H>: Worker
 where
-    H: HandleResponse<O> + HandleError,
+    H: HandleResponse + HandleError,
 {
     /// Get the handle this worker will use to respond
     fn handle(&self) -> &H;
 }
 
-impl<O> HandleResponse<O> for UnboundedSender<Result<O, WorkerError>> {
-    fn handle_response(self, response: O) -> anyhow::Result<()> {
-        self.send(Ok(response)).map_err(|e| anyhow!(e.to_string()))
+impl HandleResponse for UnboundedSender<Result<ResponseBody, WorkerError>> {
+    fn handle_response(self, body: ResponseBody) -> anyhow::Result<()> {
+        self.send(Ok(body)).map_err(|e| anyhow!(e.to_string()))
     }
 }
 
@@ -262,9 +316,9 @@ impl<O> HandleError for UnboundedSender<Result<O, WorkerError>> {
     }
 }
 
-impl<O> HandleResponse<O> for tokio::sync::oneshot::Sender<Result<O, WorkerError>> {
-    fn handle_response(self, response: O) -> anyhow::Result<()> {
-        self.send(Ok(response)).map_err(|_| anyhow!("Failed to send response!"))
+impl HandleResponse for tokio::sync::oneshot::Sender<Result<ResponseBody, WorkerError>> {
+    fn handle_response(self, body: ResponseBody) -> anyhow::Result<()> {
+        self.send(Ok(body)).map_err(|_| anyhow!("Failed to send response!"))
     }
 }
 
@@ -278,29 +332,28 @@ impl<O> HandleError for tokio::sync::oneshot::Sender<Result<O, WorkerError>> {
 /// Handle an unprepared CQL error by sending a prepare
 /// request and resubmitting the original query as an
 /// unprepared statement
-pub fn handle_unprepared_error<W, R>(worker: Box<W>, id: [u8; 16], reporter: &ReporterHandle) -> Result<(), Box<W>>
+pub fn handle_unprepared_error<W, R>(
+    statement: String,
+    worker: &mut Option<W>,
+    reporter: &ReporterHandle,
+) -> anyhow::Result<()>
 where
     W: 'static + Worker + RetryableWorker<R> + Send + Sync,
-    R: Request,
+    R: RequestFrameExt + SendRequestExt + Clone,
 {
-    let statement = worker.request().statement();
-    let keyspace = worker.request().keyspace();
-    info!("Attempting to prepare statement '{}', id: '{:?}'", statement, id);
-    PrepareWorker::<PreparedQuery>::new(keyspace.cloned(), id, statement.to_owned())
-        .send_to_reporter(reporter)
-        .ok();
-    let payload = worker.request().payload();
-    let retry_request = ReporterEvent::Request { worker, payload };
-    reporter.send(retry_request).ok();
+    info!("Attempting to prepare statement '{}'", statement);
+    PrepareWorker::<PreparedQuery>::new(PrepareRequest::new(PrepareFrame::new(statement), 0, None))
+        .send_to_reporter(reporter)?;
+    worker.take().unwrap().send_to_reporter(reporter)?;
     Ok(())
 }
 
 /// retry to send a request
 pub fn retry_send(keyspace: &str, mut r: RingSendError, mut retries: u8) -> Result<(), Box<dyn Worker>> {
     loop {
-        if let ReporterEvent::Request { worker, payload } = r.into() {
+        if let ReporterEvent::Request { worker, frame } = r.into() {
             if retries > 0 {
-                if let Err(still_error) = send_global(Some(keyspace), rand::random(), payload, worker) {
+                if let Err(still_error) = send_global(Some(keyspace), rand::random(), frame, worker) {
                     r = still_error;
                     retries -= 1;
                 } else {

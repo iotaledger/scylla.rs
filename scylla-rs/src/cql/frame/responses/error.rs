@@ -1,7 +1,7 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-//! This module implements the cql error decoder.
+//! This module implements the ERROR frame.
 
 use super::*;
 use anyhow::bail;
@@ -13,14 +13,16 @@ use std::{
     fmt::Display,
 };
 
+/// Indicates an error processing a request. The body of the message will be an
+/// error code `[int]` followed by a `[string]` error message. Then, depending on
+/// the exception, more content may follow.
 #[derive(Error, Debug, Clone)]
-/// The CQL error structure.
 pub struct ErrorFrame {
-    /// The Error code.
+    /// The error code.
     pub code: ErrorCode,
     /// The message string.
     pub message: String,
-    /// The additional Error information.
+    /// The additional error information.
     pub additional: Option<Additional>,
 }
 
@@ -35,69 +37,91 @@ impl Display for ErrorFrame {
 }
 
 impl ErrorFrame {
+    /// Get the error code.
     pub fn code(&self) -> ErrorCode {
         self.code
     }
+    /// Get the message string.
     pub fn message(&self) -> &String {
         &self.message
     }
+    /// Get the additional error information.
     pub fn additional(&self) -> &Option<Additional> {
         &self.additional
     }
+    /// Check if this is a server error
     pub fn is_server_error(&self) -> bool {
         self.code == ErrorCode::ServerError
     }
+    /// Check if this is a protocol error
     pub fn is_protocol_error(&self) -> bool {
         self.code == ErrorCode::ProtocolError
     }
+    /// Check if this is an authentication error
     pub fn is_authentication_error(&self) -> bool {
         self.code == ErrorCode::AuthenticationError
     }
+    /// Check if this is an unavailable exception
     pub fn is_unavailable_exception(&self) -> bool {
         self.code == ErrorCode::UnavailableException
     }
+    /// Check if the is an overloaded error
     pub fn is_overloaded(&self) -> bool {
         self.code == ErrorCode::Overloaded
     }
+    /// Check if this is a bootstrapping error
     pub fn is_bootstrapping(&self) -> bool {
         self.code == ErrorCode::IsBootstrapping
     }
+    /// Check if this is a truncate error
     pub fn is_truncate_error(&self) -> bool {
         self.code == ErrorCode::TruncateError
     }
+    /// Check if this is a write timeout error
     pub fn is_write_timeout(&self) -> bool {
         self.code == ErrorCode::WriteTimeout
     }
+    /// Check if this is a read timeout error
     pub fn is_read_timeout(&self) -> bool {
         self.code == ErrorCode::ReadTimeout
     }
+    /// Check if this is a read failure error
     pub fn is_read_failure(&self) -> bool {
         self.code == ErrorCode::ReadFailure
     }
+    /// Check if this is a function failure error
     pub fn is_function_failure(&self) -> bool {
         self.code == ErrorCode::FunctionFailure
     }
+    /// Check if this is a write failure error
     pub fn is_write_failure(&self) -> bool {
         self.code == ErrorCode::WriteFailure
     }
+    /// Check if this is a syntax error
     pub fn is_syntax_error(&self) -> bool {
         self.code == ErrorCode::SyntaxError
     }
+    /// Check if this is an unauthorized error
     pub fn is_unauthorized(&self) -> bool {
         self.code == ErrorCode::Unauthorized
     }
+    /// Check if this is an invalid error
     pub fn is_invalid(&self) -> bool {
         self.code == ErrorCode::Invalid
     }
+    /// Check if this is a config error
     pub fn is_config_error(&self) -> bool {
         self.code == ErrorCode::ConfigError
     }
+    /// Check if this is an already exists error
     pub fn is_already_exists(&self) -> bool {
         self.code == ErrorCode::AlreadyExists
     }
+    /// Check if this is an unprepared error
     pub fn is_unprepared(&self) -> bool {
         self.code == ErrorCode::Unprepared
     }
+    /// Get the unprepared id, if this is an unprepared error
     pub fn unprepared_id(&self) -> Option<[u8; 16]> {
         if let Some(Additional::Unprepared(u)) = &self.additional {
             Some(u.id)
@@ -133,44 +157,6 @@ impl FromPayload for ErrorFrame {
         })
     }
 }
-
-// ErrorCodes as consts
-/// The Error code of `SERVER_ERROR`.
-pub const SERVER_ERROR: i32 = 0x0000;
-/// The Error code of `PROTOCOL_ERROR`.
-pub const PROTOCOL_ERROR: i32 = 0x000A;
-/// The Error code of `AUTHENTICATION_ERROR`.
-pub const AUTHENTICATION_ERROR: i32 = 0x0100;
-/// The Error code of `UNAVAILABLE_EXCEPTION`.
-pub const UNAVAILABLE_EXCEPTION: i32 = 0x1000;
-/// The Error code of `OVERLOADED`.
-pub const OVERLOADED: i32 = 0x1001;
-/// The Error code of `IS_BOOTSTRAPPING`.
-pub const IS_BOOTSTRAPPING: i32 = 0x1002;
-/// The Error code of `TRUNCATE_ERROR`.
-pub const TRUNCATE_ERROR: i32 = 0x1003;
-/// The Error code of `WRITE_TIMEOUT`.
-pub const WRITE_TIMEOUT: i32 = 0x1100;
-/// The Error code of `READ_TIMEOUT`.
-pub const READ_TIMEOUT: i32 = 0x1200;
-/// The Error code of `READ_FAILURE`.
-pub const READ_FAILURE: i32 = 0x1300;
-/// The Error code of `FUNCTION_FAILURE`.
-pub const FUNCTION_FAILURE: i32 = 0x1400;
-/// The Error code of `WRITE_FAILURE`.
-pub const WRITE_FAILURE: i32 = 0x1500;
-/// The Error code of `SYNTAX_ERROR`.
-pub const SYNTAX_ERROR: i32 = 0x2000;
-/// The Error code of `UNAUTHORIZED`.
-pub const UNAUTHORIZED: i32 = 0x2100;
-/// The Error code of `INVALID`.
-pub const INVALID: i32 = 0x2200;
-/// The Error code of `CONFIGURE_ERROR`.
-pub const CONFIG_ERROR: i32 = 0x2300;
-/// The Error code of `ALREADY_EXISTS`.
-pub const ALREADY_EXISTS: i32 = 0x2400;
-/// The Error code of `UNPREPARED`.
-pub const UNPREPARED: i32 = 0x2500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]

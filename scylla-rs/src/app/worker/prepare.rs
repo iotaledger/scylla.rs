@@ -2,62 +2,50 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use std::fmt::Debug;
 
 /// A statement prepare worker
 #[derive(Debug)]
 pub struct PrepareWorker<P> {
-    /// The expected id for this statement
-    pub(crate) id: [u8; 16],
     pub(crate) retries: usize,
     pub(crate) request: PrepareRequest<P>,
 }
 impl<P> PrepareWorker<P> {
     /// Create a new prepare worker
-    pub fn new(keyspace: Option<String>, id: [u8; 16], statement: String) -> Box<Self> {
-        Box::new(Self {
-            id,
-            retries: 0,
-            request: PrepareRequest {
-                keyspace,
-                statement,
-                token: rand::random(),
-                _marker: std::marker::PhantomData,
-            },
-        })
+    pub fn new(request: PrepareRequest<P>) -> Self {
+        Self { retries: 0, request }
     }
 }
 
 impl<P> From<PrepareRequest<P>> for PrepareWorker<P> {
     fn from(request: PrepareRequest<P>) -> Self {
-        Self {
-            id: md5::compute(request.statement.as_bytes()).into(),
-            retries: 0,
-            request,
-        }
+        Self { retries: 0, request }
     }
 }
 impl<P> Worker for PrepareWorker<P>
 where
-    P: 'static + Debug,
+    P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
     fn handle_response(self: Box<Self>, _body: ResponseBody) -> anyhow::Result<()> {
-        info!("Successfully prepared statement: '{}'", self.request.statement);
+        info!(
+            "Successfully prepared statement: '{}'",
+            self.request().frame().statement()
+        );
         Ok(())
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         error!(
             "Failed to prepare statement: {}, error: {}",
-            self.request.statement, error
+            self.request().frame().statement(),
+            error
         );
-        self.retry().ok();
+        self.retry(reporter).ok();
         Ok(())
     }
 }
 
 impl<P> RetryableWorker<PrepareRequest<P>> for PrepareWorker<P>
 where
-    P: 'static + Debug,
+    P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
     fn retries(&self) -> usize {
         self.retries
@@ -72,28 +60,25 @@ where
     }
 }
 
-impl<H, P> IntoRespondingWorker<PrepareRequest<P>, H, ResponseBody> for PrepareWorker<P>
+impl<H, P> IntoRespondingWorker<PrepareRequest<P>, H> for PrepareWorker<P>
 where
-    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
     P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
     type Output = RespondingPrepareWorker<H, P>;
 
-    fn with_handle(self: Box<Self>, handle: H) -> Box<Self::Output> {
-        Box::new(RespondingPrepareWorker {
-            id: self.id,
+    fn with_handle(self, handle: H) -> Self::Output {
+        RespondingPrepareWorker {
             retries: self.retries,
             request: self.request,
             handle,
-        })
+        }
     }
 }
 
 /// A statement prepare worker
 #[derive(Debug)]
 pub struct RespondingPrepareWorker<H, P> {
-    /// The expected id for this statement
-    pub(crate) id: [u8; 16],
     pub(crate) request: PrepareRequest<P>,
     pub(crate) retries: usize,
     pub(crate) handle: H,
@@ -101,15 +86,15 @@ pub struct RespondingPrepareWorker<H, P> {
 
 impl<H, P> Worker for RespondingPrepareWorker<H, P>
 where
-    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
-    P: 'static + Debug,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
+    P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
     fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
         self.handle.handle_response(body)
     }
-    fn handle_error(self: Box<Self>, error: WorkerError, _reporter: Option<&ReporterHandle>) -> anyhow::Result<()> {
+    fn handle_error(self: Box<Self>, error: WorkerError, reporter: &ReporterHandle) -> anyhow::Result<()> {
         error!("{}", error);
-        match self.retry() {
+        match self.retry(reporter) {
             Ok(_) => Ok(()),
             Err(worker) => worker.handle.handle_error(error),
         }
@@ -118,8 +103,8 @@ where
 
 impl<H, P> RetryableWorker<PrepareRequest<P>> for RespondingPrepareWorker<H, P>
 where
-    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
-    P: 'static + Debug,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
+    P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
     fn retries(&self) -> usize {
         self.retries
@@ -134,10 +119,10 @@ where
     }
 }
 
-impl<H, P> RespondingWorker<PrepareRequest<P>, H, ResponseBody> for RespondingPrepareWorker<H, P>
+impl<H, P> RespondingWorker<PrepareRequest<P>, H> for RespondingPrepareWorker<H, P>
 where
-    H: 'static + HandleResponse<ResponseBody> + HandleError + Debug + Send + Sync,
-    P: 'static + Debug,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
+    P: 'static + From<PreparedQuery> + Debug + Send + Sync,
 {
     fn handle(&self) -> &H {
         &self.handle

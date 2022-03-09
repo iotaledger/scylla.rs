@@ -1,18 +1,24 @@
 // Copyright 2021 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+//! This module implements the EVENT frame.
+
 use super::*;
 use std::{
     net::SocketAddr,
     str::FromStr,
 };
 
+/// An event pushed by the server. A client will only receive events for the types it has registered to using a
+/// [`RegisterFrame`].
 #[derive(Clone, Debug)]
 pub struct EventFrame {
+    /// The event type.
     pub event_type: EventType,
 }
 
 impl EventFrame {
+    /// Get the event type.
     pub fn event_type(&self) -> &EventType {
         &self.event_type
     }
@@ -26,7 +32,9 @@ impl FromPayload for EventFrame {
     }
 }
 
+/// Event types
 #[derive(Clone, Debug)]
+#[allow(missing_docs)]
 pub enum EventType {
     TopologyChange {
         change_type: TopologyChangeType,
@@ -62,7 +70,10 @@ impl FromPayload for EventType {
     }
 }
 
+/// Events related to change in the cluster topology. Currently, events are sent
+/// when new nodes are added to the cluster, and when nodes are removed.
 #[derive(Copy, Clone, Debug)]
+#[allow(missing_docs)]
 pub enum TopologyChangeType {
     NewNode,
     RemovedNode,
@@ -86,7 +97,9 @@ impl FromPayload for TopologyChangeType {
     }
 }
 
+/// Events related to change of node status.
 #[derive(Copy, Clone, Debug)]
+#[allow(missing_docs)]
 pub enum StatusChangeType {
     Up,
     Down,
@@ -111,6 +124,7 @@ impl FromPayload for StatusChangeType {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(missing_docs)]
 pub enum SchemaChangeType {
     Created,
     Updated,
@@ -137,6 +151,7 @@ impl FromPayload for SchemaChangeType {
 }
 
 #[derive(Clone, Debug)]
+#[allow(missing_docs)]
 pub enum SchemaChangeTarget {
     Keyspace(String),
     Table {

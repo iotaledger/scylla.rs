@@ -285,6 +285,7 @@ impl KeyspaceExt for Statement {
     fn get_keyspace(&self) -> Option<String> {
         match self {
             Statement::DataManipulation(s) => s.get_keyspace(),
+            Statement::DataDefinition(s) => s.get_keyspace(),
             _ => None,
         }
     }
@@ -292,6 +293,7 @@ impl KeyspaceExt for Statement {
     fn set_keyspace(&mut self, keyspace: impl Into<Name>) {
         match self {
             Statement::DataManipulation(s) => s.set_keyspace(keyspace),
+            Statement::DataDefinition(s) => s.set_keyspace(keyspace),
             _ => (),
         }
     }

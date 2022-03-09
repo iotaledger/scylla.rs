@@ -37,7 +37,7 @@ pub fn murmur3_cassandra_x64_128(source: &[u8], seed: u32) -> (i64, i64) {
     const M: i64 = 5;
     let mut h1: i64 = seed as i64;
     let mut h2: i64 = seed as i64;
-    let mut chunks_iter = source.chunks_exact(16);
+    let chunks_iter = source.chunks_exact(16);
     let rem = chunks_iter.remainder();
     for chunk in chunks_iter {
         let k1 = i64::from_le_bytes((&chunk[..8]).try_into().unwrap());

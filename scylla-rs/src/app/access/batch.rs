@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::cql::{
-    BatchFrameBuilder,
-    BatchType,
-    Consistency,
+use crate::{
+    cql::{
+        BatchFrameBuilder,
+        BatchType,
+        Consistency,
+    },
+    prelude::BatchWorker,
 };
 use core::fmt::Debug;
 use std::collections::HashMap;
@@ -243,54 +246,68 @@ impl<'a> BatchCollector<'a> {
     /// Build the batch request using the current collector
     pub fn build(self) -> anyhow::Result<BatchRequest> {
         Ok(BatchRequest {
-            token: rand::random(),
+            frame: self.builder.build()?,
+            keyspace: self.keyspace.name().to_owned(),
             map: self.map.into_iter().map(|(k, v)| (k, v.to_string())).collect(),
-            payload: RequestFrame::from(self.builder.build()?).build_payload(),
-            keyspace: self.keyspace.name().to_owned().into(),
         })
     }
 }
+impl<'a> TryFrom<BatchCollector<'a>> for BatchRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BatchCollector<'a>) -> Result<Self, Self::Error> {
+        value.build()
+    }
+}
+impl<'a> SendAsRequestExt<BatchRequest> for BatchCollector<'a> {}
 
 /// A Batch request, which can be used to send queries to the Ring.
 /// Stores a map of prepared statement IDs that were added to the
 /// batch so that the associated statements can be re-prepared if necessary.
 #[derive(Clone, Debug)]
 pub struct BatchRequest {
-    token: i64,
-    payload: Vec<u8>,
+    frame: BatchFrame,
+    keyspace: String,
     map: HashMap<[u8; 16], String>,
-    keyspace: Option<String>,
 }
 
-impl Request for BatchRequest {
+impl RequestFrameExt for BatchRequest {
+    type Frame = BatchFrame;
+
+    fn frame(&self) -> &Self::Frame {
+        &self.frame
+    }
+
+    fn into_frame(self) -> RequestFrame {
+        self.frame.into()
+    }
+}
+
+impl ShardAwareExt for BatchRequest {
     fn token(&self) -> i64 {
-        self.token
-    }
-
-    fn statement(&self) -> &String {
-        panic!("Must use `get_statement` on batch requests!")
-    }
-
-    fn payload(&self) -> Vec<u8> {
-        self.payload.clone()
+        rand::random()
     }
 
     fn keyspace(&self) -> Option<&String> {
-        self.keyspace.as_ref()
+        Some(&self.keyspace)
     }
 }
 
 impl SendRequestExt for BatchRequest {
+    type Worker = BatchWorker;
     type Marker = DecodeVoid;
-    type Worker = BasicRetryWorker<Self>;
     const TYPE: RequestType = RequestType::Batch;
-
-    fn worker(self) -> Box<Self::Worker> {
-        BasicRetryWorker::new(self)
-    }
 
     fn marker(&self) -> Self::Marker {
         DecodeVoid
+    }
+
+    fn event(self) -> (Self::Worker, RequestFrame) {
+        (BatchWorker::new(self.clone()), self.into_frame())
+    }
+
+    fn worker(self) -> Self::Worker {
+        BatchWorker::new(self)
     }
 }
 
@@ -311,7 +328,7 @@ impl BatchRequest {
     }
 
     /// Get a basic worker for this request
-    pub fn worker(self) -> Box<BasicRetryWorker<Self>> {
+    pub fn worker(self) -> BasicRetryWorker<Self> {
         BasicRetryWorker::new(self)
     }
 }

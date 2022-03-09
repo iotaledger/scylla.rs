@@ -69,7 +69,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
         AND durable_writes = true",
         ks = keyspace.name()
     )
-    .execute()
+    .define()
     .consistency(Consistency::All)
     .build()?
     .get_local()
@@ -77,7 +77,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
     .map_err(|e| anyhow::anyhow!("Could not verify if keyspace was created: {}", e))?;
 
     parse_statement!("DROP TABLE IF EXISTS #.test", keyspace.name())
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()
@@ -91,7 +91,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
         )",
         keyspace.name()
     )
-    .execute()
+    .define()
     .consistency(Consistency::All)
     .build()?
     .get_local()
@@ -114,7 +114,7 @@ async fn run_benchmark(n: i32) -> anyhow::Result<u128> {
         })?;
     }
 
-    let (sender, mut inbox) = unbounded_channel::<Result<Option<_>, _>>();
+    let (sender, mut inbox) = unbounded_channel::<Result<ResponseBody, _>>();
     for i in 0..n {
         let key = format!("Key {}", i);
         select
@@ -142,7 +142,7 @@ async fn drop_keyspace(node: SocketAddr) -> anyhow::Result<()> {
     scylla.insert_node(node);
     let runtime = Runtime::new(None, scylla).await.expect("Runtime failed to start!");
     parse_statement!("DROP KEYSPACE scylla_example")
-        .execute()
+        .define()
         .consistency(Consistency::All)
         .build()?
         .get_local()

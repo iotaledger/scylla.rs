@@ -58,6 +58,7 @@ pub use encoder::{
     TokenEncoder,
 };
 pub use header::Header;
+pub use opcode::*;
 pub use rows::*;
 pub use std::convert::TryInto;
 use std::{
@@ -88,7 +89,7 @@ pub enum FrameError {
     #[error("Payload is too small")]
     TooSmall,
     #[error(transparent)]
-    CompressionError(CompressionError),
+    CompressionError(#[from] CompressionError),
 }
 
 /// A wrapper for a `Vec<u8>` that can be used to encode and decode values as the `blob` scylla type.
@@ -248,7 +249,7 @@ pub fn write_long(v: i64, payload: &mut Vec<u8>) {
 pub fn read_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a [u8]> {
     anyhow::ensure!(payload.len() >= *start + 4, "Not enough bytes for length");
     let length = read_int(start, payload)?;
-    if length >= 0 {
+    if length > 0 {
         anyhow::ensure!(payload.len() >= *start + length as usize, "Not enough bytes");
         let res = &payload[*start..][..length as usize];
         *start += length as usize;
@@ -273,7 +274,7 @@ pub fn write_bytes(b: &[u8], payload: &mut Vec<u8>) {
 pub fn read_short_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Result<&'a [u8]> {
     anyhow::ensure!(payload.len() >= *start + 2, "Not enough bytes");
     let length = read_short(start, payload)?;
-    if length >= 0 {
+    if length > 0 {
         anyhow::ensure!(payload.len() >= *start + length as usize, "Not enough bytes");
         let res = &payload[*start..][..length as usize];
         *start += length as usize;
@@ -289,6 +290,38 @@ pub fn read_short_bytes<'a>(start: &mut usize, payload: &'a [u8]) -> anyhow::Res
 pub fn write_short_bytes(b: &[u8], payload: &mut Vec<u8>) {
     payload.extend((b.len() as u16).to_be_bytes());
     payload.extend(b);
+}
+
+/// Read scylla values from a payload.
+///
+/// `[value]`: An `[int]` n, followed by n bytes if `n >= 0`.
+///     - If `n == -1` no byte should follow and the value represented is `null`.
+///     - If `n == -2` no byte should follow and the value represented is
+///     `not set` not resulting in any change to the existing value.
+///     - `n < -2` is an invalid value and results in an error.
+pub fn read_values(start: &mut usize, payload: &[u8]) -> anyhow::Result<Values> {
+    let values_count = read_short(start, payload)? as usize;
+    let mut values = Values::default();
+    for _ in 0..values_count {
+        values.push(None, read_bytes(start, payload)?);
+    }
+    Ok(values)
+}
+
+/// Read scylla named values from a payload.
+///
+/// `[value]`: An `[int]` n, followed by n bytes if `n >= 0`.
+///     - If `n == -1` no byte should follow and the value represented is `null`.
+///     - If `n == -2` no byte should follow and the value represented is
+///     `not set` not resulting in any change to the existing value.
+///     - `n < -2` is an invalid value and results in an error.
+pub fn read_named_values(start: &mut usize, payload: &[u8]) -> anyhow::Result<Values> {
+    let values_count = read_short(start, payload)? as usize;
+    let mut values = Values::default();
+    for _ in 0..values_count {
+        values.push(Some(read_str(start, payload)?), read_bytes(start, payload)?);
+    }
+    Ok(values)
 }
 
 /// Read a prepared id from a payload into a `[u8; 16]`.

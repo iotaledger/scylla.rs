@@ -31,55 +31,72 @@ use super::*;
 #[builder(derive(Clone, Debug))]
 #[builder(pattern = "owned", setter(strip_option))]
 pub struct QueryFrame {
+    /// The query statement
     pub(crate) statement: String,
+    /// The consistency level
     pub(crate) consistency: Consistency,
     #[builder(default)]
+    /// The query flags
     pub(crate) flags: QueryFlags,
     #[builder(private, default)]
+    /// The bound values list
     pub(crate) values: Values,
     #[builder(default)]
+    /// The page size
     pub(crate) page_size: Option<i32>,
     #[builder(default)]
+    /// The paging state
     pub(crate) paging_state: Option<Vec<u8>>,
     #[builder(default)]
+    /// The serial consistency level
     pub(crate) serial_consistency: Option<Consistency>,
     #[builder(default)]
+    /// The timestamp
     pub(crate) timestamp: Option<i64>,
 }
 
 impl QueryFrame {
+    /// Get the query statement.
     pub fn statement(&self) -> &String {
         &self.statement
     }
 
+    /// Get the consistency level.
     pub fn consistency(&self) -> Consistency {
         self.consistency
     }
 
+    /// Get the query flags.
     pub fn flags(&self) -> QueryFlags {
         self.flags
     }
 
+    /// Get the bound values.
     pub fn values(&self) -> &Values {
         &self.values
     }
 
+    /// Get the page size.
     pub fn page_size(&self) -> Option<i32> {
         self.page_size
     }
 
+    /// Get the paging state.
     pub fn paging_state(&self) -> &Option<Vec<u8>> {
         &self.paging_state
     }
 
+    /// Get the serial consistency level.
     pub fn serial_consistency(&self) -> Option<Consistency> {
         self.serial_consistency
     }
 
+    /// Get the timestamp.
     pub fn timestamp(&self) -> Option<i64> {
         self.timestamp
     }
 
+    /// Convert into a QUERY frame from an EXECUTE frame using a given statement.
     pub fn from_execute(ef: ExecuteFrame, statement: String) -> Self {
         Self {
             statement,
@@ -99,15 +116,11 @@ impl FromPayload for QueryFrame {
         let statement = read_long_string(start, payload)?;
         let consistency = Consistency::try_from(read_short(start, payload)?)?;
         let flags = QueryFlags(read_byte(start, payload)?);
-        let value_count = read_short(start, payload)?;
-        let mut values = Values::default();
-        for _ in 0..value_count {
-            if flags.named_values() {
-                values.push(Some(read_str(start, payload)?), read_bytes(start, payload)?);
-            } else {
-                values.push(None, read_bytes(start, payload)?);
-            }
-        }
+        let values = if flags.named_values() {
+            read_named_values(start, payload)?
+        } else {
+            read_values(start, payload)?
+        };
         let page_size = if flags.page_size() {
             Some(read_int(start, payload)?)
         } else {
@@ -179,6 +192,7 @@ impl ToPayload for QueryFrame {
     }
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, Error)]
 pub enum QueryBindError {
     #[error("Query encode error: {0}")]
@@ -232,37 +246,35 @@ impl Binder for QueryFrameBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::Uncompressed;
     use std::time::{
         SystemTime,
         UNIX_EPOCH,
     };
     #[test]
-    // note: junk data
     fn simple_query_builder_test() {
-        let frame = RequestFrame::from(
-            QueryFrameBuilder::default()
-                .statement("INSERT_TX_QUERY".to_owned())
-                .consistency(Consistency::One)
-                .value(&"HASH_VALUE")
-                .unwrap()
-                .value(&"PAYLOAD_VALUE")
-                .unwrap()
-                .value(&"ADDRESS_VALUE")
-                .unwrap()
-                .value(&0_i64)
-                .unwrap() // tx-value as i64
-                .value(&"OBSOLETE_TAG_VALUE")
-                .unwrap()
-                .value(&SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
-                .unwrap() // junk timestamp
-                .value(&0)
-                .unwrap() // current-index
-                .unset_value()
-                .unwrap() // not-set value for milestone
-                .build()
-                .unwrap(),
-        );
-        let mut payload = Vec::new();
-        frame.to_payload(&mut payload);
+        let _payload = QueryFrameBuilder::default()
+            .statement("INSERT_TX_QUERY".to_owned())
+            .consistency(Consistency::One)
+            .value(&"HASH_VALUE")
+            .unwrap()
+            .value(&"PAYLOAD_VALUE")
+            .unwrap()
+            .value(&"ADDRESS_VALUE")
+            .unwrap()
+            .value(&0_i64)
+            .unwrap() // tx-value as i64
+            .value(&"OBSOLETE_TAG_VALUE")
+            .unwrap()
+            .value(&SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
+            .unwrap() // junk timestamp
+            .value(&0)
+            .unwrap() // current-index
+            .unset_value()
+            .unwrap() // not-set value for milestone
+            .build()
+            .unwrap()
+            .encode::<Uncompressed>()
+            .unwrap();
     }
 }
