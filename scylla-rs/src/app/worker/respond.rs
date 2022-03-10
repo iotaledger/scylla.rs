@@ -29,7 +29,7 @@ where
             handle,
             page_size: None,
             paging_state: None,
-            retries: 0,
+            retries: 3,
         }
     }
 
@@ -55,7 +55,6 @@ where
     R: 'static + Send + Debug + SendRequestExt + Sync + Clone,
 {
     fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
-        info!("Successfully queried: {:#?}", body);
         self.handle.handle_response(body)
     }
 
@@ -134,7 +133,7 @@ where
             handle,
             page_size: None,
             paging_state: None,
-            retries: 0,
+            retries: 3,
         }
     }
 

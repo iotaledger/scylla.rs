@@ -15,7 +15,7 @@ pub struct BatchWorker {
 
 impl BatchWorker {
     pub fn new(request: BatchRequest) -> Self {
-        Self { request, retries: 0 }
+        Self { request, retries: 3 }
     }
 }
 
@@ -55,7 +55,7 @@ impl RetryableWorker<BatchRequest> for BatchWorker {
 
 impl<H> IntoRespondingWorker<BatchRequest, H> for BatchWorker
 where
-    H: 'static + HandleResponse + HandleError + Debug + Send + Sync + Clone,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
 {
     type Output = RespondingBatchWorker<H>;
     fn with_handle(self, handle: H) -> RespondingBatchWorker<H> {
@@ -64,7 +64,7 @@ where
 }
 
 /// A select worker
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RespondingBatchWorker<H> {
     /// The worker's request
     pub request: BatchRequest,
@@ -83,13 +83,13 @@ where
         Self {
             request,
             handle,
-            retries: 0,
+            retries: 3,
         }
     }
 
     pub(crate) fn from(BatchWorker { request, retries }: BatchWorker, handle: H) -> Self
     where
-        H: HandleResponse + HandleError + Debug + Send + Sync + Clone,
+        H: HandleResponse + HandleError + Debug + Send + Sync,
     {
         Self::new(request, handle).with_retries(retries)
     }
@@ -97,7 +97,7 @@ where
 
 impl<H> Worker for RespondingBatchWorker<H>
 where
-    H: 'static + HandleResponse + HandleError + Debug + Send + Sync + Clone,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
 {
     fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
         self.handle.handle_response(body)
@@ -137,7 +137,7 @@ where
 
 impl<H> RetryableWorker<BatchRequest> for RespondingBatchWorker<H>
 where
-    H: 'static + HandleResponse + HandleError + Debug + Send + Sync + Clone,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
 {
     fn retries(&self) -> usize {
         self.retries
@@ -154,7 +154,7 @@ where
 
 impl<H> RespondingWorker<BatchRequest, H> for RespondingBatchWorker<H>
 where
-    H: 'static + HandleResponse + HandleError + Debug + Send + Sync + Clone,
+    H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
 {
     fn handle(&self) -> &H {
         &self.handle

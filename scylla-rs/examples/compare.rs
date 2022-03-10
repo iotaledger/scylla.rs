@@ -31,7 +31,7 @@ async fn main() {
         .into_iter()
         .map(|n| (n, 0u128, 0u128))
         .collect::<Vec<_>>();
-    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some(CompressionType::Lz4));
+    let mut scylla = Scylla::new("datacenter1", 8, Default::default(), Some(CompressionType::Snappy));
     scylla.insert_node(node);
     scylla.insert_keyspace(KeyspaceConfig {
         name: "scylla_example".into(),
@@ -137,17 +137,26 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         .await
         .map_err(|e| anyhow::anyhow!("Could not verify if table was created: {}", e))?;
 
-    let insert = keyspace.prepare_insert::<TestTable, TestTable>().get_local().await?;
+    keyspace.prepare_insert::<TestTable, TestTable>().get_local().await?;
+    //let insert = keyspace.insert_statement::<TestTable, TestTable>();
     let select = keyspace.prepare_select::<TestTable, String, i32>().get_local().await?;
 
     let start = SystemTime::now();
     let (sender, mut inbox) = unbounded_channel();
-    for i in 0..n {
+    let batch_size = 10;
+    for b in 0..(n / batch_size) {
+        let mut inserts = BatchCollector::new(&keyspace);
+        for i in 0..batch_size {
+            let key = TestTable {
+                key: format!("Key {}", i + (b * batch_size)),
+                data: i + (b * batch_size),
+            };
+            inserts = inserts.insert_prepared::<TestTable, TestTable>(&key)?;
+        }
+        let inserts = inserts.build()?;
         let handle = sender.clone();
-        let insert = insert.clone();
         tokio::task::spawn(async move {
-            let key = format!("Key {}", i);
-            handle.send(insert.bind(&key)?.bind(&i)?.get_local().await)?;
+            handle.send(inserts.get_local().await)?;
             Result::<_, anyhow::Error>::Ok(())
         });
     }
@@ -159,7 +168,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
             error!("Insert error: {}", e);
         }
     }
-    if count != n {
+    if count != n / batch_size {
         anyhow::bail!("Did not receive all insert confirmations!");
     }
 
@@ -169,7 +178,7 @@ async fn run_benchmark_scylla_rs(n: i32) -> anyhow::Result<u128> {
         let select = select.clone();
         tokio::task::spawn(async move {
             let key = format!("Key {}", i);
-            handle.send((i, select.bind(&key)?.get_local().await))?;
+            handle.send((i, select.consistency(Consistency::Quorum).bind(&key)?.get_local().await))?;
             Result::<_, anyhow::Error>::Ok(())
         });
     }

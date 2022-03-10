@@ -125,7 +125,7 @@ where
         let sender = sender::Sender::new(socket_tx, appends_num);
         let (_, sender_init_signal) = rt.spawn("sender".to_string(), sender).await?;
         // spawn receiver
-        let receiver = receiver::Receiver::new(scylla.buffer_size, appends_num);
+        let receiver = receiver::Receiver::<C>::new(scylla.buffer_size, appends_num);
         let (_, receiver_init_signal) = rt
             .spawn_with_channel("receiver".to_string(), receiver, IoChannel(socket_rx))
             .await?;

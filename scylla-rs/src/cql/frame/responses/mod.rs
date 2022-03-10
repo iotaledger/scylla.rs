@@ -127,6 +127,10 @@ impl FromPayload for ResponseFrame {
 }
 
 impl ResponseFrame {
+    /// Get the frame header
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
     /// Get the frame body.
     pub fn body(&self) -> &ResponseBody {
         &self.body

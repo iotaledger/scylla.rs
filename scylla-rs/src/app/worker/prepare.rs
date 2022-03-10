@@ -12,13 +12,13 @@ pub struct PrepareWorker<P> {
 impl<P> PrepareWorker<P> {
     /// Create a new prepare worker
     pub fn new(request: PrepareRequest<P>) -> Self {
-        Self { retries: 0, request }
+        Self { retries: 3, request }
     }
 }
 
 impl<P> From<PrepareRequest<P>> for PrepareWorker<P> {
     fn from(request: PrepareRequest<P>) -> Self {
-        Self { retries: 0, request }
+        Self { retries: 3, request }
     }
 }
 impl<P> Worker for PrepareWorker<P>

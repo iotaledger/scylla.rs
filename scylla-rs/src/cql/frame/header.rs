@@ -342,6 +342,19 @@ impl TryFrom<&[u8]> for Header {
     }
 }
 
+impl TryFrom<[u8; 9]> for Header {
+    type Error = anyhow::Error;
+    fn try_from(bytes: [u8; 9]) -> Result<Self, Self::Error> {
+        Ok(Header {
+            version: Version(bytes[0]),
+            flags: HeaderFlags(bytes[1]),
+            stream: u16::from_be_bytes([bytes[2], bytes[3]]),
+            opcode: bytes[4].try_into()?,
+            body_len: u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]),
+        })
+    }
+}
+
 impl FromPayload for Header {
     fn from_payload(start: &mut usize, payload: &[u8]) -> anyhow::Result<Self> {
         anyhow::ensure!(payload.len() >= *start + 9, "Payload is too small");

@@ -56,7 +56,7 @@ where
 
 impl<R> From<R> for QueryRetryWorker<R> {
     fn from(request: R) -> Self {
-        Self { request, retries: 0 }
+        Self { request, retries: 3 }
     }
 }
 
@@ -140,7 +140,7 @@ where
 
 impl<R> From<R> for ExecuteRetryWorker<R> {
     fn from(request: R) -> Self {
-        Self { request, retries: 0 }
+        Self { request, retries: 3 }
     }
 }
 

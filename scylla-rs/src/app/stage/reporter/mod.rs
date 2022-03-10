@@ -52,8 +52,8 @@ pub enum ReporterEvent {
     },
     /// The response Cql query.
     Response {
-        /// The reponse stream ID.
-        stream_id: u16,
+        /// The response payload.
+        frame: ResponseFrame,
     },
     /// The stream error.
     Err(anyhow::Error, u16),
@@ -127,8 +127,8 @@ where
                         }
                     }
                 }
-                ReporterEvent::Response { stream_id } => {
-                    self.handle_response(rt.handle(), stream_id, &mut payloads)
+                ReporterEvent::Response { frame } => {
+                    self.handle_response(rt.handle(), frame)
                         .unwrap_or_else(|e| log::error!("{}", e));
                 }
                 ReporterEvent::Err(io_error, stream_id) => {
@@ -157,33 +157,26 @@ impl<C: 'static + Compression> Reporter<C> {
         }
     }
 
-    fn handle_response(&mut self, handle: &ReporterHandle, stream: u16, payloads: &mut Payloads) -> anyhow::Result<()> {
+    fn handle_response(&mut self, handle: &ReporterHandle, frame: ResponseFrame) -> anyhow::Result<()> {
+        let stream_id = frame.stream();
         // push the stream_id back to streams vector.
-        self.streams.push(stream);
+        self.streams.push(stream_id);
         // remove the worker from workers.
-        if let Some(worker) = self.workers.remove(&stream) {
-            if let Some(payload) = payloads[stream as usize].as_mut().take() {
-                match ResponseFrame::decode::<C>(payload).map_err(WorkerError::FrameError) {
-                    Ok(frame) => match frame.into_body() {
-                        ResponseBody::Error(err) => {
-                            worker.handle_error(WorkerError::Cql(err), handle)?;
-                        }
-                        body => {
-                            worker.handle_response(body)?;
-                        }
-                    },
-                    Err(e) => {
-                        worker.handle_error(e, handle)?;
-                    }
+        if let Some(worker) = self.workers.remove(&stream_id) {
+            match frame.into_body() {
+                ResponseBody::Error(err) => {
+                    worker.handle_error(WorkerError::Cql(err), handle)?;
                 }
-            } else {
-                log::error!("No payload found while handling response for stream {}!", stream);
+                body => {
+                    worker.handle_response(body)?;
+                }
             }
         } else {
-            log::error!("No worker found while handling response for stream {}!", stream);
+            log::error!("No worker found while handling response for stream {}!", stream_id);
         }
         Ok(())
     }
+
     fn handle_error(
         &mut self,
         handle: &ReporterHandle,

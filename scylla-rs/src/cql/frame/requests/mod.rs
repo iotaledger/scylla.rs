@@ -146,6 +146,10 @@ impl ToPayload for RequestFrame {
 }
 
 impl RequestFrame {
+    /// Get the frame header
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
     /// Get the frame body.
     pub fn body(&self) -> &RequestBody {
         &self.body

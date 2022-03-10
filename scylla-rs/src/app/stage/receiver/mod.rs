@@ -5,6 +5,10 @@ use super::{
     reporter::*,
     *,
 };
+use crate::prelude::{
+    Header,
+    ResponseFrame,
+};
 use anyhow::anyhow;
 use backstage::core::{
     Actor,
@@ -14,6 +18,7 @@ use backstage::core::{
     Rt,
     SupHandle,
 };
+use std::convert::TryFrom;
 use tokio::{
     io::AsyncReadExt,
     net::tcp::OwnedReadHalf,
@@ -22,33 +27,25 @@ use tokio::{
 const CQL_FRAME_HEADER_BYTES_LENGTH: usize = 9;
 
 /// Receiver state
-pub(super) struct Receiver {
-    stream_id: u16,
-    total_length: usize,
-    current_length: usize,
-    header: bool,
-    buffer: Vec<u8>,
-    i: usize,
+pub(super) struct Receiver<C: Compression> {
     appends_num: u16,
+    buffer_size: usize,
+    _compression: PhantomData<fn(C) -> C>,
 }
 
-impl Receiver {
+impl<C: Compression> Receiver<C> {
     pub(super) fn new(buffer_size: Option<usize>, appends_num: u16) -> Self {
         Self {
-            stream_id: 0,
-            total_length: 0,
-            current_length: 0,
-            header: false,
-            buffer: vec![0; buffer_size.unwrap_or(1024000)],
-            i: 0,
+            buffer_size: buffer_size.unwrap_or(1024000),
             appends_num,
+            _compression: PhantomData,
         }
     }
 }
 
 /// The Receiver actor lifecycle implementation
 #[async_trait]
-impl<S> Actor<S> for Receiver
+impl<S, C: 'static + Compression> Actor<S> for Receiver<C>
 where
     S: SupHandle<Self>,
 {
@@ -65,123 +62,61 @@ where
         let reporters_handles = rt.depends_on(parent_id).await.map_err(ActorError::exit)?;
         Ok((payloads, reporters_handles))
     }
-    async fn run(&mut self, rt: &mut Rt<Self, S>, (mut payloads, reporters_handles): Self::Data) -> ActorResult<()> {
-        while let Ok(n) = rt.inbox_mut().read(&mut self.buffer[self.i..]).await {
-            if n != 0 {
-                self.current_length += n;
-                if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
-                    self.i = self.current_length;
-                } else {
-                    self.handle_frame_header(0, &mut payloads)
-                        .and_then(|_| self.handle_frame(n, 0, &mut payloads, &reporters_handles))
-                        .map_err(|e| {
-                            log::error!("{}", e);
-                            ActorError::exit(e)
-                        })?;
-                }
-            } else {
+    async fn run(&mut self, rt: &mut Rt<Self, S>, (payloads, reporters_handles): Self::Data) -> ActorResult<()> {
+        let mut idx = 0;
+        let mut header = None;
+        let mut buffer = vec![0; self.buffer_size];
+        while let Ok(n) = rt.inbox_mut().read(&mut buffer[idx..]).await {
+            if n == 0 {
                 break;
+            }
+            idx += n;
+            while idx > CQL_FRAME_HEADER_BYTES_LENGTH {
+                if header.is_none() {
+                    header.replace(Header::try_from(&buffer[..CQL_FRAME_HEADER_BYTES_LENGTH]).map_err(|e| {
+                        log::error!("{}", e);
+                        ActorError::exit(e)
+                    })?);
+                }
+                if let Some(h) = header {
+                    let frame_len = h.body_len() as usize + CQL_FRAME_HEADER_BYTES_LENGTH;
+                    if idx >= frame_len {
+                        // get mut ref to payload for stream_id
+                        let mut payload = payloads[h.stream() as usize]
+                            .as_mut()
+                            .take()
+                            .ok_or_else(|| anyhow!("No payload for stream {}!", h.stream()))?;
+                        payload.resize(frame_len, 0);
+                        payload.copy_from_slice(&buffer[..frame_len]);
+                        // tell reporter that the payload is ready.
+                        let reporter_handle = reporters_handles
+                            .get(&compute_reporter_num(h.stream(), self.appends_num))
+                            .ok_or_else(|| anyhow!("No reporter handle for stream {}!", h.stream()))?;
+
+                        match ResponseFrame::decode::<C>(payload) {
+                            Ok(frame) => {
+                                reporter_handle
+                                    .send(ReporterEvent::Response { frame })
+                                    .unwrap_or_else(|e| log::error!("{}", e));
+                            }
+                            Err(e) => {
+                                reporter_handle
+                                    .send(ReporterEvent::Err(anyhow::anyhow!(e), h.stream()))
+                                    .unwrap_or_else(|e| log::error!("{}", e));
+                            }
+                        }
+
+                        header = None;
+                        if idx > frame_len {
+                            buffer.copy_within(frame_len..idx, 0)
+                        }
+                        idx -= frame_len;
+                    } else {
+                        break;
+                    }
+                }
             }
         }
         Ok(())
     }
-}
-
-impl Receiver {
-    fn handle_remaining_buffer(
-        &mut self,
-        i: usize,
-        payloads: &mut Payloads,
-        reporters_handles: &ReportersHandles,
-    ) -> anyhow::Result<()> {
-        if self.current_length < CQL_FRAME_HEADER_BYTES_LENGTH {
-            self.buffer.copy_within(i..(i + self.current_length), self.i);
-            self.i = self.current_length;
-        } else {
-            self.handle_frame_header(i, payloads)
-                .and_then(|_| self.handle_frame(self.current_length, i, payloads, reporters_handles))?;
-        }
-        Ok(())
-    }
-    fn handle_frame_header(&mut self, padding: usize, payloads: &mut Payloads) -> anyhow::Result<()> {
-        // if no-header decode the header and resize the payload(if needed).
-        if !self.header {
-            // log::info!("Response header: {:?}", &self.buffer[0..9]);
-            // decode total_length(HEADER_LENGTH + frame_body_length)
-            let buf = &self.buffer[padding..];
-            self.total_length = get_total_length_usize(&buf);
-            // decode stream_id
-            self.stream_id = get_stream_id(&buf);
-            // get mut ref to payload for stream_id
-            let payload = payloads[self.stream_id as usize]
-                .as_mut_payload()
-                .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
-
-            payload.resize(self.total_length, 0);
-
-            // set header to true
-            self.header = true;
-        }
-        Ok(())
-    }
-    fn handle_frame(
-        &mut self,
-        n: usize,
-        mut padding: usize,
-        payloads: &mut Payloads,
-        reporters_handles: &ReportersHandles,
-    ) -> anyhow::Result<()> {
-        let start = self.current_length - n - self.i;
-        if self.current_length >= self.total_length {
-            // get mut ref to payload for stream_id as giveload
-            let giveload = payloads[self.stream_id as usize]
-                .as_mut_payload()
-                .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
-            // memcpy the current bytes from self.buffer into payload
-            let old_padding = padding;
-            // update padding
-            padding += self.total_length - start;
-            giveload[start..self.total_length].copy_from_slice(&self.buffer[old_padding..padding]);
-            // tell reporter that giveload is ready.
-            let reporter_handle = reporters_handles
-                .get(&compute_reporter_num(self.stream_id, self.appends_num))
-                .ok_or_else(|| anyhow!("No reporter handle for stream {}!", self.stream_id))?;
-
-            reporter_handle
-                .send(ReporterEvent::Response {
-                    stream_id: self.stream_id,
-                })
-                .unwrap_or_else(|e| log::error!("{}", e));
-            // set header to false
-            self.header = false;
-            // update current_length
-            self.current_length -= self.total_length;
-            // set self.i to zero
-            self.i = 0;
-            self.handle_remaining_buffer(padding, payloads, reporters_handles)?;
-        } else {
-            // get mut ref to payload for stream_id
-            let payload = payloads[self.stream_id as usize]
-                .as_mut_payload()
-                .ok_or_else(|| anyhow!("No payload for stream {}!", self.stream_id))?;
-            // memcpy the current bytes from self.buffer into payload
-            payload[start..self.current_length].copy_from_slice(&self.buffer[padding..(padding + n + self.i)]);
-            // set self.i to zero
-            self.i = 0;
-        }
-        Ok(())
-    }
-}
-
-fn get_total_length_usize(buffer: &[u8]) -> usize {
-    CQL_FRAME_HEADER_BYTES_LENGTH +
-    // plus body length
-    ((buffer[5] as usize) << 24) +
-    ((buffer[6] as usize) << 16) +
-    ((buffer[7] as usize) <<  8) +
-    (buffer[8] as usize)
-}
-
-fn get_stream_id(buffer: &[u8]) -> u16 {
-    ((buffer[2] as u16) << 8) | buffer[3] as u16
 }

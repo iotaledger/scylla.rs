@@ -110,7 +110,7 @@ impl<'a> BatchCollector<'a> {
     /// the collector.
     pub fn new(keyspace: &dyn Keyspace) -> BatchCollector {
         BatchCollector {
-            builder: BatchFrameBuilder::default(),
+            builder: BatchFrameBuilder::default().consistency(Consistency::Quorum),
             map: HashMap::new(),
             keyspace,
         }
@@ -137,11 +137,29 @@ impl<'a> BatchCollector<'a> {
         self.batch_type(BatchType::Counter)
     }
 
+    /// Add a new statement to the batch
+    pub fn append(mut self, statement: impl Into<ModificationStatement>) -> Self {
+        // this will advance the builder with QueryStatement
+        self.builder = self.builder.statement(&statement.into().to_string());
+        self
+    }
+
+    /// Add a new prepared statement to the batch
+    pub fn append_prepared(mut self, statement: impl Into<ModificationStatement>) -> Self {
+        // this will advance the builder with QueryStatement
+        let statement = statement.into();
+        let statement_str = statement.to_string();
+        let id = statement_str.id();
+        self.builder = self.builder.id(id);
+        self.map.insert(id, statement);
+        self
+    }
+
     /// Append an unprepared insert query using the statement defined in the `Insert` impl.
     pub fn insert<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Insert<K>,
-        K: Bindable + ColumnEncoder,
+        K: Bindable,
     {
         let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
@@ -155,7 +173,7 @@ impl<'a> BatchCollector<'a> {
     pub fn insert_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Insert<K>,
-        K: Bindable + ColumnEncoder,
+        K: Bindable,
     {
         let statement = T::statement(self.keyspace);
         let id = statement.id();
@@ -171,7 +189,7 @@ impl<'a> BatchCollector<'a> {
     pub fn update<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Update<K, V>,
-        K: ColumnEncoder,
+        K: Bindable,
     {
         let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
@@ -185,7 +203,7 @@ impl<'a> BatchCollector<'a> {
     pub fn update_prepared<T, K, V>(mut self, key: &K, values: &V) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Update<K, V>,
-        K: ColumnEncoder,
+        K: Bindable,
     {
         let statement = T::statement(self.keyspace);
         let id = statement.id();
@@ -201,7 +219,7 @@ impl<'a> BatchCollector<'a> {
     pub fn delete<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Delete<K>,
-        K: Bindable + ColumnEncoder,
+        K: Bindable,
     {
         let statement = T::statement(self.keyspace);
         // this will advance the builder with QueryStatement
@@ -215,7 +233,7 @@ impl<'a> BatchCollector<'a> {
     pub fn delete_prepared<T, K>(mut self, key: &K) -> Result<Self, <BatchFrameBuilder as Binder>::Error>
     where
         T: Delete<K>,
-        K: Bindable + ColumnEncoder,
+        K: Bindable,
     {
         let statement = T::statement(self.keyspace);
         let id = statement.id();

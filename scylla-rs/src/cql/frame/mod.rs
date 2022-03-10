@@ -75,6 +75,14 @@ use std::{
 };
 use thiserror::Error;
 
+/// A Frame, either a request or response
+#[allow(missing_docs)]
+#[derive(Clone, Debug, From, TryInto)]
+pub enum Frame {
+    Request(RequestFrame),
+    Response(ResponseFrame),
+}
+
 #[allow(missing_docs)]
 #[derive(Error, Debug)]
 pub enum FrameError {
