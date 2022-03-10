@@ -29,21 +29,21 @@ impl Worker for BasicWorker {
 
 /// A basic worker which can retry on failure
 #[derive(Debug, Clone)]
-pub struct BasicRetryWorker<R> {
+pub struct QueryRetryWorker<R> {
     /// The worker's request
     pub request: R,
     /// The number of times this worker will retry on failure
     pub retries: usize,
 }
 
-impl<R> BasicRetryWorker<R> {
+impl<R> QueryRetryWorker<R> {
     /// Create a new insert worker with a number of retries
     pub fn new(request: R) -> Self {
         request.into()
     }
 }
 
-impl<R, H> IntoRespondingWorker<R, H> for BasicRetryWorker<R>
+impl<R, H> IntoRespondingWorker<R, H> for QueryRetryWorker<R>
 where
     H: 'static + HandleResponse + HandleError + Debug + Send + Sync,
     R: 'static + Send + Debug + Sync + SendRequestExt + Clone,
@@ -54,13 +54,13 @@ where
     }
 }
 
-impl<R> From<R> for BasicRetryWorker<R> {
+impl<R> From<R> for QueryRetryWorker<R> {
     fn from(request: R) -> Self {
         Self { request, retries: 0 }
     }
 }
 
-impl<R> Worker for BasicRetryWorker<R>
+impl<R> Worker for QueryRetryWorker<R>
 where
     R: 'static + Debug + Send + SendRequestExt + Clone + Sync,
 {
@@ -83,7 +83,7 @@ where
     }
 }
 
-impl<R> RetryableWorker<R> for BasicRetryWorker<R>
+impl<R> RetryableWorker<R> for QueryRetryWorker<R>
 where
     R: 'static + Debug + Send + SendRequestExt + Clone + Sync,
 {
@@ -116,11 +116,11 @@ impl<R> ExecuteRetryWorker<R> {
     }
 
     /// Convert this to a basic worker
-    pub fn convert(self) -> BasicRetryWorker<R::OutRequest>
+    pub fn convert(self) -> QueryRetryWorker<R::OutRequest>
     where
         R: ReprepareExt,
     {
-        BasicRetryWorker {
+        QueryRetryWorker {
             request: self.request.convert(),
             retries: self.retries,
         }

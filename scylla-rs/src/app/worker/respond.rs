@@ -33,7 +33,7 @@ where
         }
     }
 
-    pub(crate) fn from(BasicRetryWorker { request, retries }: BasicRetryWorker<R>, handle: H) -> Self
+    pub(crate) fn from(QueryRetryWorker { request, retries }: QueryRetryWorker<R>, handle: H) -> Self
     where
         H: HandleResponse + HandleError + Debug + Send + Sync,
         R: 'static + SendRequestExt + Debug + Send + Sync + Clone,
@@ -55,6 +55,7 @@ where
     R: 'static + Send + Debug + SendRequestExt + Sync + Clone,
 {
     fn handle_response(self: Box<Self>, body: ResponseBody) -> anyhow::Result<()> {
+        info!("Successfully queried: {:#?}", body);
         self.handle.handle_response(body)
     }
 

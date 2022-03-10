@@ -25,11 +25,6 @@ pub(crate) mod select;
 /// they are decoded
 pub(crate) mod update;
 
-use super::{
-    worker::BasicRetryWorker,
-    Worker,
-    WorkerError,
-};
 pub use crate::{
     app::{
         ring::{
@@ -37,7 +32,13 @@ pub use crate::{
             RingSendError,
         },
         stage::reporter::ReporterEvent,
-        worker::GetWorkerExt,
+        worker::{
+            ExecuteRetryWorker,
+            GetWorkerExt,
+            QueryRetryWorker,
+        },
+        Worker,
+        WorkerError,
     },
     cql::{
         compression::{

@@ -453,7 +453,7 @@ impl DerefMut for QueryDeleteRequest {
 }
 
 impl SendRequestExt for QueryDeleteRequest {
-    type Worker = BasicRetryWorker<Self>;
+    type Worker = QueryRetryWorker<Self>;
     type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Delete;
 
@@ -462,11 +462,11 @@ impl SendRequestExt for QueryDeleteRequest {
     }
 
     fn event(self) -> (Self::Worker, RequestFrame) {
-        (BasicRetryWorker::new(self.clone()), self.into_frame())
+        (QueryRetryWorker::new(self.clone()), self.into_frame())
     }
 
     fn worker(self) -> Self::Worker {
-        BasicRetryWorker::new(self)
+        QueryRetryWorker::new(self)
     }
 }
 
@@ -542,7 +542,7 @@ impl DerefMut for ExecuteDeleteRequest {
 }
 
 impl SendRequestExt for ExecuteDeleteRequest {
-    type Worker = BasicRetryWorker<Self>;
+    type Worker = ExecuteRetryWorker<Self>;
     type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Delete;
 
@@ -551,10 +551,10 @@ impl SendRequestExt for ExecuteDeleteRequest {
     }
 
     fn event(self) -> (Self::Worker, RequestFrame) {
-        (BasicRetryWorker::new(self.clone()), self.into_frame())
+        (ExecuteRetryWorker::new(self.clone()), self.into_frame())
     }
 
     fn worker(self) -> Self::Worker {
-        BasicRetryWorker::new(self)
+        ExecuteRetryWorker::new(self)
     }
 }

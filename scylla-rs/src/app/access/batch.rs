@@ -326,9 +326,4 @@ impl BatchRequest {
     pub fn get_statement(&self, id: &[u8; 16]) -> Option<&String> {
         self.map.get(id)
     }
-
-    /// Get a basic worker for this request
-    pub fn worker(self) -> BasicRetryWorker<Self> {
-        BasicRetryWorker::new(self)
-    }
 }

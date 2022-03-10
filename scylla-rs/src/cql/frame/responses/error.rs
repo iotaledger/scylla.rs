@@ -429,7 +429,7 @@ impl FromPayload for AlreadyExists {
     }
 }
 #[derive(Clone, Error, Debug)]
-#[error("Unprepared: id: {id:?}")]
+#[error("Unprepared id: {id:x?}")]
 /// The additional error information, `Unprepared`, stucture.
 pub struct Unprepared {
     /// The unprepared id.

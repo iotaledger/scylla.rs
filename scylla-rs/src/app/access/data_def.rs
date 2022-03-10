@@ -103,7 +103,7 @@ impl ShardAwareExt for DataDefRequest {
 }
 
 impl SendRequestExt for DataDefRequest {
-    type Worker = BasicRetryWorker<Self>;
+    type Worker = QueryRetryWorker<Self>;
     type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::DataDef;
 
@@ -112,10 +112,10 @@ impl SendRequestExt for DataDefRequest {
     }
 
     fn event(self) -> (Self::Worker, RequestFrame) {
-        (BasicRetryWorker::new(self.clone()), self.into_frame())
+        (QueryRetryWorker::new(self.clone()), self.into_frame())
     }
 
     fn worker(self) -> Self::Worker {
-        BasicRetryWorker::new(self)
+        QueryRetryWorker::new(self)
     }
 }

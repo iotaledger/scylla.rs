@@ -484,7 +484,7 @@ impl DerefMut for QueryUpdateRequest {
 }
 
 impl SendRequestExt for QueryUpdateRequest {
-    type Worker = BasicRetryWorker<Self>;
+    type Worker = QueryRetryWorker<Self>;
     type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Update;
 
@@ -493,11 +493,11 @@ impl SendRequestExt for QueryUpdateRequest {
     }
 
     fn event(self) -> (Self::Worker, RequestFrame) {
-        (BasicRetryWorker::new(self.clone()), self.into_frame())
+        (QueryRetryWorker::new(self.clone()), self.into_frame())
     }
 
     fn worker(self) -> Self::Worker {
-        BasicRetryWorker::new(self)
+        QueryRetryWorker::new(self)
     }
 }
 
@@ -573,7 +573,7 @@ impl DerefMut for ExecuteUpdateRequest {
 }
 
 impl SendRequestExt for ExecuteUpdateRequest {
-    type Worker = BasicRetryWorker<Self>;
+    type Worker = ExecuteRetryWorker<Self>;
     type Marker = DecodeVoid;
     const TYPE: RequestType = RequestType::Update;
 
@@ -582,10 +582,10 @@ impl SendRequestExt for ExecuteUpdateRequest {
     }
 
     fn event(self) -> (Self::Worker, RequestFrame) {
-        (BasicRetryWorker::new(self.clone()), self.into_frame())
+        (ExecuteRetryWorker::new(self.clone()), self.into_frame())
     }
 
     fn worker(self) -> Self::Worker {
-        BasicRetryWorker::new(self)
+        ExecuteRetryWorker::new(self)
     }
 }
