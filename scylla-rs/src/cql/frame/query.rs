@@ -577,7 +577,7 @@ impl Query {
     /// Will return an error if the frame is not a Query frame.
     pub fn convert_to_execute(&mut self) -> anyhow::Result<&mut Self> {
         anyhow::ensure!(self.0[4] == QUERY, "Not a query frame");
-        let body_len = i32::from_be_bytes(self.0[5..9].try_into()?) as usize;
+        let body_len = i32::from_be_bytes(self.0[5..9].try_into()?);
         let stmt_len = i32::from_be_bytes(self.0[9..13].try_into()?) as usize;
         let total_stmt_len = (stmt_len + 4) as usize;
         let id: [u8; 16] = md5::compute(&self.0[13..][..stmt_len]).into();
@@ -588,13 +588,13 @@ impl Query {
                 let dif = total_stmt_len - total_id_len;
                 self.0[9..].rotate_left(dif);
                 self.0.truncate(self.0.len() - dif);
-                self.0[5..9].copy_from_slice(&(body_len - dif).to_be_bytes());
+                self.0[5..9].copy_from_slice(&(body_len - dif as i32).to_be_bytes());
             }
             std::cmp::Ordering::Greater => {
                 let dif = total_id_len - total_stmt_len;
                 self.0.resize(self.0.len() + dif, 0);
                 self.0[9..].rotate_right(dif);
-                self.0[5..9].copy_from_slice(&(body_len + dif).to_be_bytes());
+                self.0[5..9].copy_from_slice(&(body_len + dif as i32).to_be_bytes());
             }
             std::cmp::Ordering::Equal => (),
         }
@@ -607,7 +607,7 @@ impl Query {
     /// Will return an error if the frame is not an Execute frame.
     pub fn convert_to_query(&mut self, stmt: &str) -> anyhow::Result<&mut Query> {
         anyhow::ensure!(self.0[4] == EXECUTE, "Not an execute frame");
-        let body_len = i32::from_be_bytes(self.0[5..9].try_into()?) as usize;
+        let body_len = i32::from_be_bytes(self.0[5..9].try_into()?);
         let stmt_len = stmt.len();
         let total_stmt_len = stmt_len + 4;
         let total_id_len = 18;
@@ -617,13 +617,13 @@ impl Query {
                 let dif = total_id_len - total_stmt_len;
                 self.0[9..].rotate_left(dif);
                 self.0.truncate(self.0.len() - dif);
-                self.0[5..9].copy_from_slice(&(body_len - dif).to_be_bytes());
+                self.0[5..9].copy_from_slice(&(body_len - dif as i32).to_be_bytes());
             }
             std::cmp::Ordering::Less => {
                 let dif = total_stmt_len - total_id_len;
                 self.0.resize(self.0.len() + dif, 0);
                 self.0[9..].rotate_right(dif);
-                self.0[5..9].copy_from_slice(&(body_len + dif).to_be_bytes());
+                self.0[5..9].copy_from_slice(&(body_len + dif as i32).to_be_bytes());
             }
             std::cmp::Ordering::Equal => (),
         }
