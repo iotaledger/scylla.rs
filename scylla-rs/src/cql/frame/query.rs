@@ -608,24 +608,26 @@ impl Query {
         let body_len = i32::from_be_bytes(self.0[5..9].try_into()?);
         let stmt_len = stmt.len();
         let total_stmt_len = stmt_len + 4;
+        let total_id_len = 18;
+        let rem_start = 9 + total_id_len;
         self.0[4] = QUERY;
-        match 16.cmp(&total_stmt_len) {
-            std::cmp::Ordering::Less => {
-                let dif = 16 - total_stmt_len;
-                self.0.reserve(dif);
-                self.0[25..].rotate_right(dif);
-                self.0[5..9].copy_from_slice(&(body_len + dif as i32).to_be_bytes());
-            }
+        match total_id_len.cmp(&total_stmt_len) {
             std::cmp::Ordering::Greater => {
-                let dif = total_stmt_len - 16;
-                self.0[25..].rotate_left(dif);
+                let dif = total_id_len - total_stmt_len;
+                self.0[rem_start..].rotate_left(dif);
                 self.0.truncate(self.0.len() - dif);
                 self.0[5..9].copy_from_slice(&(body_len - dif as i32).to_be_bytes());
+            }
+            std::cmp::Ordering::Less => {
+                let dif = total_stmt_len - total_id_len;
+                self.0.reserve(dif);
+                self.0[rem_start..].rotate_right(dif);
+                self.0[5..9].copy_from_slice(&(body_len + dif as i32).to_be_bytes());
             }
             std::cmp::Ordering::Equal => (),
         }
         self.0[9..13].copy_from_slice(&(stmt_len as i32).to_be_bytes());
-        self.0[13..(13 + stmt_len)].copy_from_slice(stmt.as_bytes());
+        self.0[13..][..stmt_len].copy_from_slice(stmt.as_bytes());
         Ok(self)
     }
 }
