@@ -351,6 +351,12 @@ pub struct CommonRequest {
     pub(crate) statement: DataManipulationStatement,
 }
 
+impl Into<Vec<u8>> for CommonRequest {
+    fn into(self) -> Vec<u8> {
+        self.payload
+    }
+}
+
 impl CommonRequest {
     #[allow(missing_docs)]
     pub fn new<T: Into<String>>(statement: DataManipulationStatement, payload: Vec<u8>) -> Self {

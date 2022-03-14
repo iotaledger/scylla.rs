@@ -283,11 +283,11 @@ where
 }
 
 /// retry to send a request
-pub fn retry_send(keyspace: &str, mut r: RingSendError, mut retries: u8) -> Result<(), Box<dyn Worker>> {
+pub fn retry_send(keyspace: Option<&str>, mut r: RingSendError, mut retries: u8) -> Result<(), Box<dyn Worker>> {
     loop {
         if let ReporterEvent::Request { worker, payload } = r.into() {
             if retries > 0 {
-                if let Err(still_error) = send_global(Some(keyspace), rand::random(), payload, worker) {
+                if let Err(still_error) = send_global(keyspace, rand::random(), payload, worker) {
                     r = still_error;
                     retries -= 1;
                 } else {
